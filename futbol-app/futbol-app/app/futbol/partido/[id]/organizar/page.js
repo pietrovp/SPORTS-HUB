@@ -134,16 +134,28 @@ export default function OrganizarPartido() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setCargando(false); return; }
 
-    // FIX: columna correcta es "is_admin", no "is_admin"
-    const { data: perfilUsuario } = await supabase.from("profiles").select("is_admin").eq("id", user.id).single();
+    const { data: perfilUsuario } = await supabase
+      .from("profiles")
+      .select("is_admin")
+      .eq("id", user.id)
+      .single();
     if (!perfilUsuario?.is_admin) { setCargando(false); return; }
 
     setAutorizado(true);
 
-    const { data: partidoData } = await supabase.from("partidos").select("*").eq("id", partidoId).single();
+    const { data: partidoData } = await supabase
+      .from("partidos")
+      .select("*")
+      .eq("id", partidoId)
+      .single();
     setPartido(partidoData);
 
-    const { data: inscripcionesData } = await supabase.from("partido_jugadores").select("id, user_id, goles, asistencias, equipo").eq("partido_id", partidoId);
+    // ✅ FIX: tabla correcta "partido_jugadores" (antes era "inscripciones")
+    const { data: inscripcionesData } = await supabase
+      .from("partido_jugadores")
+      .select("id, user_id, goles, asistencias, equipo")
+      .eq("partido_id", partidoId);
+
     const idsUsuarios = (inscripcionesData || []).map((i) => i.user_id);
 
     let perfilesFutbol = [];
@@ -151,8 +163,14 @@ export default function OrganizarPartido() {
 
     if (idsUsuarios.length > 0) {
       const [{ data: fData }, { data: pData }] = await Promise.all([
-        supabase.from("futbol_profiles").select("id, posicion, rating, partidos_jugados, goles").in("id", idsUsuarios),
-        supabase.from("profiles").select("id, nombre, avatar_url").in("id", idsUsuarios),
+        supabase
+          .from("futbol_profiles")
+          .select("id, posicion, rating, partidos_jugados, goles")
+          .in("id", idsUsuarios),
+        supabase
+          .from("profiles")
+          .select("id, nombre, avatar_url")
+          .in("id", idsUsuarios),
       ]);
       perfilesFutbol = fData || [];
       perfilesGenerales = pData || [];
@@ -169,7 +187,11 @@ export default function OrganizarPartido() {
         posicion: fPerfil?.posicion || "MED",
         media: fPerfil?.rating != null ? Math.round(Number(fPerfil.rating)) : 64,
         avatarUrl: pPerfil?.avatar_url || null,
-        equipo: i.equipo ? Number(i.equipo) : null,
+        // ✅ FIX: conversión segura de equipo (puede venir como string "1", "2" o null)
+        equipo:
+          i.equipo === "1" || i.equipo === 1 ? 1
+          : i.equipo === "2" || i.equipo === 2 ? 2
+          : null,
         goles: Number(i.goles) || 0,
         partidosJugados: fPerfil?.partidos_jugados ?? 0,
         golesTotal: fPerfil?.goles ?? 0,
@@ -199,13 +221,14 @@ export default function OrganizarPartido() {
     const listaActualizada = [...listaActual];
 
     for (const j of ordenadosSin) {
-      let equipoAsignado = 1;
-      if (suma1 <= suma2) { equipoAsignado = 1; suma1 += j.media; }
-      else { equipoAsignado = 2; suma2 += j.media; }
+      const equipoAsignado = suma1 <= suma2 ? 1 : 2;
+      if (equipoAsignado === 1) suma1 += j.media;
+      else suma2 += j.media;
 
       const idx = listaActualizada.findIndex((item) => item.id === j.id);
       if (idx !== -1) listaActualizada[idx].equipo = equipoAsignado;
 
+      // ✅ FIX: tabla correcta
       await supabase.from("partido_jugadores").update({ equipo: equipoAsignado }).eq("id", j.id);
     }
     return listaActualizada;
@@ -213,6 +236,7 @@ export default function OrganizarPartido() {
 
   async function cambiarEquipo(inscripcionId, nuevoEquipo) {
     setProcesando(true);
+    // ✅ FIX: tabla correcta
     await supabase.from("partido_jugadores").update({ equipo: nuevoEquipo }).eq("id", inscripcionId);
     setInscritos((prev) => prev.map((j) => (j.id === inscripcionId ? { ...j, equipo: nuevoEquipo } : j)));
     setProcesando(false);
@@ -234,10 +258,12 @@ export default function OrganizarPartido() {
 
   async function sortearEquipos() {
     if (inscritos.length < 2) { setMensaje("Necesitas al menos 2 jugadores."); return; }
-    setProcesando(true); setMensaje("");
+    setProcesando(true);
+    setMensaje("");
 
     const { equipo1, equipo2 } = balancearEquipos(inscritos);
 
+    // ✅ FIX: tabla correcta
     const updates = [
       ...equipo1.map((id) => supabase.from("partido_jugadores").update({ equipo: 1 }).eq("id", id)),
       ...equipo2.map((id) => supabase.from("partido_jugadores").update({ equipo: 2 }).eq("id", id)),
@@ -252,7 +278,8 @@ export default function OrganizarPartido() {
   }
 
   async function comenzarPartido() {
-    setProcesando(true); setMensaje("");
+    setProcesando(true);
+    setMensaje("");
     const listaConEquipos = await asegurarEquiposAsignados(inscritos);
     setInscritos(listaConEquipos);
 
@@ -263,9 +290,9 @@ export default function OrganizarPartido() {
     setProcesando(false);
   }
 
-  // FIX: recibe los goles del partido actual directamente para evitar race condition
   async function recalcularEstadisticasJugador(usuarioId, golesPartidoActualPorInscripcionId) {
     try {
+      // ✅ FIX: tabla correcta "partido_jugadores" (antes era "inscripciones")
       const { data: historialPJ } = await supabase
         .from("partido_jugadores")
         .select("id, partido_id, equipo, goles, asistencias")
@@ -283,8 +310,9 @@ export default function OrganizarPartido() {
       const listaFinalizados = historialPJ
         .map((i) => {
           const partidoDB = partidosMap.get(i.partido_id);
+          // ✅ FIX: usar goles del estado React para el partido actual (evita race condition)
           const golesReales =
-            golesPartidoActualPorInscripcionId && golesPartidoActualPorInscripcionId[i.id] != null
+            golesPartidoActualPorInscripcionId?.[i.id] != null
               ? Number(golesPartidoActualPorInscripcionId[i.id])
               : Number(i.goles) || 0;
           return { ...i, goles: golesReales, partido: partidoDB };
@@ -299,6 +327,7 @@ export default function OrganizarPartido() {
       const partidos_jugados = listaFinalizados.length;
       const goles_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.goles) || 0), 0);
       const asistencias_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.asistencias) || 0), 0);
+      // ✅ Este valor ahora es correcto porque golesReales usa los goles del estado React
       const max_goles_partido = listaFinalizados.reduce((acc, i) => Math.max(acc, Number(i.goles) || 0), 0);
 
       let victorias = 0, derrotas = 0, empates = 0, rachaActual = 0, racha_victorias_max = 0;
@@ -332,6 +361,7 @@ export default function OrganizarPartido() {
 
       const idsDesbloqueados = new Set((yaDesbloqueados || []).map((d) => d.logro_id));
 
+      // ✅ Detectar nuevos logros cumplidos y guardarlos
       const nuevosDesbloqueos = (todosLosLogros || []).filter(
         (l) => l.activo && !idsDesbloqueados.has(l.id) && cumpleRequisito(l, statsParaLogros)
       );
@@ -344,8 +374,9 @@ export default function OrganizarPartido() {
         nuevosDesbloqueos.forEach((l) => idsDesbloqueados.add(l.id));
       }
 
+      // ✅ Calcular bonos de rating y stats extra sumando TODOS los logros desbloqueados
       let bonoRatingTotal = 0;
-      let bonosExtra = {};
+      const bonosExtra = {};
 
       (todosLosLogros || []).forEach((l) => {
         if (idsDesbloqueados.has(l.id)) {
@@ -359,13 +390,7 @@ export default function OrganizarPartido() {
         }
       });
 
-      // FIX: usar el rating base REAL del jugador (sin contar bonos de logros previos)
-      // El rating base es 64 solo para jugadores nuevos sin ningún historial.
-      // Para calcular correctamente: rating_base = rating_actual - bonos_ya_aplicados_anteriormente.
-      // La solución más robusta es: rating_base siempre es 64 (el piso del sistema),
-      // y el rating final = 64 + TODOS los bonos de logros desbloqueados acumulados.
-      // Esto es correcto porque el rating SOLO sube por logros — no hay otro mecanismo que lo modifique.
-      // Si en el futuro se añaden otros modificadores de rating, este cálculo debe revisarse.
+      // ✅ Rating base fijo en 64 — solo los logros lo incrementan
       const RATING_BASE = 64;
       const rating_final = Math.min(99, RATING_BASE + bonoRatingTotal);
 
@@ -398,24 +423,34 @@ export default function OrganizarPartido() {
   }
 
   async function finalizarPartido() {
-    setProcesando(true); setMensaje("");
+    setProcesando(true);
+    setMensaje("");
 
-    const golesEquipo1 = inscritos.filter((j) => j.equipo === 1).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
-    const golesEquipo2 = inscritos.filter((j) => j.equipo === 2).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
+    const golesEquipo1 = inscritos
+      .filter((j) => j.equipo === 1)
+      .reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
+    const golesEquipo2 = inscritos
+      .filter((j) => j.equipo === 2)
+      .reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
 
+    // ✅ FIX: tabla correcta "partido_jugadores" (antes era "inscripciones")
     const updateGolesPromises = inscritos.map((j) =>
       supabase.from("partido_jugadores").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
     );
     await Promise.all(updateGolesPromises);
 
-    const { error: errorPartido } = await supabase.from("partidos").update({
-      estado: "finalizado",
-      goles_equipo1: golesEquipo1,
-      goles_equipo2: golesEquipo2,
-    }).eq("id", partidoId);
+    const { error: errorPartido } = await supabase
+      .from("partidos")
+      .update({
+        estado: "finalizado",
+        goles_equipo1: golesEquipo1,
+        goles_equipo2: golesEquipo2,
+      })
+      .eq("id", partidoId);
 
     if (errorPartido) { setMensaje("Error al finalizar el partido."); setProcesando(false); return; }
 
+    // ✅ Pasar goles actuales por inscripcion_id para evitar race condition en recalculo
     const golesActualesPorInscripcion = {};
     inscritos.forEach((j) => {
       golesActualesPorInscripcion[j.id] = Number(goles[j.id]) || 0;
@@ -500,7 +535,11 @@ export default function OrganizarPartido() {
 
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-4">
         {mensaje && (
-          <div className={`rounded-2xl p-4 text-sm font-semibold text-center ${mensaje.toLowerCase().includes("error") || mensaje.toLowerCase().includes("no se pudo") ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800"}`}>
+          <div className={`rounded-2xl p-4 text-sm font-semibold text-center ${
+            mensaje.toLowerCase().includes("error") || mensaje.toLowerCase().includes("no se pudo")
+              ? "bg-red-50 text-red-700"
+              : "bg-emerald-50 text-emerald-800"
+          }`}>
             {mensaje}
           </div>
         )}
@@ -526,12 +565,26 @@ export default function OrganizarPartido() {
           <div className="grid grid-cols-2 gap-3">
             <EquipoColumna id="equipo-1" titulo="Equipo 1" jugadores={equipo1}>
               {equipo1.map((j) => (
-                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 2)} />
+                <JugadorDraggable
+                  key={j.id}
+                  jugador={j}
+                  modo={modo}
+                  valorGol={goles[j.id]}
+                  onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))}
+                  onCambiarEquipo={() => cambiarEquipo(j.id, 2)}
+                />
               ))}
             </EquipoColumna>
             <EquipoColumna id="equipo-2" titulo="Equipo 2" jugadores={equipo2}>
               {equipo2.map((j) => (
-                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 1)} />
+                <JugadorDraggable
+                  key={j.id}
+                  jugador={j}
+                  modo={modo}
+                  valorGol={goles[j.id]}
+                  onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))}
+                  onCambiarEquipo={() => cambiarEquipo(j.id, 1)}
+                />
               ))}
             </EquipoColumna>
           </div>
@@ -539,7 +592,13 @@ export default function OrganizarPartido() {
           {sinAsignar.length > 0 && modo !== "resultado" && (
             <EquipoColumna id="equipo-null" titulo={`Sin asignar (${sinAsignar.length})`} jugadores={sinAsignar}>
               {sinAsignar.map((j) => (
-                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} />
+                <JugadorDraggable
+                  key={j.id}
+                  jugador={j}
+                  modo={modo}
+                  valorGol={goles[j.id]}
+                  onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))}
+                />
               ))}
             </EquipoColumna>
           )}
@@ -549,16 +608,28 @@ export default function OrganizarPartido() {
           <div className="space-y-3 pt-1">
             {modo === "armar" && (
               <>
-                <button onClick={sortearEquipos} disabled={procesando || inscritos.length < 2} className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                <button
+                  onClick={sortearEquipos}
+                  disabled={procesando || inscritos.length < 2}
+                  className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   🎲 Sortear equipos equilibrados
                 </button>
-                <button onClick={comenzarPartido} disabled={procesando} className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                <button
+                  onClick={comenzarPartido}
+                  disabled={procesando}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   {procesando ? "Procesando…" : "▶ Comenzar partido"}
                 </button>
               </>
             )}
             {modo === "jugando" && (
-              <button onClick={finalizarPartido} disabled={procesando} className="w-full bg-gray-900 hover:bg-black active:bg-gray-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+              <button
+                onClick={finalizarPartido}
+                disabled={procesando}
+                className="w-full bg-gray-900 hover:bg-black active:bg-gray-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 {procesando ? "Guardando resultados…" : "🏁 Finalizar partido"}
               </button>
             )}
