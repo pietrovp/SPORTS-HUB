@@ -134,8 +134,9 @@ export default function OrganizarPartido() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setCargando(false); return; }
 
-    const { data: perfilUsuario } = await supabase.from("perfiles").select("is_admin").eq("id", user.id).single();
-    if (!perfilUsuario?.is_admin) { setCargando(false); return; }
+    // FIX: columna correcta es "es_admin", no "is_admin"
+    const { data: perfilUsuario } = await supabase.from("perfiles").select("es_admin").eq("id", user.id).single();
+    if (!perfilUsuario?.es_admin) { setCargando(false); return; }
 
     setAutorizado(true);
 
@@ -282,19 +283,15 @@ export default function OrganizarPartido() {
       const listaFinalizados = historialPJ
         .map((i) => {
           const partidoDB = partidosMap.get(i.partido_id);
-          // FIX: si es el partido actual, usamos los goles que acabamos de guardar
-          // en lugar de confiar en que la BD ya los tenga propagados
           const golesReales =
             golesPartidoActualPorInscripcionId && golesPartidoActualPorInscripcionId[i.id] != null
               ? Number(golesPartidoActualPorInscripcionId[i.id])
               : Number(i.goles) || 0;
           return { ...i, goles: golesReales, partido: partidoDB };
         })
-        // FIX: incluir también el partido actual que acaba de marcarse finalizado
         .filter((i) => {
           if (!i.partido) return false;
           if (i.partido.estado === "finalizado") return true;
-          // El partido actual puede llegar aún como no finalizado por latencia de BD
           if (i.partido_id === partidoId) return true;
           return false;
         });
@@ -302,7 +299,6 @@ export default function OrganizarPartido() {
       const partidos_jugados = listaFinalizados.length;
       const goles_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.goles) || 0), 0);
       const asistencias_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.asistencias) || 0), 0);
-      // FIX: max_goles_partido ahora incluye los goles del partido actual correctamente
       const max_goles_partido = listaFinalizados.reduce((acc, i) => Math.max(acc, Number(i.goles) || 0), 0);
 
       let victorias = 0, derrotas = 0, empates = 0, rachaActual = 0, racha_victorias_max = 0;
@@ -348,7 +344,6 @@ export default function OrganizarPartido() {
         nuevosDesbloqueos.forEach((l) => idsDesbloqueados.add(l.id));
       }
 
-      // Calcular bonos sumando TODOS los logros desbloqueados del jugador
       let bonoRatingTotal = 0;
       let bonosExtra = {};
 
@@ -400,7 +395,6 @@ export default function OrganizarPartido() {
     const golesEquipo1 = inscritos.filter((j) => j.equipo === 1).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
     const golesEquipo2 = inscritos.filter((j) => j.equipo === 2).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
 
-    // FIX: guardar primero los goles en inscripciones y esperar a que terminen
     const updateGolesPromises = inscritos.map((j) =>
       supabase.from("inscripciones").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
     );
@@ -414,8 +408,6 @@ export default function OrganizarPartido() {
 
     if (errorPartido) { setMensaje("Error al finalizar el partido."); setProcesando(false); return; }
 
-    // FIX: construir mapa inscripcionId -> goles para pasarlo directamente
-    // a recalcularEstadisticasJugador y evitar race condition con la BD
     const golesActualesPorInscripcion = {};
     inscritos.forEach((j) => {
       golesActualesPorInscripcion[j.id] = Number(goles[j.id]) || 0;
