@@ -64,7 +64,7 @@ end $$;
 create table if not exists public.perfiles_futbol (
   id                  uuid primary key references auth.users(id) on delete cascade,
   cuenta_id           uuid references public.cuentas(id) on delete cascade,
-  es_admin            boolean not null default false,
+  is_admin            boolean not null default false,
   creditos            numeric not null default 0,
   nombre              text,
   telefono            text,

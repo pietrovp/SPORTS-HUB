@@ -134,9 +134,9 @@ export default function OrganizarPartido() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setCargando(false); return; }
 
-    // FIX: columna correcta es "es_admin", no "is_admin"
-    const { data: perfilUsuario } = await supabase.from("perfiles").select("es_admin").eq("id", user.id).single();
-    if (!perfilUsuario?.es_admin) { setCargando(false); return; }
+    // FIX: columna correcta es "is_admin", no "is_admin"
+    const { data: perfilUsuario } = await supabase.from("profiles").select("is_admin").eq("id", user.id).single();
+    if (!perfilUsuario?.is_admin) { setCargando(false); return; }
 
     setAutorizado(true);
 
@@ -152,7 +152,7 @@ export default function OrganizarPartido() {
     if (idsUsuarios.length > 0) {
       const [{ data: fData }, { data: pData }] = await Promise.all([
         supabase.from("futbol_profiles").select("id, posicion, rating, partidos_jugados, goles").in("id", idsUsuarios),
-        supabase.from("perfiles").select("id, nombre, avatar_url").in("id", idsUsuarios),
+        supabase.from("profiles").select("id, nombre, avatar_url").in("id", idsUsuarios),
       ]);
       perfilesFutbol = fData || [];
       perfilesGenerales = pData || [];

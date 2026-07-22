@@ -78,9 +78,9 @@ export default function CreditosPage() {
 
       if (user) {
         const { data: perfil } = await supabase
-          .from("perfiles_futbol")
+          .from("futbol_profiles")
           .select("creditos")
-          .eq("id", user.id)
+          .eq("usuario_id", user.id)
           .single();
 
         setCreditosActuales(perfil?.creditos ?? 0);
