@@ -134,7 +134,7 @@ export default function OrganizarPartido() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setCargando(false); return; }
 
-    const { data: perfilUsuario } = await supabase.from("profiles").select("is_admin").eq("id", user.id).single();
+    const { data: perfilUsuario } = await supabase.from("perfiles").select("is_admin").eq("id", user.id).single();
     if (!perfilUsuario?.is_admin) { setCargando(false); return; }
 
     setAutorizado(true);
@@ -142,7 +142,7 @@ export default function OrganizarPartido() {
     const { data: partidoData } = await supabase.from("partidos").select("*").eq("id", partidoId).single();
     setPartido(partidoData);
 
-    const { data: inscripcionesData } = await supabase.from("partido_jugadores").select("id, user_id, goles, asistencias, equipo").eq("partido_id", partidoId);
+    const { data: inscripcionesData } = await supabase.from("inscripciones").select("id, user_id, goles, asistencias, equipo").eq("partido_id", partidoId);
     const idsUsuarios = (inscripcionesData || []).map((i) => i.user_id);
 
     let perfilesFutbol = [];
@@ -151,7 +151,7 @@ export default function OrganizarPartido() {
     if (idsUsuarios.length > 0) {
       const [{ data: fData }, { data: pData }] = await Promise.all([
         supabase.from("futbol_profiles").select("id, posicion, rating, partidos_jugados, goles").in("id", idsUsuarios),
-        supabase.from("profiles").select("id, nombre, avatar_url").in("id", idsUsuarios),
+        supabase.from("perfiles").select("id, nombre, avatar_url").in("id", idsUsuarios),
       ]);
       perfilesFutbol = fData || [];
       perfilesGenerales = pData || [];
@@ -205,14 +205,14 @@ export default function OrganizarPartido() {
       const idx = listaActualizada.findIndex((item) => item.id === j.id);
       if (idx !== -1) listaActualizada[idx].equipo = equipoAsignado;
 
-      await supabase.from("partido_jugadores").update({ equipo: equipoAsignado }).eq("id", j.id);
+      await supabase.from("inscripciones").update({ equipo: equipoAsignado }).eq("id", j.id);
     }
     return listaActualizada;
   }
 
   async function cambiarEquipo(inscripcionId, nuevoEquipo) {
     setProcesando(true);
-    await supabase.from("partido_jugadores").update({ equipo: nuevoEquipo }).eq("id", inscripcionId);
+    await supabase.from("inscripciones").update({ equipo: nuevoEquipo }).eq("id", inscripcionId);
     setInscritos((prev) => prev.map((j) => (j.id === inscripcionId ? { ...j, equipo: nuevoEquipo } : j)));
     setProcesando(false);
   }
@@ -238,8 +238,8 @@ export default function OrganizarPartido() {
     const { equipo1, equipo2 } = balancearEquipos(inscritos);
 
     const updates = [
-      ...equipo1.map((id) => supabase.from("partido_jugadores").update({ equipo: 1 }).eq("id", id)),
-      ...equipo2.map((id) => supabase.from("partido_jugadores").update({ equipo: 2 }).eq("id", id)),
+      ...equipo1.map((id) => supabase.from("inscripciones").update({ equipo: 1 }).eq("id", id)),
+      ...equipo2.map((id) => supabase.from("inscripciones").update({ equipo: 2 }).eq("id", id)),
     ];
     await Promise.all(updates);
     await supabase.from("partidos").update({ estado: "equipos_listos" }).eq("id", partidoId);
@@ -264,14 +264,24 @@ export default function OrganizarPartido() {
 
   async function recalcularEstadisticasJugador(usuarioId) {
     try {
-      const { data: historialPJ } = await supabase.from("partido_jugadores").select("id, partido_id, equipo, goles, asistencias").eq("user_id", usuarioId);
+      // Tabla real en Supabase: inscripciones (no partido_jugadores)
+      const { data: historialPJ } = await supabase
+        .from("inscripciones")
+        .select("id, partido_id, equipo, goles, asistencias")
+        .eq("user_id", usuarioId);
+
       if (!historialPJ || historialPJ.length === 0) return;
 
       const partidoIds = historialPJ.map((h) => h.partido_id).filter(Boolean);
-      const { data: partidosData } = await supabase.from("partidos").select("id, goles_equipo1, goles_equipo2, estado, fecha").in("id", partidoIds);
+      const { data: partidosData } = await supabase
+        .from("partidos")
+        .select("id, goles_equipo1, goles_equipo2, estado, fecha")
+        .in("id", partidoIds);
       const partidosMap = new Map((partidosData || []).map((p) => [p.id, p]));
 
-      const listaFinalizados = historialPJ.map((i) => ({ ...i, partido: partidosMap.get(i.partido_id) })).filter((i) => i.partido && i.partido.estado === "finalizado");
+      const listaFinalizados = historialPJ
+        .map((i) => ({ ...i, partido: partidosMap.get(i.partido_id) }))
+        .filter((i) => i.partido && i.partido.estado === "finalizado");
 
       const partidos_jugados = listaFinalizados.length;
       const goles_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.goles) || 0), 0);
@@ -280,45 +290,55 @@ export default function OrganizarPartido() {
 
       let victorias = 0, derrotas = 0, empates = 0, rachaActual = 0, racha_victorias_max = 0;
 
-      listaFinalizados.sort((a, b) => new Date(a.partido?.fecha || 0).getTime() - new Date(b.partido?.fecha || 0).getTime()).forEach((i) => {
-        const eq = Number(i.equipo);
-        if (!eq) return;
-        const g1 = Number(i.partido.goles_equipo1) || 0;
-        const g2 = Number(i.partido.goles_equipo2) || 0;
-        if (g1 === g2) { empates++; rachaActual = 0; return; }
-
-        const gano = (eq === 1 && g1 > g2) || (eq === 2 && g2 > g1);
-        if (gano) { victorias++; rachaActual++; racha_victorias_max = Math.max(racha_victorias_max, rachaActual); } 
-        else { derrotas++; rachaActual = 0; }
-      });
+      listaFinalizados
+        .sort((a, b) => new Date(a.partido?.fecha || 0).getTime() - new Date(b.partido?.fecha || 0).getTime())
+        .forEach((i) => {
+          const eq = Number(i.equipo);
+          if (!eq) return;
+          const g1 = Number(i.partido.goles_equipo1) || 0;
+          const g2 = Number(i.partido.goles_equipo2) || 0;
+          if (g1 === g2) { empates++; rachaActual = 0; return; }
+          const gano = (eq === 1 && g1 > g2) || (eq === 2 && g2 > g1);
+          if (gano) { victorias++; rachaActual++; racha_victorias_max = Math.max(racha_victorias_max, rachaActual); }
+          else { derrotas++; rachaActual = 0; }
+        });
 
       const statsParaLogros = { partidos_jugados, goles_total, victorias, max_goles_partido, racha_victorias_max };
 
-      // Obtener perfil actual para usar su rating base real
+      // Perfil actual para obtener stats base de atributos
       const { data: perfilActualBase } = await supabase
         .from("futbol_profiles")
         .select("rating, ritmo, tiro, pase, regate, defensa, fisico")
         .eq("id", usuarioId)
         .single();
 
-      // CÁLCULO DE LOGROS BLINDADO AL 100% EN JAVASCRIPT
+      // Lógica de logros — tabla correcta: logros_desbloqueados con columna usuario_id
       const { data: todosLosLogros } = await supabase.from("logros").select("*");
-      const { data: yaDesbloqueados } = await supabase.from("user_logros").select("logro_id").eq("user_id", usuarioId);
+      const { data: yaDesbloqueados } = await supabase
+        .from("logros_desbloqueados")
+        .select("logro_id")
+        .eq("usuario_id", usuarioId);
+
       const idsDesbloqueados = new Set((yaDesbloqueados || []).map((d) => d.logro_id));
 
-      const nuevosDesbloqueos = (todosLosLogros || []).filter((l) => l.activo && !idsDesbloqueados.has(l.id) && cumpleRequisito(l, statsParaLogros));
-      
+      const nuevosDesbloqueos = (todosLosLogros || []).filter(
+        (l) => l.activo && !idsDesbloqueados.has(l.id) && cumpleRequisito(l, statsParaLogros)
+      );
+
       if (nuevosDesbloqueos.length > 0) {
-        await supabase.from("user_logros").upsert(nuevosDesbloqueos.map((l) => ({ user_id: usuarioId, logro_id: l.id })), { onConflict: "user_id,logro_id", ignoreDuplicates: true });
-        nuevosDesbloqueos.forEach(l => idsDesbloqueados.add(l.id));
+        await supabase.from("logros_desbloqueados").upsert(
+          nuevosDesbloqueos.map((l) => ({ usuario_id: usuarioId, logro_id: l.id })),
+          { onConflict: "usuario_id,logro_id", ignoreDuplicates: true }
+        );
+        nuevosDesbloqueos.forEach((l) => idsDesbloqueados.add(l.id));
       }
 
+      // Calcular bonos de rating sumando TODOS los logros desbloqueados
       let bonoRatingTotal = 0;
       let bonosExtra = {};
 
-      (todosLosLogros || []).forEach(l => {
+      (todosLosLogros || []).forEach((l) => {
         if (idsDesbloqueados.has(l.id)) {
-          // FIX: normalizar stat_mejora con trim + lowercase + normalizar espacios
           const stat = String(l.stat_mejora || "").toLowerCase().trim().replace(/\s+/g, "_");
           const valor = Number(l.valor_mejora) || 0;
           if (["rating", "media_general", "ovr", "media", "overall"].includes(stat)) {
@@ -329,17 +349,7 @@ export default function OrganizarPartido() {
         }
       });
 
-      // FIX PRINCIPAL: usar el rating actual del jugador como base, no 64 fijo.
-      // Si el jugador no tiene rating guardado aún, usar 64 como valor inicial.
-      const ratingBase = perfilActualBase?.rating != null ? Number(perfilActualBase.rating) : 64;
-
-      // Recalcular limpio: base real del jugador + todos los bonos de logros ya desbloqueados.
-      // Restamos primero los bonos ya aplicados anteriormente para evitar duplicarlos,
-      // luego sumamos el total actualizado. La forma más segura es: 
-      // rating_sin_bonos = ratingBase - (bonos ya aplicados antes) + bonoRatingTotal
-      // Como no tenemos histórico de bonos aplicados, recalculamos desde la base inicial (64)
-      // sumando TODOS los bonos del Set actualizado (que ya incluye los nuevos desbloqueos).
-      // Esto garantiza idempotencia: correr la función N veces da siempre el mismo resultado.
+      // Rating final = 64 base + suma de todos los bonos de logros desbloqueados
       const rating_final = Math.min(99, 64 + bonoRatingTotal);
 
       const updates = {
@@ -377,7 +387,7 @@ export default function OrganizarPartido() {
     const golesEquipo2 = inscritos.filter((j) => j.equipo === 2).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
 
     const updateGolesPromises = inscritos.map((j) =>
-      supabase.from("partido_jugadores").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
+      supabase.from("inscripciones").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
     );
     await Promise.all(updateGolesPromises);
 
@@ -499,7 +509,7 @@ export default function OrganizarPartido() {
             </EquipoColumna>
             <EquipoColumna id="equipo-2" titulo="Equipo 2" jugadores={equipo2}>
               {equipo2.map((j) => (
-                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 1)} />
+                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]) => e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 1)} />
               ))}
             </EquipoColumna>
           </div>
