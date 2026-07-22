@@ -199,7 +199,7 @@ export default function OrganizarPartido() {
 
     for (const j of ordenadosSin) {
       let equipoAsignado = 1;
-      if (suma1 <= suma2) { equipoAsignado = 1; suma1 += j.media; } 
+      if (suma1 <= suma2) { equipoAsignado = 1; suma1 += j.media; }
       else { equipoAsignado = 2; suma2 += j.media; }
 
       const idx = listaActualizada.findIndex((item) => item.id === j.id);
@@ -254,17 +254,16 @@ export default function OrganizarPartido() {
     setProcesando(true); setMensaje("");
     const listaConEquipos = await asegurarEquiposAsignados(inscritos);
     setInscritos(listaConEquipos);
-    
+
     const { error } = await supabase.from("partidos").update({ estado: "en_curso" }).eq("id", partidoId);
     if (error) { setMensaje("No se pudo iniciar el partido."); setProcesando(false); return; }
-    
+
     setPartido((prev) => ({ ...prev, estado: "en_curso" }));
     setProcesando(false);
   }
 
   async function recalcularEstadisticasJugador(usuarioId) {
     try {
-      // Tabla real en Supabase: inscripciones (no partido_jugadores)
       const { data: historialPJ } = await supabase
         .from("inscripciones")
         .select("id, partido_id, equipo, goles, asistencias")
@@ -305,19 +304,18 @@ export default function OrganizarPartido() {
 
       const statsParaLogros = { partidos_jugados, goles_total, victorias, max_goles_partido, racha_victorias_max };
 
-      // Perfil actual para obtener stats base de atributos
       const { data: perfilActualBase } = await supabase
         .from("futbol_profiles")
         .select("rating, ritmo, tiro, pase, regate, defensa, fisico")
         .eq("id", usuarioId)
         .single();
 
-      // Lógica de logros — tabla correcta: logros_desbloqueados con columna usuario_id
+      // ✅ FIX: tabla correcta es user_logros con columna user_id (no logros_desbloqueados / usuario_id)
       const { data: todosLosLogros } = await supabase.from("logros").select("*");
       const { data: yaDesbloqueados } = await supabase
-        .from("logros_desbloqueados")
+        .from("user_logros")
         .select("logro_id")
-        .eq("usuario_id", usuarioId);
+        .eq("user_id", usuarioId);
 
       const idsDesbloqueados = new Set((yaDesbloqueados || []).map((d) => d.logro_id));
 
@@ -326,14 +324,15 @@ export default function OrganizarPartido() {
       );
 
       if (nuevosDesbloqueos.length > 0) {
-        await supabase.from("logros_desbloqueados").upsert(
-          nuevosDesbloqueos.map((l) => ({ usuario_id: usuarioId, logro_id: l.id })),
-          { onConflict: "usuario_id,logro_id", ignoreDuplicates: true }
+        // ✅ FIX: insertar en user_logros con columnas user_id y logro_id
+        await supabase.from("user_logros").upsert(
+          nuevosDesbloqueos.map((l) => ({ user_id: usuarioId, logro_id: l.id })),
+          { onConflict: "user_id,logro_id", ignoreDuplicates: true }
         );
         nuevosDesbloqueos.forEach((l) => idsDesbloqueados.add(l.id));
       }
 
-      // Calcular bonos de rating sumando TODOS los logros desbloqueados
+      // Calcular bonos sumando TODOS los logros desbloqueados del jugador
       let bonoRatingTotal = 0;
       let bonosExtra = {};
 
@@ -509,7 +508,7 @@ export default function OrganizarPartido() {
             </EquipoColumna>
             <EquipoColumna id="equipo-2" titulo="Equipo 2" jugadores={equipo2}>
               {equipo2.map((j) => (
-                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]) => e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 1)} />
+                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 1)} />
               ))}
             </EquipoColumna>
           </div>
