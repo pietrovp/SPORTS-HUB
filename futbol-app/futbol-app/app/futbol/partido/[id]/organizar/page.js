@@ -143,7 +143,7 @@ export default function OrganizarPartido() {
     const { data: partidoData } = await supabase.from("partidos").select("*").eq("id", partidoId).single();
     setPartido(partidoData);
 
-    const { data: inscripcionesData } = await supabase.from("inscripciones").select("id, user_id, goles, asistencias, equipo").eq("partido_id", partidoId);
+    const { data: inscripcionesData } = await supabase.from("partido_jugadores").select("id, user_id, goles, asistencias, equipo").eq("partido_id", partidoId);
     const idsUsuarios = (inscripcionesData || []).map((i) => i.user_id);
 
     let perfilesFutbol = [];
@@ -206,14 +206,14 @@ export default function OrganizarPartido() {
       const idx = listaActualizada.findIndex((item) => item.id === j.id);
       if (idx !== -1) listaActualizada[idx].equipo = equipoAsignado;
 
-      await supabase.from("inscripciones").update({ equipo: equipoAsignado }).eq("id", j.id);
+      await supabase.from("partido_jugadores").update({ equipo: equipoAsignado }).eq("id", j.id);
     }
     return listaActualizada;
   }
 
   async function cambiarEquipo(inscripcionId, nuevoEquipo) {
     setProcesando(true);
-    await supabase.from("inscripciones").update({ equipo: nuevoEquipo }).eq("id", inscripcionId);
+    await supabase.from("partido_jugadores").update({ equipo: nuevoEquipo }).eq("id", inscripcionId);
     setInscritos((prev) => prev.map((j) => (j.id === inscripcionId ? { ...j, equipo: nuevoEquipo } : j)));
     setProcesando(false);
   }
@@ -239,8 +239,8 @@ export default function OrganizarPartido() {
     const { equipo1, equipo2 } = balancearEquipos(inscritos);
 
     const updates = [
-      ...equipo1.map((id) => supabase.from("inscripciones").update({ equipo: 1 }).eq("id", id)),
-      ...equipo2.map((id) => supabase.from("inscripciones").update({ equipo: 2 }).eq("id", id)),
+      ...equipo1.map((id) => supabase.from("partido_jugadores").update({ equipo: 1 }).eq("id", id)),
+      ...equipo2.map((id) => supabase.from("partido_jugadores").update({ equipo: 2 }).eq("id", id)),
     ];
     await Promise.all(updates);
     await supabase.from("partidos").update({ estado: "equipos_listos" }).eq("id", partidoId);
@@ -267,7 +267,7 @@ export default function OrganizarPartido() {
   async function recalcularEstadisticasJugador(usuarioId, golesPartidoActualPorInscripcionId) {
     try {
       const { data: historialPJ } = await supabase
-        .from("inscripciones")
+        .from("partido_jugadores")
         .select("id, partido_id, equipo, goles, asistencias")
         .eq("user_id", usuarioId);
 
@@ -404,7 +404,7 @@ export default function OrganizarPartido() {
     const golesEquipo2 = inscritos.filter((j) => j.equipo === 2).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
 
     const updateGolesPromises = inscritos.map((j) =>
-      supabase.from("inscripciones").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
+      supabase.from("partido_jugadores").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
     );
     await Promise.all(updateGolesPromises);
 

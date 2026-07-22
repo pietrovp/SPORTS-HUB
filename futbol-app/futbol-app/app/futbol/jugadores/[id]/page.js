@@ -63,7 +63,7 @@ export default async function JugadorDetalle({ params }) {
     await Promise.all([
       supabase.from("futbol_profiles").select("*, profiles(nombre, pais, avatar_url)").eq("id", params.id).maybeSingle(),
       supabase
-        .from("inscripciones")
+        .from("partido_jugadores")
         .select(
           "partido_id, goles, asistencias, equipo, partidos(cancha, fecha, hora, estado, goles_equipo1, goles_equipo2)"
         )
