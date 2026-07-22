@@ -100,10 +100,11 @@ export default function PartidoCard({ partido }) {
       return;
     }
 
+    // ✅ CORREGIDO: futbol_profiles con columna usuario_id
     const { data: perfil } = await supabase
-      .from("profiles")
+      .from("futbol_profiles")
       .select("creditos")
-      .eq("id", user.id)
+      .eq("usuario_id", user.id)
       .single();
 
     const creditos = perfil?.creditos ?? 0;
@@ -131,10 +132,11 @@ export default function PartidoCard({ partido }) {
 
     const nuevoBalance = creditos - 1;
 
+    // ✅ CORREGIDO: futbol_profiles con columna usuario_id
     const { error: updateError } = await supabase
-      .from("profiles")
+      .from("futbol_profiles")
       .update({ creditos: nuevoBalance })
-      .eq("id", user.id);
+      .eq("usuario_id", user.id);
 
     if (updateError) {
       setMensaje("No se pudo descontar el crédito.");
@@ -149,7 +151,11 @@ export default function PartidoCard({ partido }) {
       .single();
 
     if (inscripcionError) {
-      await supabase.from("profiles").update({ creditos }).eq("id", user.id);
+      // ✅ CORREGIDO: revert también usa futbol_profiles
+      await supabase
+        .from("futbol_profiles")
+        .update({ creditos })
+        .eq("usuario_id", user.id);
       setMensaje("No se pudo unir al partido.");
       setCargando(false);
       return;
@@ -196,16 +202,21 @@ export default function PartidoCard({ partido }) {
       return;
     }
 
+    // ✅ CORREGIDO: futbol_profiles con columna usuario_id
     const { data: perfil } = await supabase
-      .from("profiles")
+      .from("futbol_profiles")
       .select("creditos")
-      .eq("id", user.id)
+      .eq("usuario_id", user.id)
       .single();
 
     const creditos = perfil?.creditos ?? 0;
     const nuevoBalance = creditos + 1;
 
-    await supabase.from("profiles").update({ creditos: nuevoBalance }).eq("id", user.id);
+    // ✅ CORREGIDO: futbol_profiles con columna usuario_id
+    await supabase
+      .from("futbol_profiles")
+      .update({ creditos: nuevoBalance })
+      .eq("usuario_id", user.id);
 
     await supabase.from("credit_ledger").insert({
       user_id: user.id,
@@ -303,7 +314,6 @@ export default function PartidoCard({ partido }) {
                 {lleno ? "Sin cupo" : cargando ? "Procesando..." : verificando ? "Cargando..." : "Unirme ahora"}
               </button>
             )}
-            {/* RUTA CORREGIDA A SINGULAR */}
             <Link
               href={`/futbol/partido/${partido.id}`}
               className="px-5 py-3 rounded-xl bg-gray-50 border border-gray-200 text-gray-800 text-sm font-bold hover:bg-gray-100 transition-all flex items-center justify-center"
