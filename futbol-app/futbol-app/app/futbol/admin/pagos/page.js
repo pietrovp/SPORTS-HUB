@@ -17,7 +17,7 @@ const getBadgeStyle = (status) => {
     case "under_review":
       return "bg-yellow-50 text-yellow-700 border-yellow-200";
     default:
-      return "bg-gray-100 text-gray-700 border-gray-200"; // reported
+      return "bg-gray-100 text-gray-700 border-gray-200";
   }
 };
 
@@ -53,7 +53,6 @@ export default function AdminPagosPage() {
         return;
       }
 
-      // CORRECCIÓN: Tabla profiles, columna is_admin
       const { data: perfil } = await supabase
         .from("profiles")
         .select("is_admin")
@@ -72,7 +71,7 @@ export default function AdminPagosPage() {
         .from("payments")
         .select(`
           *,
-          perfiles!payments_user_id_fkey(nombre),
+          profiles!payments_user_id_fkey(nombre),
           credit_packages(nombre, creditos)
         `)
         .order("created_at", { ascending: false });
@@ -104,14 +103,13 @@ export default function AdminPagosPage() {
       if (pago) {
         const delta = pago.credit_packages?.creditos || 0;
 
-        // CORRECCIÓN: Sumar créditos directamente en la tabla 'profiles'
-        const { data: perfil } = await supabase
+        const { data: perfilUsuario } = await supabase
           .from("profiles")
           .select("creditos")
           .eq("id", pago.user_id)
           .single();
 
-        const current = perfil?.creditos ?? 0;
+        const current = perfilUsuario?.creditos ?? 0;
         const nextBalance = current + delta;
 
         await supabase
@@ -184,7 +182,6 @@ export default function AdminPagosPage() {
 
   return (
     <div className="flex flex-col gap-8 max-w-5xl mx-auto">
-      {/* Encabezado */}
       <div className="border-b border-gray-200 pb-5">
         <h1 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Pagos reportados</h1>
         <p className="text-sm text-gray-500 mt-1.5 font-medium">
@@ -192,7 +189,6 @@ export default function AdminPagosPage() {
         </p>
       </div>
 
-      {/* Lista de Tarjetas */}
       <div className="grid gap-6">
         {pagos.length === 0 && (
           <div className="bg-white rounded-2xl p-12 text-center shadow-sm border border-gray-200 text-gray-500 flex flex-col items-center">
@@ -206,15 +202,14 @@ export default function AdminPagosPage() {
             key={pago.id}
             className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col transition-all hover:shadow-md"
           >
-            {/* Cabecera de la tarjeta */}
             <div className="bg-gray-50/80 px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center font-bold text-gray-600 shadow-sm">
-                  {(pago.perfiles?.nombre || "J").charAt(0).toUpperCase()}
+                  {(pago.profiles?.nombre || "J").charAt(0).toUpperCase()}
                 </div>
                 <div>
                   <h3 className="font-bold text-gray-900 text-base leading-tight">
-                    {pago.perfiles?.nombre || "Jugador"}
+                    {pago.profiles?.nombre || "Jugador"}
                   </h3>
                   <p className="text-xs text-gray-500 mt-0.5 font-medium">
                     Paquete: <span className="text-gray-700">{pago.credit_packages?.nombre || "Paquete"}</span> • {pago.credit_packages?.creditos || 0} créditos
@@ -244,7 +239,6 @@ export default function AdminPagosPage() {
               </div>
             </div>
 
-            {/* Cuerpo de la tarjeta (Grid de datos) */}
             <div className="p-6">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-y-6 gap-x-4">
                 <DataBlock label="Método" value={getMetodoLabel(pago.method)} />
@@ -261,7 +255,6 @@ export default function AdminPagosPage() {
               </div>
             </div>
 
-            {/* Acciones y comprobante */}
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div>
                 {pago.proof_url ? (
