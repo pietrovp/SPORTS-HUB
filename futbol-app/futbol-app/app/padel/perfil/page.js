@@ -7,9 +7,9 @@ import Link from "next/link";
 
 const NIVELES = ["Iniciación", "Intermedio", "Avanzado", "Competición"];
 const POSICIONES = [
-  { value: "reves", label: "Revés" },
-  { value: "drive", label: "Drive" },
-  { value: "ambos", label: "Ambos" },
+  { value: "Revés", label: "Revés" },
+  { value: "Drive", label: "Drive" },
+  { value: "Ambos", label: "Ambos" },
 ];
 
 export default function PerfilPadel() {
@@ -22,7 +22,8 @@ export default function PerfilPadel() {
   // Formulario de creación de perfil
   const [creando, setCreando] = useState(false);
   const [nivel, setNivel] = useState(NIVELES[0]);
-  const [posicionPreferida, setPosicionPreferida] = useState("ambos");
+  const [posicion, setPosicion] = useState("Drive");
+  const [manoHabil, setManoHabil] = useState("Derecha");
 
   useEffect(() => {
     async function cargar() {
@@ -40,7 +41,7 @@ export default function PerfilPadel() {
         setUsuario(user);
 
         const [{ data: cuentaData }, { data: perfilData, error: perfilError }] = await Promise.all([
-          supabase.from("cuentas").select("nombre, avatar_url").eq("id", user.id).maybeSingle(),
+          supabase.from("profiles").select("nombre, avatar_url").eq("id", user.id).maybeSingle(),
           supabase.from("padel_profiles").select("*").eq("id", user.id).maybeSingle(),
         ]);
 
@@ -72,9 +73,9 @@ export default function PerfilPadel() {
       .from("padel_profiles")
       .insert({
         id: usuario.id,
-        cuenta_id: usuario.id,
         nivel,
-        posicion_preferida: posicionPreferida,
+        posicion,
+        mano_habil: manoHabil,
       })
       .select()
       .single();
@@ -138,27 +139,33 @@ export default function PerfilPadel() {
               className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white"
             >
               {NIVELES.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
+                <option key={n} value={n}>{n}</option>
               ))}
             </select>
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">
-              Posición preferida
-            </label>
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Posición en cancha</label>
             <select
-              value={posicionPreferida}
-              onChange={(e) => setPosicionPreferida(e.target.value)}
+              value={posicion}
+              onChange={(e) => setPosicion(e.target.value)}
               className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white"
             >
               {POSICIONES.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
+                <option key={p.value} value={p.value}>{p.label}</option>
               ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Mano dominante</label>
+            <select
+              value={manoHabil}
+              onChange={(e) => setManoHabil(e.target.value)}
+              className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white"
+            >
+              <option value="Derecha">Diestro</option>
+              <option value="Izquierda">Zurdo</option>
             </select>
           </div>
 
@@ -186,15 +193,13 @@ export default function PerfilPadel() {
           <PadelStatsCard
             nombre={cuenta?.nombre || "Jugador"}
             nivel={perfil.nivel}
-            posicionPreferida={
-              POSICIONES.find((p) => p.value === perfil.posicion_preferida)?.label
-            }
+            posicion={POSICIONES.find((p) => p.value === perfil.posicion)?.label}
             avatar={cuenta?.avatar_url}
             stats={{
               partidos_jugados: perfil.partidos_jugados,
               victorias: perfil.victorias,
               derrotas: perfil.derrotas,
-              puntos: perfil.puntos,
+              rating: perfil.rating,
             }}
             size="lg"
           />
