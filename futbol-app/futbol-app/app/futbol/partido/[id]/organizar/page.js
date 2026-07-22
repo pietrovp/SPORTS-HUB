@@ -262,7 +262,8 @@ export default function OrganizarPartido() {
     setProcesando(false);
   }
 
-  async function recalcularEstadisticasJugador(usuarioId) {
+  // FIX: recibe los goles del partido actual directamente para evitar race condition
+  async function recalcularEstadisticasJugador(usuarioId, golesPartidoActualPorInscripcionId) {
     try {
       const { data: historialPJ } = await supabase
         .from("inscripciones")
@@ -279,12 +280,29 @@ export default function OrganizarPartido() {
       const partidosMap = new Map((partidosData || []).map((p) => [p.id, p]));
 
       const listaFinalizados = historialPJ
-        .map((i) => ({ ...i, partido: partidosMap.get(i.partido_id) }))
-        .filter((i) => i.partido && i.partido.estado === "finalizado");
+        .map((i) => {
+          const partidoDB = partidosMap.get(i.partido_id);
+          // FIX: si es el partido actual, usamos los goles que acabamos de guardar
+          // en lugar de confiar en que la BD ya los tenga propagados
+          const golesReales =
+            golesPartidoActualPorInscripcionId && golesPartidoActualPorInscripcionId[i.id] != null
+              ? Number(golesPartidoActualPorInscripcionId[i.id])
+              : Number(i.goles) || 0;
+          return { ...i, goles: golesReales, partido: partidoDB };
+        })
+        // FIX: incluir también el partido actual que acaba de marcarse finalizado
+        .filter((i) => {
+          if (!i.partido) return false;
+          if (i.partido.estado === "finalizado") return true;
+          // El partido actual puede llegar aún como no finalizado por latencia de BD
+          if (i.partido_id === partidoId) return true;
+          return false;
+        });
 
       const partidos_jugados = listaFinalizados.length;
       const goles_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.goles) || 0), 0);
       const asistencias_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.asistencias) || 0), 0);
+      // FIX: max_goles_partido ahora incluye los goles del partido actual correctamente
       const max_goles_partido = listaFinalizados.reduce((acc, i) => Math.max(acc, Number(i.goles) || 0), 0);
 
       let victorias = 0, derrotas = 0, empates = 0, rachaActual = 0, racha_victorias_max = 0;
@@ -310,7 +328,6 @@ export default function OrganizarPartido() {
         .eq("id", usuarioId)
         .single();
 
-      // ✅ FIX: tabla correcta es user_logros con columna user_id (no logros_desbloqueados / usuario_id)
       const { data: todosLosLogros } = await supabase.from("logros").select("*");
       const { data: yaDesbloqueados } = await supabase
         .from("user_logros")
@@ -324,7 +341,6 @@ export default function OrganizarPartido() {
       );
 
       if (nuevosDesbloqueos.length > 0) {
-        // ✅ FIX: insertar en user_logros con columnas user_id y logro_id
         await supabase.from("user_logros").upsert(
           nuevosDesbloqueos.map((l) => ({ user_id: usuarioId, logro_id: l.id })),
           { onConflict: "user_id,logro_id", ignoreDuplicates: true }
@@ -348,7 +364,6 @@ export default function OrganizarPartido() {
         }
       });
 
-      // Rating final = 64 base + suma de todos los bonos de logros desbloqueados
       const rating_final = Math.min(99, 64 + bonoRatingTotal);
 
       const updates = {
@@ -385,6 +400,7 @@ export default function OrganizarPartido() {
     const golesEquipo1 = inscritos.filter((j) => j.equipo === 1).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
     const golesEquipo2 = inscritos.filter((j) => j.equipo === 2).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
 
+    // FIX: guardar primero los goles en inscripciones y esperar a que terminen
     const updateGolesPromises = inscritos.map((j) =>
       supabase.from("inscripciones").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
     );
@@ -398,8 +414,15 @@ export default function OrganizarPartido() {
 
     if (errorPartido) { setMensaje("Error al finalizar el partido."); setProcesando(false); return; }
 
+    // FIX: construir mapa inscripcionId -> goles para pasarlo directamente
+    // a recalcularEstadisticasJugador y evitar race condition con la BD
+    const golesActualesPorInscripcion = {};
+    inscritos.forEach((j) => {
+      golesActualesPorInscripcion[j.id] = Number(goles[j.id]) || 0;
+    });
+
     const idsUnicos = [...new Set(inscritos.map((j) => j.usuario_id))];
-    await Promise.all(idsUnicos.map((uid) => recalcularEstadisticasJugador(uid)));
+    await Promise.all(idsUnicos.map((uid) => recalcularEstadisticasJugador(uid, golesActualesPorInscripcion)));
 
     setPartido((prev) => ({ ...prev, estado: "finalizado", goles_equipo1: golesEquipo1, goles_equipo2: golesEquipo2 }));
     setInscritos((prev) => prev.map((j) => ({ ...j, goles: Number(goles[j.id]) || 0 })));
