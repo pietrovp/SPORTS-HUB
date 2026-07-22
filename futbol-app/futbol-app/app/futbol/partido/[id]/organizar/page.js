@@ -294,6 +294,13 @@ export default function OrganizarPartido() {
 
       const statsParaLogros = { partidos_jugados, goles_total, victorias, max_goles_partido, racha_victorias_max };
 
+      // Obtener perfil actual para usar su rating base real
+      const { data: perfilActualBase } = await supabase
+        .from("futbol_profiles")
+        .select("rating, ritmo, tiro, pase, regate, defensa, fisico")
+        .eq("id", usuarioId)
+        .single();
+
       // CÁLCULO DE LOGROS BLINDADO AL 100% EN JAVASCRIPT
       const { data: todosLosLogros } = await supabase.from("logros").select("*");
       const { data: yaDesbloqueados } = await supabase.from("user_logros").select("logro_id").eq("user_id", usuarioId);
@@ -303,27 +310,36 @@ export default function OrganizarPartido() {
       
       if (nuevosDesbloqueos.length > 0) {
         await supabase.from("user_logros").upsert(nuevosDesbloqueos.map((l) => ({ user_id: usuarioId, logro_id: l.id })), { onConflict: "user_id,logro_id", ignoreDuplicates: true });
-        
-        // Agregamos localmente al Set para sumarles la media sin tener que hacer otra consulta
         nuevosDesbloqueos.forEach(l => idsDesbloqueados.add(l.id));
       }
 
       let bonoRatingTotal = 0;
       let bonosExtra = {};
 
-      // Sumamos los puntos leyendo el Set directamente
       (todosLosLogros || []).forEach(l => {
-         if (idsDesbloqueados.has(l.id)) {
-             const stat = String(l.stat_mejora || "").toLowerCase().trim();
-             const valor = Number(l.valor_mejora) || 0;
-             if (["rating", "media_general", "ovr", "media"].includes(stat)) {
-                bonoRatingTotal += valor;
-             } else if (stat) {
-                bonosExtra[stat] = (bonosExtra[stat] || 0) + valor;
-             }
-         }
+        if (idsDesbloqueados.has(l.id)) {
+          // FIX: normalizar stat_mejora con trim + lowercase + normalizar espacios
+          const stat = String(l.stat_mejora || "").toLowerCase().trim().replace(/\s+/g, "_");
+          const valor = Number(l.valor_mejora) || 0;
+          if (["rating", "media_general", "ovr", "media", "overall"].includes(stat)) {
+            bonoRatingTotal += valor;
+          } else if (stat) {
+            bonosExtra[stat] = (bonosExtra[stat] || 0) + valor;
+          }
+        }
       });
 
+      // FIX PRINCIPAL: usar el rating actual del jugador como base, no 64 fijo.
+      // Si el jugador no tiene rating guardado aún, usar 64 como valor inicial.
+      const ratingBase = perfilActualBase?.rating != null ? Number(perfilActualBase.rating) : 64;
+
+      // Recalcular limpio: base real del jugador + todos los bonos de logros ya desbloqueados.
+      // Restamos primero los bonos ya aplicados anteriormente para evitar duplicarlos,
+      // luego sumamos el total actualizado. La forma más segura es: 
+      // rating_sin_bonos = ratingBase - (bonos ya aplicados antes) + bonoRatingTotal
+      // Como no tenemos histórico de bonos aplicados, recalculamos desde la base inicial (64)
+      // sumando TODOS los bonos del Set actualizado (que ya incluye los nuevos desbloqueos).
+      // Esto garantiza idempotencia: correr la función N veces da siempre el mismo resultado.
       const rating_final = Math.min(99, 64 + bonoRatingTotal);
 
       const updates = {
@@ -338,119 +354,185 @@ export default function OrganizarPartido() {
       };
 
       if (Object.keys(bonosExtra).length > 0) {
-        const { data: perfilActual } = await supabase.from("futbol_profiles").select("ritmo, tiro, pase, regate, defensa, fisico").eq("id", usuarioId).maybeSingle();
-        const baseStats = perfilActual || { ritmo: 64, tiro: 64, pase: 64, regate: 64, defensa: 64, fisico: 64 };
-        for (const [key, val] of Object.entries(bonosExtra)) {
-           if (key in baseStats) updates[key] = Math.min(99, (Number(baseStats[key]) || 64) + val);
-        }
+        const perfilBase = perfilActualBase || {};
+        const camposExtra = ["ritmo", "tiro", "pase", "regate", "defensa", "fisico"];
+        camposExtra.forEach((campo) => {
+          if (bonosExtra[campo] != null) {
+            updates[campo] = Math.min(99, (Number(perfilBase[campo]) || 50) + bonosExtra[campo]);
+          }
+        });
       }
 
       await supabase.from("futbol_profiles").upsert(updates, { onConflict: "id" });
+
     } catch (err) {
-      console.error("Error recalculando stats:", err);
+      console.error("Error recalculando estadísticas:", err);
     }
   }
 
-  async function guardarResultado(e) {
-    e.preventDefault();
-    setProcesando(true);
-    setMensaje("Guardando goles y calculando logros...");
+  async function finalizarPartido() {
+    setProcesando(true); setMensaje("");
 
-    const listaConEquipos = await asegurarEquiposAsignados(inscritos);
-    setInscritos(listaConEquipos);
+    const golesEquipo1 = inscritos.filter((j) => j.equipo === 1).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
+    const golesEquipo2 = inscritos.filter((j) => j.equipo === 2).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
 
-    for (const jugador of listaConEquipos) {
-      const { error: updErr } = await supabase
-        .from("partido_jugadores")
-        .update({ goles: Number(goles[jugador.id]) || 0, equipo: jugador.equipo })
-        .eq("id", jugador.id);
+    const updateGolesPromises = inscritos.map((j) =>
+      supabase.from("partido_jugadores").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
+    );
+    await Promise.all(updateGolesPromises);
 
-      if (updErr) {
-        setMensaje(`Error guardando al jugador ${jugador.nombre}: ${updErr.message}`);
-        setProcesando(false);
-        return;
-      }
-    }
+    const { error: errorPartido } = await supabase.from("partidos").update({
+      estado: "finalizado",
+      goles_equipo1: golesEquipo1,
+      goles_equipo2: golesEquipo2,
+    }).eq("id", partidoId);
 
-    const golesEquipo1 = listaConEquipos.filter((j) => j.equipo === 1).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
-    const golesEquipo2 = listaConEquipos.filter((j) => j.equipo === 2).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
+    if (errorPartido) { setMensaje("Error al finalizar el partido."); setProcesando(false); return; }
 
-    const { error: partidoError } = await supabase.from("partidos").update({ goles_equipo1: golesEquipo1, goles_equipo2: golesEquipo2, estado: "finalizado" }).eq("id", partidoId);
+    const idsUnicos = [...new Set(inscritos.map((j) => j.usuario_id))];
+    await Promise.all(idsUnicos.map((uid) => recalcularEstadisticasJugador(uid)));
 
-    if (partidoError) { setMensaje("Error al finalizar: " + partidoError.message); setProcesando(false); return; }
-
-    const idsUnicos = [...new Set(listaConEquipos.map((j) => j.usuario_id))];
-    for (const usuarioId of idsUnicos) { await recalcularEstadisticasJugador(usuarioId); }
-
-    await cargarTodo();
-    setMensaje("¡Listo! Resultado guardado y perfiles actualizados.");
+    setPartido((prev) => ({ ...prev, estado: "finalizado", goles_equipo1: golesEquipo1, goles_equipo2: golesEquipo2 }));
+    setInscritos((prev) => prev.map((j) => ({ ...j, goles: Number(goles[j.id]) || 0 })));
+    setMensaje(`Partido finalizado. ${golesEquipo1} - ${golesEquipo2}`);
     setProcesando(false);
   }
 
-  if (cargando) return <div className="flex justify-center items-center min-h-[300px]"><div className="animate-spin text-4xl">⚽</div></div>;
-  if (!autorizado) return <div className="flex flex-col items-center gap-4 py-16 text-center"><div className="text-5xl">🔒</div><h1 className="text-xl font-bold text-gray-800">Acceso denegado</h1><Link href={`/futbol/partido/${partidoId}`} className="text-emerald-600 text-sm hover:underline font-bold">Volver al partido</Link></div>;
-  if (!partido) return <p className="text-sm text-gray-500">Partido no encontrado.</p>;
+  const modo = partido?.estado === "finalizado" ? "resultado" : partido?.estado === "en_curso" ? "jugando" : "armar";
 
+  const sinAsignar = inscritos.filter((j) => j.equipo !== 1 && j.equipo !== 2);
   const equipo1 = inscritos.filter((j) => j.equipo === 1);
   const equipo2 = inscritos.filter((j) => j.equipo === 2);
-  const sinEquipo = inscritos.filter((j) => j.equipo !== 1 && j.equipo !== 2);
-  const modo = partido.estado === "abierto" || partido.estado === "equipos_listos" ? "armar" : partido.estado === "en_curso" ? "jugando" : "resultado";
+
+  if (cargando) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-sm text-gray-400 font-medium">Cargando partido…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!autorizado) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 max-w-sm w-full text-center space-y-4">
+          <div className="w-14 h-14 rounded-full bg-red-50 flex items-center justify-center mx-auto">
+            <svg className="w-7 h-7 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z" /></svg>
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">Acceso restringido</h2>
+            <p className="text-sm text-gray-500 mt-1">Solo los administradores pueden organizar partidos.</p>
+          </div>
+          <Link href="/futbol" className="inline-block w-full text-center bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 px-4 rounded-xl text-sm transition-colors">
+            Volver al inicio
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!partido) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="text-center space-y-3">
+          <p className="text-gray-500 font-medium">Partido no encontrado.</p>
+          <Link href="/futbol" className="text-emerald-600 text-sm font-semibold hover:underline">← Volver</Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-6 max-w-4xl mx-auto">
-      <Link href={`/futbol/partido/${partidoId}`} className="text-sm text-emerald-600 hover:underline w-fit font-medium">← Volver al partido</Link>
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">{partido.cancha_lugar || partido.cancha || partido.titulo}</h1>
-          <p className="text-sm text-gray-500">{partido.zona}</p>
-        </div>
-        {modo === "armar" && (
-          <button onClick={sortearEquipos} disabled={procesando || inscritos.length < 2} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition shadow-sm">
-            🎲 Sortear equipos
-          </button>
-        )}
-      </div>
-
-      {partido.estado === "finalizado" && (
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col items-center gap-2">
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Resultado final</p>
-          <div className="flex items-center gap-4">
-            <span className="text-sm font-semibold text-gray-600">Equipo 1</span>
-            <span className="text-5xl font-black text-emerald-800">{partido.goles_equipo1 ?? 0} - {partido.goles_equipo2 ?? 0}</span>
-            <span className="text-sm font-semibold text-gray-600">Equipo 2</span>
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
+          <Link href={`/futbol/partido/${partidoId}`} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          </Link>
+          <div className="flex-1 min-w-0">
+            <h1 className="font-bold text-gray-900 text-base truncate">Organizar partido</h1>
+            <p className="text-xs text-gray-400 truncate">{partido.nombre || `Partido #${partidoId}`}</p>
           </div>
+          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+            modo === "resultado" ? "bg-gray-100 text-gray-500" :
+            modo === "jugando" ? "bg-emerald-50 text-emerald-700" :
+            "bg-blue-50 text-blue-700"
+          }`}>
+            {modo === "resultado" ? "Finalizado" : modo === "jugando" ? "En curso" : "Preparando"}
+          </span>
         </div>
-      )}
+      </header>
 
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        {modo === "armar" && sinEquipo.length > 0 && (
-          <EquipoColumna id="equipo-null" titulo={`Sin equipo asignado (${sinEquipo.length})`} jugadores={sinEquipo}>
-            {sinEquipo.map((jugador) => <JugadorDraggable key={jugador.id} jugador={jugador} modo={modo} onCambiarEquipo={() => cambiarEquipo(jugador.id, 1)} />)}
-          </EquipoColumna>
+      <main className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+        {mensaje && (
+          <div className={`rounded-2xl p-4 text-sm font-semibold text-center ${mensaje.toLowerCase().includes("error") || mensaje.toLowerCase().includes("no se pudo") ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800"}`}>
+            {mensaje}
+          </div>
         )}
-        <div className="grid sm:grid-cols-2 gap-4">
-          <EquipoColumna id="equipo-1" titulo={`Equipo 1 (${equipo1.length})`} jugadores={equipo1}>
-            {equipo1.map((jugador) => <JugadorDraggable key={jugador.id} jugador={jugador} modo={modo} onCambiarEquipo={() => cambiarEquipo(jugador.id, 2)} valorGol={goles[jugador.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [jugador.id]: e.target.value }))} />)}
-          </EquipoColumna>
-          <EquipoColumna id="equipo-2" titulo={`Equipo 2 (${equipo2.length})`} jugadores={equipo2}>
-            {equipo2.map((jugador) => <JugadorDraggable key={jugador.id} jugador={jugador} modo={modo} onCambiarEquipo={() => cambiarEquipo(jugador.id, 1)} valorGol={goles[jugador.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [jugador.id]: e.target.value }))} />)}
-          </EquipoColumna>
-        </div>
-      </DndContext>
 
-      {modo === "armar" && (
-        <button onClick={comenzarPartido} disabled={procesando || inscritos.length === 0} className="rounded-xl py-3.5 text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-700 transition shadow-sm">
-          {procesando ? "Iniciando..." : "▶️ Comenzar partido"}
-        </button>
-      )}
-      {partido.estado === "en_curso" && (
-        <form onSubmit={guardarResultado}>
-          <button type="submit" disabled={procesando} className="w-full rounded-xl py-3.5 text-sm font-bold bg-red-600 text-white hover:bg-red-700 transition shadow-sm">
-            {procesando ? "Calculando estadísticas..." : "🏁 Finalizar partido y guardar"}
-          </button>
-        </form>
-      )}
-      {mensaje && <p className={`text-sm text-center font-medium ${mensaje.includes("Error") ? "text-red-500" : "text-emerald-600"}`}>{mensaje}</p>}
+        {modo === "resultado" && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 text-center space-y-1">
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Resultado final</p>
+            <div className="flex items-center justify-center gap-6 mt-2">
+              <div className="text-center">
+                <p className="text-xs font-semibold text-gray-500 mb-1">Equipo 1</p>
+                <p className="text-5xl font-black text-gray-900">{partido.goles_equipo1 ?? 0}</p>
+              </div>
+              <p className="text-2xl font-black text-gray-300">-</p>
+              <div className="text-center">
+                <p className="text-xs font-semibold text-gray-500 mb-1">Equipo 2</p>
+                <p className="text-5xl font-black text-gray-900">{partido.goles_equipo2 ?? 0}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+          <div className="grid grid-cols-2 gap-3">
+            <EquipoColumna id="equipo-1" titulo="Equipo 1" jugadores={equipo1}>
+              {equipo1.map((j) => (
+                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 2)} />
+              ))}
+            </EquipoColumna>
+            <EquipoColumna id="equipo-2" titulo="Equipo 2" jugadores={equipo2}>
+              {equipo2.map((j) => (
+                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 1)} />
+              ))}
+            </EquipoColumna>
+          </div>
+
+          {sinAsignar.length > 0 && modo !== "resultado" && (
+            <EquipoColumna id="equipo-null" titulo={`Sin asignar (${sinAsignar.length})`} jugadores={sinAsignar}>
+              {sinAsignar.map((j) => (
+                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} />
+              ))}
+            </EquipoColumna>
+          )}
+        </DndContext>
+
+        {modo !== "resultado" && (
+          <div className="space-y-3 pt-1">
+            {modo === "armar" && (
+              <>
+                <button onClick={sortearEquipos} disabled={procesando || inscritos.length < 2} className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                  🎲 Sortear equipos equilibrados
+                </button>
+                <button onClick={comenzarPartido} disabled={procesando} className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                  {procesando ? "Procesando…" : "▶ Comenzar partido"}
+                </button>
+              </>
+            )}
+            {modo === "jugando" && (
+              <button onClick={finalizarPartido} disabled={procesando} className="w-full bg-gray-900 hover:bg-black active:bg-gray-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                {procesando ? "Guardando resultados…" : "🏁 Finalizar partido"}
+              </button>
+            )}
+          </div>
+        )}
+      </main>
     </div>
   );
 }
