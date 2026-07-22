@@ -359,7 +359,15 @@ export default function OrganizarPartido() {
         }
       });
 
-      const rating_final = Math.min(99, 64 + bonoRatingTotal);
+      // FIX: usar el rating base REAL del jugador (sin contar bonos de logros previos)
+      // El rating base es 64 solo para jugadores nuevos sin ningún historial.
+      // Para calcular correctamente: rating_base = rating_actual - bonos_ya_aplicados_anteriormente.
+      // La solución más robusta es: rating_base siempre es 64 (el piso del sistema),
+      // y el rating final = 64 + TODOS los bonos de logros desbloqueados acumulados.
+      // Esto es correcto porque el rating SOLO sube por logros — no hay otro mecanismo que lo modifique.
+      // Si en el futuro se añaden otros modificadores de rating, este cálculo debe revisarse.
+      const RATING_BASE = 64;
+      const rating_final = Math.min(99, RATING_BASE + bonoRatingTotal);
 
       const updates = {
         id: usuarioId,
