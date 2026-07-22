@@ -19,9 +19,8 @@ export default function PerfilPadel() {
   const [perfil, setPerfil] = useState(null);
   const [errorCarga, setErrorCarga] = useState("");
 
-  // Formulario de creación de perfil
   const [creando, setCreando] = useState(false);
-  const [nivel, setNivel] = useState(NIVELES[0]);
+  const [nivel, setNivel] = useState(NIVELES[1]); // Intermedio por defecto
   const [posicion, setPosicion] = useState("Drive");
   const [manoHabil, setManoHabil] = useState("Derecha");
 
@@ -33,10 +32,7 @@ export default function PerfilPadel() {
           return;
         }
 
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-
+        const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
         setUsuario(user);
 
@@ -46,7 +42,6 @@ export default function PerfilPadel() {
         ]);
 
         if (perfilError) {
-          console.error("Error cargando perfil de pádel:", perfilError);
           setErrorCarga(perfilError.message || "No se pudo cargar el perfil de pádel.");
           return;
         }
@@ -54,13 +49,11 @@ export default function PerfilPadel() {
         setCuenta(cuentaData || null);
         setPerfil(perfilData || null);
       } catch (err) {
-        console.error("Error general perfil de pádel:", err);
         setErrorCarga("Ocurrió un error cargando el perfil.");
       } finally {
         setCargando(false);
       }
     }
-
     cargar();
   }, []);
 
@@ -73,8 +66,10 @@ export default function PerfilPadel() {
       .from("padel_profiles")
       .insert({
         id: usuario.id,
+        cuenta_id: usuario.id,
         nivel,
         posicion,
+        posicion_preferida: posicion,
         mano_habil: manoHabil,
       })
       .select()
@@ -83,7 +78,6 @@ export default function PerfilPadel() {
     setCreando(false);
 
     if (error) {
-      console.error("Error creando perfil de pádel:", error);
       setErrorCarga(error.message || "No se pudo crear el perfil de pádel.");
       return;
     }
@@ -118,7 +112,6 @@ export default function PerfilPadel() {
     return <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4">{errorCarga}</div>;
   }
 
-  // Todavía no tiene perfil de pádel: mostrar onboarding
   if (!perfil) {
     return (
       <div className="max-w-md mx-auto flex flex-col gap-6 py-8">
@@ -138,9 +131,7 @@ export default function PerfilPadel() {
               onChange={(e) => setNivel(e.target.value)}
               className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white"
             >
-              {NIVELES.map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
+              {NIVELES.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </div>
 
@@ -151,9 +142,7 @@ export default function PerfilPadel() {
               onChange={(e) => setPosicion(e.target.value)}
               className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white"
             >
-              {POSICIONES.map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
-              ))}
+              {POSICIONES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
           </div>
 
@@ -193,7 +182,7 @@ export default function PerfilPadel() {
           <PadelStatsCard
             nombre={cuenta?.nombre || "Jugador"}
             nivel={perfil.nivel}
-            posicion={POSICIONES.find((p) => p.value === perfil.posicion)?.label}
+            posicion={POSICIONES.find((p) => p.value === perfil.posicion)?.label || perfil.posicion}
             avatar={cuenta?.avatar_url}
             stats={{
               partidos_jugados: perfil.partidos_jugados,
