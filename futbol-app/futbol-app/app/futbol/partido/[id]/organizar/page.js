@@ -150,7 +150,7 @@ export default function OrganizarPartido() {
 
     if (idsUsuarios.length > 0) {
       const [{ data: fData }, { data: pData }] = await Promise.all([
-        supabase.from("futbol_profiles").select("id, posicion, rating, partidos_jugados, goles").in("id", idsUsuarios),
+        supabase.from("futbol_profiles").select("id, posicion, media, partidos_jugados, goles").in("id", idsUsuarios),
         supabase.from("perfiles").select("id, nombre, avatar_url").in("id", idsUsuarios),
       ]);
       perfilesFutbol = fData || [];
@@ -166,7 +166,7 @@ export default function OrganizarPartido() {
         usuario_id: i.user_id,
         nombre: pPerfil?.nombre || "Jugador",
         posicion: fPerfil?.posicion || "MED",
-        media: fPerfil?.rating != null ? Math.round(Number(fPerfil.rating)) : 64,
+        media: fPerfil?.media != null ? Math.round(Number(fPerfil.media)) : 64,
         avatarUrl: pPerfil?.avatar_url || null,
         equipo: i.equipo ? Number(i.equipo) : null,
         goles: Number(i.goles) || 0,
@@ -242,18 +242,27 @@ export default function OrganizarPartido() {
       ...equipo2.map((id) => supabase.from("inscripciones").update({ equipo: 2 }).eq("id", id)),
     ];
     await Promise.all(updates);
-    await supabase.from("partidos").update({ estado: "equipos_listos" }).eq("id", partidoId);
 
-    setInscritos((prev) => prev.map((j) => ({ ...j, equipo: equipo1.includes(j.id) ? 1 : 2 })));
-    setPartido((prev) => ({ ...prev, estado: "equipos_listos" }));
-    setMensaje("Equipos sorteados de forma equilibrada.");
+    setInscritos((prev) => prev.map((j) => ({
+      ...j,
+      equipo: equipo1.includes(j.id) ? 1 : equipo2.includes(j.id) ? 2 : null,
+    })));
     setProcesando(false);
   }
 
-  async function comenzarPartido() {
+  async function guardarResultadoParcial() {
+    setProcesando(true);
+    const updates = inscritos.map((j) => supabase.from("inscripciones").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id));
+    await Promise.all(updates);
+    setMensaje("Resultado guardado.");
+    setProcesando(false);
+  }
+
+  async function iniciarPartido() {
     setProcesando(true); setMensaje("");
-    const listaConEquipos = await asegurarEquiposAsignados(inscritos);
-    setInscritos(listaConEquipos);
+
+    const listaAsignada = await asegurarEquiposAsignados(inscritos);
+    setInscritos(listaAsignada);
 
     const { error } = await supabase.from("partidos").update({ estado: "en_curso" }).eq("id", partidoId);
     if (error) { setMensaje("No se pudo iniciar el partido."); setProcesando(false); return; }
@@ -282,19 +291,15 @@ export default function OrganizarPartido() {
       const listaFinalizados = historialPJ
         .map((i) => {
           const partidoDB = partidosMap.get(i.partido_id);
-          // FIX: si es el partido actual, usamos los goles que acabamos de guardar
-          // en lugar de confiar en que la BD ya los tenga propagados
           const golesReales =
             golesPartidoActualPorInscripcionId && golesPartidoActualPorInscripcionId[i.id] != null
               ? Number(golesPartidoActualPorInscripcionId[i.id])
               : Number(i.goles) || 0;
           return { ...i, goles: golesReales, partido: partidoDB };
         })
-        // FIX: incluir también el partido actual que acaba de marcarse finalizado
         .filter((i) => {
           if (!i.partido) return false;
           if (i.partido.estado === "finalizado") return true;
-          // El partido actual puede llegar aún como no finalizado por latencia de BD
           if (i.partido_id === partidoId) return true;
           return false;
         });
@@ -302,7 +307,6 @@ export default function OrganizarPartido() {
       const partidos_jugados = listaFinalizados.length;
       const goles_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.goles) || 0), 0);
       const asistencias_total = listaFinalizados.reduce((acc, i) => acc + (Number(i.asistencias) || 0), 0);
-      // FIX: max_goles_partido ahora incluye los goles del partido actual correctamente
       const max_goles_partido = listaFinalizados.reduce((acc, i) => Math.max(acc, Number(i.goles) || 0), 0);
 
       let victorias = 0, derrotas = 0, empates = 0, rachaActual = 0, racha_victorias_max = 0;
@@ -324,7 +328,7 @@ export default function OrganizarPartido() {
 
       const { data: perfilActualBase } = await supabase
         .from("futbol_profiles")
-        .select("rating, ritmo, tiro, pase, regate, defensa, fisico")
+        .select("media, ritmo, tiro, pase, regate, defensa, fisico")
         .eq("id", usuarioId)
         .single();
 
@@ -348,7 +352,6 @@ export default function OrganizarPartido() {
         nuevosDesbloqueos.forEach((l) => idsDesbloqueados.add(l.id));
       }
 
-      // Calcular bonos sumando TODOS los logros desbloqueados del jugador
       let bonoRatingTotal = 0;
       let bonosExtra = {};
 
@@ -374,7 +377,7 @@ export default function OrganizarPartido() {
         victorias,
         derrotas,
         empates,
-        rating: rating_final,
+        media: rating_final,
       };
 
       if (Object.keys(bonosExtra).length > 0) {
@@ -400,171 +403,126 @@ export default function OrganizarPartido() {
     const golesEquipo1 = inscritos.filter((j) => j.equipo === 1).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
     const golesEquipo2 = inscritos.filter((j) => j.equipo === 2).reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
 
-    // FIX: guardar primero los goles en inscripciones y esperar a que terminen
-    const updateGolesPromises = inscritos.map((j) =>
-      supabase.from("inscripciones").update({ goles: Number(goles[j.id]) || 0 }).eq("id", j.id)
-    );
-    await Promise.all(updateGolesPromises);
-
-    const { error: errorPartido } = await supabase.from("partidos").update({
-      estado: "finalizado",
-      goles_equipo1: golesEquipo1,
-      goles_equipo2: golesEquipo2,
-    }).eq("id", partidoId);
-
-    if (errorPartido) { setMensaje("Error al finalizar el partido."); setProcesando(false); return; }
-
-    // FIX: construir mapa inscripcionId -> goles para pasarlo directamente
-    // a recalcularEstadisticasJugador y evitar race condition con la BD
     const golesActualesPorInscripcion = {};
     inscritos.forEach((j) => {
       golesActualesPorInscripcion[j.id] = Number(goles[j.id]) || 0;
     });
 
-    const idsUnicos = [...new Set(inscritos.map((j) => j.usuario_id))];
+    const actualizacionesInscripciones = inscritos.map((j) =>
+      supabase
+        .from("inscripciones")
+        .update({ goles: Number(goles[j.id]) || 0 })
+        .eq("id", j.id)
+    );
+
+    await Promise.all([
+      ...actualizacionesInscripciones,
+      supabase
+        .from("partidos")
+        .update({ estado: "finalizado", goles_equipo1: golesEquipo1, goles_equipo2: golesEquipo2 })
+        .eq("id", partidoId),
+    ]);
+
+    const idsUnicos = [...new Set(inscritos.map((j) => j.usuario_id).filter(Boolean))];
     await Promise.all(idsUnicos.map((uid) => recalcularEstadisticasJugador(uid, golesActualesPorInscripcion)));
 
     setPartido((prev) => ({ ...prev, estado: "finalizado", goles_equipo1: golesEquipo1, goles_equipo2: golesEquipo2 }));
     setInscritos((prev) => prev.map((j) => ({ ...j, goles: Number(goles[j.id]) || 0 })));
-    setMensaje(`Partido finalizado. ${golesEquipo1} - ${golesEquipo2}`);
+    setMensaje("Partido finalizado y estadísticas actualizadas.");
     setProcesando(false);
   }
 
-  const modo = partido?.estado === "finalizado" ? "resultado" : partido?.estado === "en_curso" ? "jugando" : "armar";
-
-  const sinAsignar = inscritos.filter((j) => j.equipo !== 1 && j.equipo !== 2);
   const equipo1 = inscritos.filter((j) => j.equipo === 1);
   const equipo2 = inscritos.filter((j) => j.equipo === 2);
+  const sinEquipo = inscritos.filter((j) => j.equipo !== 1 && j.equipo !== 2);
 
-  if (cargando) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center space-y-3">
-          <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-sm text-gray-400 font-medium">Cargando partido…</p>
-        </div>
-      </div>
-    );
-  }
+  if (cargando) return <main className="min-h-screen flex items-center justify-center text-gray-500">Cargando...</main>;
+  if (!autorizado) return <main className="min-h-screen flex items-center justify-center text-red-500">No autorizado</main>;
+  if (!partido) return <main className="min-h-screen flex items-center justify-center text-gray-500">Partido no encontrado</main>;
 
-  if (!autorizado) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 max-w-sm w-full text-center space-y-4">
-          <div className="w-14 h-14 rounded-full bg-red-50 flex items-center justify-center mx-auto">
-            <svg className="w-7 h-7 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z" /></svg>
-          </div>
-          <div>
-            <h2 className="text-lg font-bold text-gray-800">Acceso restringido</h2>
-            <p className="text-sm text-gray-500 mt-1">Solo los administradores pueden organizar partidos.</p>
-          </div>
-          <Link href="/futbol" className="inline-block w-full text-center bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 px-4 rounded-xl text-sm transition-colors">
-            Volver al inicio
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  if (!partido) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="text-center space-y-3">
-          <p className="text-gray-500 font-medium">Partido no encontrado.</p>
-          <Link href="/futbol" className="text-emerald-600 text-sm font-semibold hover:underline">← Volver</Link>
-        </div>
-      </div>
-    );
-  }
+  const estado = partido.estado;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
-          <Link href={`/futbol/partido/${partidoId}`} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-          </Link>
-          <div className="flex-1 min-w-0">
-            <h1 className="font-bold text-gray-900 text-base truncate">Organizar partido</h1>
-            <p className="text-xs text-gray-400 truncate">{partido.nombre || `Partido #${partidoId}`}</p>
+    <main className="min-h-screen bg-gray-50 pb-28">
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase text-emerald-700 tracking-wide">Organizar partido</p>
+            <h1 className="text-2xl md:text-3xl font-black text-gray-900">{partido.nombre || "Partido"}</h1>
           </div>
-          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
-            modo === "resultado" ? "bg-gray-100 text-gray-500" :
-            modo === "jugando" ? "bg-emerald-50 text-emerald-700" :
-            "bg-blue-50 text-blue-700"
-          }`}>
-            {modo === "resultado" ? "Finalizado" : modo === "jugando" ? "En curso" : "Preparando"}
-          </span>
+          <Link href={`/futbol/partido/${partidoId}`} className="px-4 py-2 rounded-xl bg-white border border-gray-200 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-100">Volver</Link>
         </div>
-      </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-6 space-y-4">
-        {mensaje && (
-          <div className={`rounded-2xl p-4 text-sm font-semibold text-center ${mensaje.toLowerCase().includes("error") || mensaje.toLowerCase().includes("no se pudo") ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800"}`}>
-            {mensaje}
-          </div>
+        {mensaje && <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-medium text-emerald-800">{mensaje}</div>}
+
+        {estado === "pendiente" && (
+          <>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={sortearEquipos} disabled={procesando} className="px-4 py-3 rounded-2xl bg-emerald-600 text-white font-bold shadow-sm hover:bg-emerald-700 disabled:opacity-60">Sortear equipos</button>
+              <button onClick={iniciarPartido} disabled={procesando || inscritos.length < 2} className="px-4 py-3 rounded-2xl bg-gray-900 text-white font-bold shadow-sm hover:bg-black disabled:opacity-60">Iniciar partido</button>
+            </div>
+
+            <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+              <div className="grid md:grid-cols-3 gap-4">
+                <EquipoColumna id="equipo-null" titulo="Sin equipo" jugadores={sinEquipo}>
+                  {sinEquipo.map((jugador) => (
+                    <JugadorDraggable key={jugador.id} jugador={jugador} modo="armar" onCambiarEquipo={() => cambiarEquipo(jugador.id, jugador.equipo === 1 ? 2 : 1)} />
+                  ))}
+                </EquipoColumna>
+
+                <EquipoColumna id="equipo-1" titulo="Equipo 1" jugadores={equipo1}>
+                  {equipo1.map((jugador) => (
+                    <JugadorDraggable key={jugador.id} jugador={jugador} modo="armar" onCambiarEquipo={() => cambiarEquipo(jugador.id, 2)} />
+                  ))}
+                </EquipoColumna>
+
+                <EquipoColumna id="equipo-2" titulo="Equipo 2" jugadores={equipo2}>
+                  {equipo2.map((jugador) => (
+                    <JugadorDraggable key={jugador.id} jugador={jugador} modo="armar" onCambiarEquipo={() => cambiarEquipo(jugador.id, 1)} />
+                  ))}
+                </EquipoColumna>
+              </div>
+            </DndContext>
+          </>
         )}
 
-        {modo === "resultado" && (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 text-center space-y-1">
-            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Resultado final</p>
-            <div className="flex items-center justify-center gap-6 mt-2">
-              <div className="text-center">
-                <p className="text-xs font-semibold text-gray-500 mb-1">Equipo 1</p>
-                <p className="text-5xl font-black text-gray-900">{partido.goles_equipo1 ?? 0}</p>
-              </div>
-              <p className="text-2xl font-black text-gray-300">-</p>
-              <div className="text-center">
-                <p className="text-xs font-semibold text-gray-500 mb-1">Equipo 2</p>
-                <p className="text-5xl font-black text-gray-900">{partido.goles_equipo2 ?? 0}</p>
-              </div>
+        {estado === "en_curso" && (
+          <div className="grid md:grid-cols-2 gap-4">
+            <EquipoColumna id="equipo-1" titulo={`Equipo 1 · ${equipo1.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0)} goles`} jugadores={equipo1}>
+              {equipo1.map((jugador) => (
+                <JugadorCard key={jugador.id} jugador={jugador} modo="jugando" valorGol={goles[jugador.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [jugador.id]: e.target.value }))} />
+              ))}
+            </EquipoColumna>
+
+            <EquipoColumna id="equipo-2" titulo={`Equipo 2 · ${equipo2.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0)} goles`} jugadores={equipo2}>
+              {equipo2.map((jugador) => (
+                <JugadorCard key={jugador.id} jugador={jugador} modo="jugando" valorGol={goles[jugador.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [jugador.id]: e.target.value }))} />
+              ))}
+            </EquipoColumna>
+
+            <div className="md:col-span-2 flex flex-wrap gap-3 pt-2">
+              <button onClick={guardarResultadoParcial} disabled={procesando} className="px-4 py-3 rounded-2xl bg-white border border-gray-200 font-bold text-gray-800 shadow-sm hover:bg-gray-100 disabled:opacity-60">Guardar</button>
+              <button onClick={finalizarPartido} disabled={procesando} className="px-4 py-3 rounded-2xl bg-emerald-600 text-white font-bold shadow-sm hover:bg-emerald-700 disabled:opacity-60">Finalizar partido</button>
             </div>
           </div>
         )}
 
-        <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-          <div className="grid grid-cols-2 gap-3">
-            <EquipoColumna id="equipo-1" titulo="Equipo 1" jugadores={equipo1}>
-              {equipo1.map((j) => (
-                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 2)} />
+        {estado === "finalizado" && (
+          <div className="grid md:grid-cols-2 gap-4">
+            <EquipoColumna id="equipo-1" titulo={`Equipo 1 · ${partido.goles_equipo1 || 0} goles`} jugadores={equipo1}>
+              {equipo1.map((jugador) => (
+                <JugadorCard key={jugador.id} jugador={jugador} modo="resultado" />
               ))}
             </EquipoColumna>
-            <EquipoColumna id="equipo-2" titulo="Equipo 2" jugadores={equipo2}>
-              {equipo2.map((j) => (
-                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 1)} />
-              ))}
-            </EquipoColumna>
-          </div>
 
-          {sinAsignar.length > 0 && modo !== "resultado" && (
-            <EquipoColumna id="equipo-null" titulo={`Sin asignar (${sinAsignar.length})`} jugadores={sinAsignar}>
-              {sinAsignar.map((j) => (
-                <JugadorDraggable key={j.id} jugador={j} modo={modo} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} />
+            <EquipoColumna id="equipo-2" titulo={`Equipo 2 · ${partido.goles_equipo2 || 0} goles`} jugadores={equipo2}>
+              {equipo2.map((jugador) => (
+                <JugadorCard key={jugador.id} jugador={jugador} modo="resultado" />
               ))}
             </EquipoColumna>
-          )}
-        </DndContext>
-
-        {modo !== "resultado" && (
-          <div className="space-y-3 pt-1">
-            {modo === "armar" && (
-              <>
-                <button onClick={sortearEquipos} disabled={procesando || inscritos.length < 2} className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                  🎲 Sortear equipos equilibrados
-                </button>
-                <button onClick={comenzarPartido} disabled={procesando} className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                  {procesando ? "Procesando…" : "▶ Comenzar partido"}
-                </button>
-              </>
-            )}
-            {modo === "jugando" && (
-              <button onClick={finalizarPartido} disabled={procesando} className="w-full bg-gray-900 hover:bg-black active:bg-gray-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                {procesando ? "Guardando resultados…" : "🏁 Finalizar partido"}
-              </button>
-            )}
           </div>
         )}
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }
