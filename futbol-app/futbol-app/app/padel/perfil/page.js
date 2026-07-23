@@ -107,7 +107,7 @@ function normalizarTiposPartido(value) {
 
 function StatCard({ label, value, hint, accent = "from-blue-500 to-cyan-400" }) {
   return (
-    <div className="rounded-3xl border border-white/15 bg-white/10 p-4 backdrop-blur-md">
+    <div className="rounded-3xl border border-white/15 bg-white/12 p-5 backdrop-blur-md shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
       <div className={cx("mb-3 h-1.5 w-14 rounded-full bg-gradient-to-r", accent)} />
       <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">{label}</p>
       <p className="mt-2 text-3xl font-black text-white">{value}</p>
@@ -349,7 +349,7 @@ export default function PadelPerfilPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-6">
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top,#dbeafe_0%,#eff6ff_28%,#f8fafc_55%,#f8fafc_100%)] px-4 py-6 md:px-6">
         <div className="mx-auto max-w-6xl animate-pulse space-y-5">
           <div className="h-10 w-60 rounded-2xl bg-slate-200" />
           <div className="h-[260px] rounded-[32px] bg-slate-200" />
@@ -416,10 +416,10 @@ export default function PadelPerfilPage() {
           </div>
         ) : null}
 
-        <section className="overflow-hidden rounded-[32px] bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-900 p-6 shadow-[0_30px_80px_-35px_rgba(8,47,73,0.75)] md:p-8">
+        <section className="overflow-hidden rounded-[32px] bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 p-6 shadow-[0_30px_80px_-35px_rgba(8,47,73,0.82)] md:p-8">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
             <div className="max-w-2xl">
-              <div className="inline-flex items-center rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 backdrop-blur">
+              <div className="inline-flex items-center rounded-full border border-cyan-200/30 bg-cyan-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-50 backdrop-blur">
                 Jugador de pádel
               </div>
 
@@ -427,16 +427,16 @@ export default function PadelPerfilPage() {
                 {nombre}
               </h2>
 
-              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-white/75">
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-white/80">
                 <span>{email}</span>
                 <span className="hidden h-1 w-1 rounded-full bg-white/40 md:inline-block" />
                 <span>Nivel {nivelLabel}</span>
               </div>
 
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] md:text-base">
-  Configura tus preferencias, revisa tu rendimiento y prepara tu perfil
-  para futuros partidos, rankings y progreso dentro del hub.
-</p>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] md:text-base">
+                Configura tus preferencias, revisa tu rendimiento y prepara tu perfil
+                para futuros partidos, rankings y progreso dentro del hub.
+              </p>
             </div>
 
             <div className="flex flex-wrap gap-3">
@@ -459,7 +459,7 @@ export default function PadelPerfilPage() {
             </div>
           </div>
 
-          <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Nivel"
               value={nivelLabel}
@@ -634,7 +634,7 @@ export default function PadelPerfilPage() {
                   </select>
                 </label>
 
-                <div className="space-y-3 md:col-span-2">
+                <div className="space-y-3 pt-2 md:col-span-2">
                   <span className="text-sm font-semibold text-slate-700">Tipo de partido</span>
 
                   <div className="flex flex-wrap gap-3">
