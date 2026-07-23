@@ -58,7 +58,16 @@ export default async function PadelClubDetailPage({ params }) {
   const slug = params?.slug;
 
   if (!slug) {
-    notFound();
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-10">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-amber-200 bg-amber-50 p-6">
+          <h1 className="text-2xl font-black text-amber-900">Falta el slug del club</h1>
+          <p className="mt-2 text-sm text-amber-800">
+            La página se abrió sin slug en la URL.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   const { data: club, error } = await supabase
@@ -96,8 +105,32 @@ export default async function PadelClubDetailPage({ params }) {
     .eq("is_active", true)
     .maybeSingle();
 
-  if (error || !club) {
-    notFound();
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-10">
+        <div className="mx-auto max-w-4xl rounded-3xl border border-rose-200 bg-rose-50 p-6">
+          <h1 className="text-2xl font-black text-rose-900">Error cargando el club</h1>
+          <pre className="mt-4 overflow-auto rounded-2xl bg-white p-4 text-xs text-rose-800">
+{JSON.stringify(error, null, 2)}
+          </pre>
+          <p className="mt-4 text-sm text-rose-700">Slug recibido: {slug}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!club) {
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-10">
+        <div className="mx-auto max-w-4xl rounded-3xl border border-amber-200 bg-amber-50 p-6">
+          <h1 className="text-2xl font-black text-amber-900">Club no encontrado</h1>
+          <p className="mt-2 text-sm text-amber-800">
+            No apareció ningún club activo para este slug.
+          </p>
+          <p className="mt-4 text-sm text-amber-800">Slug recibido: {slug}</p>
+        </div>
+      </div>
+    );
   }
 
   const activeCourts = (club.courts || []).filter((court) => court.is_active);
@@ -235,25 +268,25 @@ export default async function PadelClubDetailPage({ params }) {
                     <p className="text-lg font-black text-slate-900">{court.name}</p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {court.court_number ? (
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 border border-slate-200">
+                        <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
                           Nº {court.court_number}
                         </span>
                       ) : null}
 
                       {court.court_type ? (
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 border border-slate-200">
+                        <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
                           {court.court_type}
                         </span>
                       ) : null}
 
                       {court.surface_type ? (
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 border border-slate-200">
+                        <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
                           {court.surface_type}
                         </span>
                       ) : null}
 
                       {court.has_lighting ? (
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 border border-slate-200">
+                        <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
                           Con luz
                         </span>
                       ) : null}
