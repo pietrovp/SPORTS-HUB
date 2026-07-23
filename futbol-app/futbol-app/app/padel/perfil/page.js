@@ -106,6 +106,11 @@ function normalizarTiposPartido(value) {
   return unicos.length > 0 ? unicos : ["amistoso"];
 }
 
+function normalizeMatchRelation(match) {
+  if (!match) return null;
+  return Array.isArray(match) ? match[0] : match;
+}
+
 function StatCard({ label, value, hint, accent = "from-blue-500 to-cyan-400" }) {
   return (
     <div className="min-w-0 rounded-3xl border border-white/15 bg-white/12 p-5 backdrop-blur-md shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
@@ -157,6 +162,7 @@ export default function PadelPerfilPage() {
   const [user, setUser] = useState(null);
   const [baseProfile, setBaseProfile] = useState(null);
   const [padelProfile, setPadelProfile] = useState(null);
+  const [matchesData, setMatchesData] = useState([]);
   const [editando, setEditando] = useState(false);
   const [mensaje, setMensaje] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -239,6 +245,29 @@ export default function PadelPerfilPage() {
         dia_preferido: finalPadel.dia_preferido || DEFAULT_PROFILE.dia_preferido,
         tipo_partido_preferido: tiposNormalizados,
       });
+
+      const { data: playedMatches, error: matchesError } = await supabase
+        .from("padel_match_players")
+        .select(`
+          id,
+          team,
+          joined_at,
+          match:padel_matches!inner (
+            id,
+            status,
+            winner_team,
+            team_a_score,
+            team_b_score,
+            scheduled_at
+          )
+        `)
+        .eq("user_id", authUser.id)
+        .eq("match.status", "jugado")
+        .order("scheduled_at", { referencedTable: "match", ascending: false });
+
+      if (matchesError) throw matchesError;
+
+      setMatchesData(playedMatches || []);
     } catch (error) {
       console.error(error);
       setErrorMsg(error.message || "No se pudo cargar el perfil de pádel.");
@@ -305,20 +334,51 @@ export default function PadelPerfilPage() {
   }
 
   const estadisticas = useMemo(() => {
-    const partidos = padelProfile?.partidos_jugados ?? 0;
-    const victorias = padelProfile?.victorias ?? 0;
+    const normalizedMatches = (matchesData || [])
+      .map((row) => {
+        const match = normalizeMatchRelation(row.match);
+        if (!match || match.status !== "jugado") return null;
+
+        return {
+          team: row.team,
+          winnerTeam: match.winner_team,
+          scheduledAt: match.scheduled_at,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+
+    const partidos = normalizedMatches.length;
+
+    const victorias = normalizedMatches.filter(
+      (match) => match.winnerTeam && match.winnerTeam === match.team
+    ).length;
+
     const derrotas = Math.max(partidos - victorias, 0);
     const winRate = partidos > 0 ? Math.round((victorias / partidos) * 100) : 0;
-    const racha = padelProfile?.racha_victorias_max ?? 0;
+
+    let rachaActual = 0;
+    let mejorRacha = 0;
+
+    for (const match of normalizedMatches) {
+      const gano = match.winnerTeam && match.winnerTeam === match.team;
+
+      if (gano) {
+        rachaActual += 1;
+        if (rachaActual > mejorRacha) mejorRacha = rachaActual;
+      } else {
+        rachaActual = 0;
+      }
+    }
 
     return {
       partidos,
       victorias,
       derrotas,
       winRate,
-      racha,
+      racha: mejorRacha,
     };
-  }, [padelProfile]);
+  }, [matchesData]);
 
   function toggleTipoPartido(tipo) {
     setForm((prev) => {
@@ -455,7 +515,7 @@ export default function PadelPerfilPage() {
             <StatCard
               label="Partidos"
               value={estadisticas.partidos}
-              hint="Encuentros registrados"
+              hint="Encuentros jugados registrados"
               accent="from-blue-400 to-indigo-400"
             />
             <StatCard
@@ -467,7 +527,7 @@ export default function PadelPerfilPage() {
             <StatCard
               label="Win rate"
               value={`${estadisticas.winRate}%`}
-              hint="Porcentaje de victorias"
+              hint="Porcentaje real según partidos jugados"
               accent="from-fuchsia-400 to-cyan-400"
             />
           </div>
