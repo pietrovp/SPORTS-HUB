@@ -58,6 +58,19 @@ function cx(...classes) {
   return classes.filter(Boolean).join(" ");
 }
 
+function normalizarTiposPartido(value) {
+  if (Array.isArray(value)) return value;
+
+  if (typeof value === "string" && value.trim()) {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return ["amistoso"];
+}
+
 function StatBox({ label, value }) {
   return (
     <div className="rounded-2xl bg-white/10 p-4 backdrop-blur-sm border border-white/10">
@@ -158,6 +171,13 @@ export default function PadelPerfilPage() {
         setMensaje("Perfil de pádel creado correctamente.");
       }
 
+      const tiposNormalizados = normalizarTiposPartido(finalPadel.tipo_partido_preferido);
+
+      finalPadel = {
+        ...finalPadel,
+        tipo_partido_preferido: tiposNormalizados,
+      };
+
       setPadelProfile(finalPadel);
       setForm({
         nivel: finalPadel.nivel || DEFAULT_PROFILE.nivel,
@@ -166,10 +186,7 @@ export default function PadelPerfilPage() {
         mano_habil: finalPadel.mano_habil || DEFAULT_PROFILE.mano_habil,
         horario_preferido: finalPadel.horario_preferido || DEFAULT_PROFILE.horario_preferido,
         dia_preferido: finalPadel.dia_preferido || DEFAULT_PROFILE.dia_preferido,
-        tipo_partido_preferido:
-          finalPadel.tipo_partido_preferido?.length > 0
-            ? finalPadel.tipo_partido_preferido
-            : DEFAULT_PROFILE.tipo_partido_preferido,
+        tipo_partido_preferido: tiposNormalizados,
       });
     } catch (error) {
       console.error(error);
@@ -194,7 +211,7 @@ export default function PadelPerfilPage() {
         mano_habil: form.mano_habil,
         horario_preferido: form.horario_preferido,
         dia_preferido: form.dia_preferido,
-        tipo_partido_preferido: form.tipo_partido_preferido,
+        tipo_partido_preferido: normalizarTiposPartido(form.tipo_partido_preferido),
       };
 
       const { data, error } = await supabase
@@ -206,7 +223,16 @@ export default function PadelPerfilPage() {
 
       if (error) throw error;
 
-      setPadelProfile(data);
+      const perfilNormalizado = {
+        ...data,
+        tipo_partido_preferido: normalizarTiposPartido(data?.tipo_partido_preferido),
+      };
+
+      setPadelProfile(perfilNormalizado);
+      setForm((prev) => ({
+        ...prev,
+        tipo_partido_preferido: perfilNormalizado.tipo_partido_preferido,
+      }));
       setEditando(false);
       setMensaje("Preferencias actualizadas correctamente.");
     } catch (error) {
@@ -235,10 +261,12 @@ export default function PadelPerfilPage() {
 
   function toggleTipoPartido(tipo) {
     setForm((prev) => {
-      const exists = prev.tipo_partido_preferido.includes(tipo);
+      const actual = normalizarTiposPartido(prev.tipo_partido_preferido);
+      const exists = actual.includes(tipo);
+
       const next = exists
-        ? prev.tipo_partido_preferido.filter((item) => item !== tipo)
-        : [...prev.tipo_partido_preferido, tipo];
+        ? actual.filter((item) => item !== tipo)
+        : [...actual, tipo];
 
       return {
         ...prev,
@@ -274,9 +302,11 @@ export default function PadelPerfilPage() {
   const horarioLabel =
     LABELS.horario_preferido[padelProfile?.horario_preferido] || "Noche";
   const diaLabel = LABELS.dia_preferido[padelProfile?.dia_preferido] || "Fin de semana";
-  const tiposLabel =
-    padelProfile?.tipo_partido_preferido?.map((tipo) => LABELS.tipo_partido_preferido[tipo] || tipo).join(", ") ||
-    "Amistoso";
+
+  const tiposPartido = normalizarTiposPartido(padelProfile?.tipo_partido_preferido);
+  const tiposLabel = tiposPartido
+    .map((tipo) => LABELS.tipo_partido_preferido[tipo] || tipo)
+    .join(", ");
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-6">
@@ -363,7 +393,7 @@ export default function PadelPerfilPage() {
               <div className="space-y-4">
                 <PreferenceCard icon="👋" title="Mano preferida" value={manoLabel} />
                 <PreferenceCard icon="📍" title="Posición en pista" value={posicionLabel} />
-                <PreferenceCard icon="🏅" title="Tipo de partido" value={tiposLabel} />
+                <PreferenceCard icon="🏅" title="Tipo de partido" value={tiposLabel || "Amistoso"} />
                 <PreferenceCard icon="🌅" title="Horario de juego preferido" value={horarioLabel} />
                 <PreferenceCard icon="📅" title="Día preferido" value={diaLabel} />
               </div>
@@ -463,12 +493,13 @@ export default function PadelPerfilPage() {
                   </select>
                 </label>
 
-                <div className="md:col-span-2 space-y-2">
+                <div className="space-y-2 md:col-span-2">
                   <span className="text-sm font-medium text-slate-700">Tipo de partido</span>
 
                   <div className="flex flex-wrap gap-3">
                     {["amistoso", "competitivo", "mixto"].map((tipo) => {
-                      const active = form.tipo_partido_preferido.includes(tipo);
+                      const tiposActuales = normalizarTiposPartido(form.tipo_partido_preferido);
+                      const active = tiposActuales.includes(tipo);
 
                       return (
                         <button
@@ -489,7 +520,7 @@ export default function PadelPerfilPage() {
                   </div>
                 </div>
 
-                <div className="md:col-span-2 flex flex-wrap gap-3 pt-2">
+                <div className="flex flex-wrap gap-3 pt-2 md:col-span-2">
                   <button
                     type="button"
                     onClick={guardarCambios}
@@ -515,10 +546,9 @@ export default function PadelPerfilPage() {
                           DEFAULT_PROFILE.horario_preferido,
                         dia_preferido:
                           padelProfile?.dia_preferido || DEFAULT_PROFILE.dia_preferido,
-                        tipo_partido_preferido:
-                          padelProfile?.tipo_partido_preferido?.length > 0
-                            ? padelProfile.tipo_partido_preferido
-                            : DEFAULT_PROFILE.tipo_partido_preferido,
+                        tipo_partido_preferido: normalizarTiposPartido(
+                          padelProfile?.tipo_partido_preferido
+                        ),
                       });
                     }}
                     className="rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
