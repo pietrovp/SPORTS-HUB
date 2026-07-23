@@ -333,7 +333,7 @@ export default function PadelClubsPage() {
                     )}
                   </div>
 
-                  <div className="flex flex-wrap gap-3 pt-1">
+                 <div className="flex flex-wrap gap-3 pt-1">
   <Link
     href={`/padel/clubes/${club.slug}`}
     className="rounded-full bg-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-700"
@@ -342,11 +342,11 @@ export default function PadelClubsPage() {
   </Link>
 
   <Link
-  href="/padel/partidos"
-  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
->
-  Ver partidos
-</Link>
+    href="/padel/partidos"
+    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+  >
+    Ver partidos
+  </Link>
 </div>
                 </div>
               </article>
