@@ -105,30 +105,59 @@ function normalizarTiposPartido(value) {
   return unicos.length > 0 ? unicos : ["amistoso"];
 }
 
-function StatBox({ label, value }) {
+function StatCard({ label, value, hint, accent = "from-blue-500 to-cyan-400" }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur-sm">
-      <p className="text-[11px] uppercase tracking-[0.18em] text-white/70">{label}</p>
-      <p className="mt-1 text-3xl font-extrabold text-white">{value}</p>
+    <div className="rounded-3xl border border-white/15 bg-white/10 p-4 backdrop-blur-md">
+      <div className={cx("mb-3 h-1.5 w-14 rounded-full bg-gradient-to-r", accent)} />
+      <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">{label}</p>
+      <p className="mt-2 text-3xl font-black text-white">{value}</p>
+      {hint ? <p className="mt-1 text-xs text-white/70">{hint}</p> : null}
     </div>
   );
 }
 
-function PreferenceCard({ icon, title, value, action }) {
+function InfoCard({ icon, title, value, subtitle }) {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-      <div className="flex items-center gap-4">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-50 text-2xl">
+    <div className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/60">
+      <div className="flex items-start gap-4">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-50 to-cyan-50 text-2xl">
           <span aria-hidden="true">{icon}</span>
         </div>
 
-        <div className="min-w-0 flex-1">
-          <p className="text-sm text-slate-500">{title}</p>
-          <p className="break-words text-xl font-semibold text-slate-900">{value}</p>
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-slate-500">{title}</p>
+          <p className="mt-1 break-words text-lg font-bold text-slate-900">{value}</p>
+          {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
         </div>
+      </div>
+    </div>
+  );
+}
 
+function SectionCard({ title, subtitle, children, action }) {
+  return (
+    <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/60">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-extrabold text-slate-900">{title}</h2>
+          {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
+        </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
+
+      <div className="mt-5">{children}</div>
+    </section>
+  );
+}
+
+function EmptyStateBlock({ icon, title, text }) {
+  return (
+    <div className="rounded-[24px] border border-dashed border-slate-300 bg-slate-50/80 px-6 py-10 text-center">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-2xl shadow-sm">
+        <span aria-hidden="true">{icon}</span>
+      </div>
+      <h3 className="mt-4 text-lg font-bold text-slate-900">{title}</h3>
+      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">{text}</p>
     </div>
   );
 }
@@ -292,14 +321,16 @@ export default function PadelPerfilPage() {
     const victorias = padelProfile?.victorias ?? 0;
     const derrotas = Math.max(partidos - victorias, 0);
     const puntos = padelProfile?.puntos ?? 0;
-    const ratio = partidos > 0 ? (victorias / partidos).toFixed(2) : "0.00";
+    const winRate = partidos > 0 ? Math.round((victorias / partidos) * 100) : 0;
+    const racha = padelProfile?.racha_victorias_max ?? 0;
 
     return {
       partidos,
       victorias,
       derrotas,
       puntos,
-      ratio,
+      winRate,
+      racha,
     };
   }, [padelProfile]);
 
@@ -307,7 +338,6 @@ export default function PadelPerfilPage() {
     setForm((prev) => {
       const actual = normalizarTiposPartido(prev.tipo_partido_preferido);
       const exists = actual.includes(tipo);
-
       const next = exists ? actual.filter((item) => item !== tipo) : [...actual, tipo];
 
       return {
@@ -320,11 +350,12 @@ export default function PadelPerfilPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-6">
-        <div className="mx-auto max-w-6xl animate-pulse space-y-4">
-          <div className="h-8 w-52 rounded-xl bg-slate-200" />
-          <div className="grid gap-6 lg:grid-cols-[380px,1fr]">
-            <div className="h-[260px] rounded-3xl bg-slate-200" />
-            <div className="h-[420px] rounded-3xl bg-slate-200" />
+        <div className="mx-auto max-w-6xl animate-pulse space-y-5">
+          <div className="h-10 w-60 rounded-2xl bg-slate-200" />
+          <div className="h-[260px] rounded-[32px] bg-slate-200" />
+          <div className="grid gap-5 lg:grid-cols-3">
+            <div className="h-[260px] rounded-[32px] bg-slate-200" />
+            <div className="h-[260px] rounded-[32px] bg-slate-200 lg:col-span-2" />
           </div>
         </div>
       </div>
@@ -337,8 +368,10 @@ export default function PadelPerfilPage() {
     user?.email?.split("@")[0] ||
     "Jugador";
 
+  const email = user?.email || "Sin correo";
   const nivelLabel = LABELS.nivel[padelProfile?.nivel] || "Intermedio";
   const manoLabel = LABELS.mano_habil[padelProfile?.mano_habil] || "Derecha";
+  const posicionBaseLabel = LABELS.posicion[padelProfile?.posicion] || "Drive";
   const posicionLabel =
     LABELS.posicion_preferida[padelProfile?.posicion_preferida] || "Lado derecho";
   const horarioLabel =
@@ -351,21 +384,21 @@ export default function PadelPerfilPage() {
     .join(", ");
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-6">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,#dbeafe_0%,#eff6ff_28%,#f8fafc_55%,#f8fafc_100%)] px-4 py-6 md:px-6">
       <div className="mx-auto max-w-6xl space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-700">
+              Sports Hub · Pádel
+            </p>
+            <h1 className="mt-1 text-3xl font-black tracking-tight text-slate-950">
               Mi perfil de pádel
             </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              Revisa tus estadísticas y ajusta tus preferencias de juego.
-            </p>
           </div>
 
           <Link
             href="/perfil"
-            className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-100"
+            className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
             Volver a mi cuenta
           </Link>
@@ -383,66 +416,132 @@ export default function PadelPerfilPage() {
           </div>
         ) : null}
 
-        <div className="grid gap-6 lg:grid-cols-[380px,1fr]">
-          <section className="overflow-hidden rounded-[28px] bg-gradient-to-br from-blue-700 via-indigo-600 to-blue-900 p-5 shadow-xl">
-            <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full border border-white/20 bg-white/10 text-2xl font-bold text-white">
-                🎾
+        <section className="overflow-hidden rounded-[32px] bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-900 p-6 shadow-[0_30px_80px_-35px_rgba(8,47,73,0.75)] md:p-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <div className="inline-flex items-center rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 backdrop-blur">
+                Jugador de pádel
               </div>
 
-              <div>
-                <h2 className="text-3xl font-extrabold text-white">{nombre}</h2>
-                <span className="mt-1 inline-flex rounded-full bg-white px-3 py-1 text-xs font-bold uppercase tracking-wide text-blue-700">
-                  {nivelLabel}
-                </span>
+              <h2 className="mt-4 text-3xl font-black tracking-tight text-white md:text-5xl">
+                {nombre}
+              </h2>
+
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-white/75">
+                <span>{email}</span>
+                <span className="hidden h-1 w-1 rounded-full bg-white/40 md:inline-block" />
+                <span>Nivel {nivelLabel}</span>
               </div>
+
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-white/72 md:text-base">
+                Configura tus preferencias, revisa tu rendimiento y prepara tu perfil
+                para futuros partidos, rankings y progreso dentro del hub.
+              </p>
             </div>
 
-            <div className="mt-6 grid grid-cols-2 gap-3">
-              <StatBox label="Partidos" value={estadisticas.partidos} />
-              <StatBox label="Puntos" value={estadisticas.puntos} />
-              <StatBox
-                label="Récord V/D"
-                value={`${estadisticas.victorias}/${estadisticas.derrotas}`}
-              />
-              <StatBox label="Ratio" value={estadisticas.ratio} />
-            </div>
-          </section>
-
-          <section className="space-y-4 rounded-[28px] bg-white p-5 shadow-sm ring-1 ring-slate-200">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-extrabold text-slate-900">
-                  Preferencias de jugador
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Define cómo prefieres jugar para mejorar futuras reservas y partidos.
-                </p>
-              </div>
-
+            <div className="flex flex-wrap gap-3">
               {!editando ? (
                 <button
                   type="button"
                   onClick={() => setEditando(true)}
-                  className="rounded-full px-4 py-2 text-sm font-semibold text-blue-600 transition hover:bg-blue-50"
+                  className="rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-900 transition hover:bg-cyan-50"
                 >
-                  Editar
+                  Editar perfil
                 </button>
               ) : null}
-            </div>
 
+              <Link
+                href="/padel"
+                className="rounded-full border border-white/15 bg-white/10 px-5 py-3 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15"
+              >
+                Ir a pádel
+              </Link>
+            </div>
+          </div>
+
+          <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Nivel"
+              value={nivelLabel}
+              hint="Tu referencia actual de juego"
+              accent="from-cyan-400 to-blue-400"
+            />
+            <StatCard
+              label="Partidos"
+              value={estadisticas.partidos}
+              hint="Encuentros registrados"
+              accent="from-blue-400 to-indigo-400"
+            />
+            <StatCard
+              label="Victorias"
+              value={estadisticas.victorias}
+              hint={`Derrotas: ${estadisticas.derrotas}`}
+              accent="from-emerald-400 to-cyan-400"
+            />
+            <StatCard
+              label="Win rate"
+              value={`${estadisticas.winRate}%`}
+              hint="Porcentaje de victorias"
+              accent="from-fuchsia-400 to-cyan-400"
+            />
+          </div>
+        </section>
+
+        <div className="grid gap-6 lg:grid-cols-[1.2fr,0.8fr]">
+          <SectionCard
+            title="Preferencias de juego"
+            subtitle="Tu perfil deportivo ayuda a encajar mejor en próximos partidos y reservas."
+            action={
+              !editando ? (
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                  Perfil activo
+                </span>
+              ) : null
+            }
+          >
             {!editando ? (
-              <div className="space-y-4">
-                <PreferenceCard icon="👋" title="Mano preferida" value={manoLabel} />
-                <PreferenceCard icon="📍" title="Posición en pista" value={posicionLabel} />
-                <PreferenceCard icon="🏅" title="Tipo de partido" value={tiposLabel || "Amistoso"} />
-                <PreferenceCard icon="🌅" title="Horario de juego preferido" value={horarioLabel} />
-                <PreferenceCard icon="📅" title="Día preferido" value={diaLabel} />
+              <div className="grid gap-4 md:grid-cols-2">
+                <InfoCard
+                  icon="🏅"
+                  title="Nivel actual"
+                  value={nivelLabel}
+                  subtitle="Se muestra como referencia principal de tu perfil."
+                />
+                <InfoCard
+                  icon="👋"
+                  title="Mano hábil"
+                  value={manoLabel}
+                  subtitle="Importante para emparejar mejor los partidos."
+                />
+                <InfoCard
+                  icon="🎯"
+                  title="Posición en pista"
+                  value={posicionLabel}
+                  subtitle={`Base preferida: ${posicionBaseLabel}`}
+                />
+                <InfoCard
+                  icon="🗓️"
+                  title="Tipo de partido"
+                  value={tiposLabel || "Amistoso"}
+                  subtitle="Tu preferencia actual para jugar."
+                />
+                <InfoCard
+                  icon="🌙"
+                  title="Horario favorito"
+                  value={horarioLabel}
+                  subtitle="Franja horaria ideal para jugar."
+                />
+                <InfoCard
+                  icon="📍"
+                  title="Día preferido"
+                  value={diaLabel}
+                  subtitle="Útil para futuras búsquedas y reservas."
+                />
               </div>
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-700">Nivel</span>
+                  <span className="text-sm font-semibold text-slate-700">Nivel</span>
                   <select
                     value={form.nivel}
                     onChange={(e) => setForm((prev) => ({ ...prev, nivel: e.target.value }))}
@@ -456,7 +555,7 @@ export default function PadelPerfilPage() {
                 </label>
 
                 <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-700">Mano hábil</span>
+                  <span className="text-sm font-semibold text-slate-700">Mano hábil</span>
                   <select
                     value={form.mano_habil}
                     onChange={(e) =>
@@ -471,7 +570,7 @@ export default function PadelPerfilPage() {
                 </label>
 
                 <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-700">Posición base</span>
+                  <span className="text-sm font-semibold text-slate-700">Posición base</span>
                   <select
                     value={form.posicion}
                     onChange={(e) => setForm((prev) => ({ ...prev, posicion: e.target.value }))}
@@ -484,7 +583,7 @@ export default function PadelPerfilPage() {
                 </label>
 
                 <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-700">Posición preferida</span>
+                  <span className="text-sm font-semibold text-slate-700">Posición preferida</span>
                   <select
                     value={form.posicion_preferida}
                     onChange={(e) =>
@@ -502,7 +601,7 @@ export default function PadelPerfilPage() {
                 </label>
 
                 <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-700">Horario preferido</span>
+                  <span className="text-sm font-semibold text-slate-700">Horario preferido</span>
                   <select
                     value={form.horario_preferido}
                     onChange={(e) =>
@@ -521,7 +620,7 @@ export default function PadelPerfilPage() {
                 </label>
 
                 <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-700">Día preferido</span>
+                  <span className="text-sm font-semibold text-slate-700">Día preferido</span>
                   <select
                     value={form.dia_preferido}
                     onChange={(e) =>
@@ -535,8 +634,8 @@ export default function PadelPerfilPage() {
                   </select>
                 </label>
 
-                <div className="space-y-2 md:col-span-2">
-                  <span className="text-sm font-medium text-slate-700">Tipo de partido</span>
+                <div className="space-y-3 md:col-span-2">
+                  <span className="text-sm font-semibold text-slate-700">Tipo de partido</span>
 
                   <div className="flex flex-wrap gap-3">
                     {TIPOS_VALIDOS.map((tipo) => {
@@ -549,9 +648,9 @@ export default function PadelPerfilPage() {
                           type="button"
                           onClick={() => toggleTipoPartido(tipo)}
                           className={cx(
-                            "rounded-full border px-4 py-2 text-sm font-medium transition",
+                            "rounded-full border px-4 py-2 text-sm font-semibold transition",
                             active
-                              ? "border-blue-600 bg-blue-600 text-white"
+                              ? "border-blue-600 bg-blue-600 text-white shadow-sm shadow-blue-200"
                               : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                           )}
                         >
@@ -567,7 +666,7 @@ export default function PadelPerfilPage() {
                     type="button"
                     onClick={guardarCambios}
                     disabled={saving}
-                    className="rounded-full bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-full bg-blue-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {saving ? "Guardando..." : "Guardar cambios"}
                   </button>
@@ -600,7 +699,48 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
             )}
-          </section>
+          </SectionCard>
+
+          <div className="space-y-6">
+            <SectionCard
+              title="Actividad reciente"
+              subtitle="Aquí aparecerán tus próximos encuentros y tus últimos partidos registrados."
+            >
+              <EmptyStateBlock
+                icon="🎾"
+                title="Todavía no hay actividad para mostrar"
+                text="Cuando empecemos a conectar los partidos de pádel al perfil, aquí verás resultados recientes, próximos juegos y rivales frecuentes."
+              />
+            </SectionCard>
+
+            <SectionCard
+              title="Progreso"
+              subtitle="Un espacio pensado para tu evolución dentro del hub."
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-[24px] bg-slate-950 p-5 text-white">
+                  <p className="text-xs uppercase tracking-[0.18em] text-white/55">
+                    Mejor racha
+                  </p>
+                  <p className="mt-3 text-4xl font-black">{estadisticas.racha}</p>
+                  <p className="mt-2 text-sm text-white/70">
+                    Victorias consecutivas registradas hasta ahora.
+                  </p>
+                </div>
+
+                <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    Próximamente
+                  </p>
+                  <p className="mt-3 text-2xl font-black text-slate-900">Ranking y fiabilidad</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    Más adelante aquí podemos mostrar puntos, fiabilidad, evolución de nivel
+                    y comparativas de rendimiento.
+                  </p>
+                </div>
+              </div>
+            </SectionCard>
+          </div>
         </div>
       </div>
     </div>
