@@ -74,6 +74,7 @@ function EmptyState() {
 export default function PadelClubsPage() {
   const [loading, setLoading] = useState(true);
   const [clubs, setClubs] = useState([]);
+  const [matches, setMatches] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
@@ -93,43 +94,51 @@ export default function PadelClubsPage() {
       if (authError) throw authError;
       if (!user) throw new Error("No hay una sesión activa.");
 
-      const { data, error } = await supabase
-        .from("padel_clubs")
-        .select(`
-          id,
-          name,
-          slug,
-          city,
-          address,
-          description,
-          image_url,
-          is_active,
-          created_at,
-          courts:padel_courts (
-            id,
-            name,
-            court_number,
-            surface_type,
-            court_type,
-            has_lighting,
-            is_active
-          ),
-          matches:padel_matches (
-            id,
-            status,
-            match_type,
-            scheduled_at,
-            club_id,
-            court_id,
-            location_name
-          )
-        `)
-        .eq("is_active", true)
-        .order("created_at", { ascending: false });
+      const [{ data: clubsData, error: clubsError }, { data: matchesData, error: matchesError }] =
+        await Promise.all([
+          supabase
+            .from("padel_clubs")
+            .select(`
+              id,
+              name,
+              slug,
+              city,
+              address,
+              description,
+              image_url,
+              is_active,
+              created_at,
+              courts:padel_courts (
+                id,
+                name,
+                court_number,
+                surface_type,
+                court_type,
+                has_lighting,
+                is_active
+              )
+            `)
+            .eq("is_active", true)
+            .order("created_at", { ascending: false }),
 
-      if (error) throw error;
+          supabase
+            .from("padel_matches")
+            .select(`
+              id,
+              status,
+              match_type,
+              scheduled_at,
+              club_id,
+              court_id,
+              location_name
+            `),
+        ]);
 
-      setClubs(data || []);
+      if (clubsError) throw clubsError;
+      if (matchesError) throw matchesError;
+
+      setClubs(clubsData || []);
+      setMatches(matchesData || []);
     } catch (error) {
       console.error(error);
       setErrorMsg(error.message || "No se pudieron cargar los clubes.");
@@ -144,7 +153,9 @@ export default function PadelClubsPage() {
     return (clubs || []).map((club) => {
       const activeCourts = (club.courts || []).filter((court) => court.is_active);
 
-      const scheduledMatches = (club.matches || []).filter((match) => {
+      const clubMatches = (matches || []).filter((match) => match.club_id === club.id);
+
+      const scheduledMatches = clubMatches.filter((match) => {
         if (match.status !== "programado") return false;
         if (!match.scheduled_at) return false;
         return new Date(match.scheduled_at) >= now;
@@ -162,12 +173,13 @@ export default function PadelClubsPage() {
         ...club,
         activeCourts,
         activeCourtsCount: activeCourts.length,
+        allMatchesCount: clubMatches.length,
         scheduledMatchesCount: scheduledMatches.length,
         indoorCourtsCount: indoorCourts,
         nextMatch,
       };
     });
-  }, [clubs]);
+  }, [clubs, matches]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,#dbeafe_0%,#eff6ff_28%,#f8fafc_56%,#f8fafc_100%)] px-4 py-6 md:px-6">
@@ -333,21 +345,21 @@ export default function PadelClubsPage() {
                     )}
                   </div>
 
-                 <div className="flex flex-wrap gap-3 pt-1">
-  <Link
-    href={`/padel/clubes/${club.slug}`}
-    className="rounded-full bg-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-700"
-  >
-    Ver club
-  </Link>
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    <Link
+                      href={`/padel/clubes/${club.slug}`}
+                      className="rounded-full bg-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-700"
+                    >
+                      Ver club
+                    </Link>
 
-<Link
-  href="/padel/partidos"
-  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
->
-  Ver partidos
-</Link>
-</div>
+                    <Link
+                      href="/padel/partidos"
+                      className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Ver partidos
+                    </Link>
+                  </div>
                 </div>
               </article>
             ))}
