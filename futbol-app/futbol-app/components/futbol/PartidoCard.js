@@ -42,6 +42,12 @@ export default function PartidoCard({ partido }) {
 
   const nombreCancha = partido.cancha_lugar || partido.cancha || partido.titulo || "Cancha";
 
+  const urlBaseStorage = "https://exrrcqwfiapfdcwjxzbf.supabase.co/storage/v1/object/public/canchas/";
+  const rawImagen = partido.imagenUrl || partido.imagen_url;
+  const imagenFinal = rawImagen?.startsWith("http") 
+    ? rawImagen 
+    : rawImagen ? `${urlBaseStorage}${rawImagen}` : null;
+
   useEffect(() => {
     let mounted = true;
 
@@ -51,12 +57,9 @@ export default function PartidoCard({ partido }) {
         return;
       }
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
 
       if (!mounted) return;
-
       if (!user) {
         setInscrito(false);
         setVerificando(false);
@@ -90,9 +93,7 @@ export default function PartidoCard({ partido }) {
     setCargando(true);
     setMensaje("");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
       setMensaje("Primero inicia sesión para unirte.");
@@ -100,17 +101,19 @@ export default function PartidoCard({ partido }) {
       return;
     }
 
-    // ✅ CORREGIDO: futbol_profiles con columna usuario_id
-    const { data: perfil } = await supabase
-      .from("futbol_profiles")
+    const { data: perfil, error: perfilError } = await supabase
+      .from("profiles")
       .select("creditos")
-      .eq("usuario_id", user.id)
+      .eq("id", user.id)
       .single();
 
-    const creditos = perfil?.creditos ?? 0;
+    if (perfilError) console.error("Error al obtener créditos:", perfilError);
 
-    if (creditos < 1) {
-      setMensaje("No tienes créditos suficientes. Recarga antes de unirte.");
+    const creditos = perfil?.creditos ?? 0;
+    const costoInscripcion = partido.precio_creditos ?? 1;
+
+    if (creditos < costoInscripcion) {
+      setMensaje(`No tienes créditos suficientes. Necesitas ${costoInscripcion}.`);
       setCargando(false);
       return;
     }
@@ -130,13 +133,12 @@ export default function PartidoCard({ partido }) {
       return;
     }
 
-    const nuevoBalance = creditos - 1;
+    const nuevoBalance = creditos - costoInscripcion;
 
-    // ✅ CORREGIDO: futbol_profiles con columna usuario_id
     const { error: updateError } = await supabase
-      .from("futbol_profiles")
+      .from("profiles")
       .update({ creditos: nuevoBalance })
-      .eq("usuario_id", user.id);
+      .eq("id", user.id);
 
     if (updateError) {
       setMensaje("No se pudo descontar el crédito.");
@@ -151,11 +153,10 @@ export default function PartidoCard({ partido }) {
       .single();
 
     if (inscripcionError) {
-      // ✅ CORREGIDO: revert también usa futbol_profiles
       await supabase
-        .from("futbol_profiles")
+        .from("profiles")
         .update({ creditos })
-        .eq("usuario_id", user.id);
+        .eq("id", user.id);
       setMensaje("No se pudo unir al partido.");
       setCargando(false);
       return;
@@ -164,14 +165,14 @@ export default function PartidoCard({ partido }) {
     await supabase.from("credit_ledger").insert({
       user_id: user.id,
       partido_id: partido.id,
-      delta: -1,
+      delta: -costoInscripcion,
       reason: "match_join",
       balance_after: nuevoBalance,
     });
 
     setInscrito(true);
     setInscripcionId(nuevaInscripcion?.id ?? null);
-    setMensaje("¡Te uniste al partido! Se descontó 1 crédito.");
+    setMensaje(`¡Te uniste! Se descontaron ${costoInscripcion} créditos.`);
     setCargando(false);
     router.refresh();
   }
@@ -182,9 +183,7 @@ export default function PartidoCard({ partido }) {
     setCancelando(true);
     setMensaje("");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
       setCancelando(false);
@@ -202,26 +201,25 @@ export default function PartidoCard({ partido }) {
       return;
     }
 
-    // ✅ CORREGIDO: futbol_profiles con columna usuario_id
     const { data: perfil } = await supabase
-      .from("futbol_profiles")
+      .from("profiles")
       .select("creditos")
-      .eq("usuario_id", user.id)
+      .eq("id", user.id)
       .single();
 
     const creditos = perfil?.creditos ?? 0;
-    const nuevoBalance = creditos + 1;
+    const costoInscripcion = partido.precio_creditos ?? 1;
+    const nuevoBalance = creditos + costoInscripcion;
 
-    // ✅ CORREGIDO: futbol_profiles con columna usuario_id
     await supabase
-      .from("futbol_profiles")
+      .from("profiles")
       .update({ creditos: nuevoBalance })
-      .eq("usuario_id", user.id);
+      .eq("id", user.id);
 
     await supabase.from("credit_ledger").insert({
       user_id: user.id,
       partido_id: partido.id,
-      delta: 1,
+      delta: costoInscripcion,
       reason: "match_cancel",
       balance_after: nuevoBalance,
     });
@@ -230,62 +228,70 @@ export default function PartidoCard({ partido }) {
     setInscripcionId(null);
     setConfirmandoCancelacion(false);
     setCancelando(false);
-    setMensaje("Cancelaste tu inscripción. Se reembolsó 1 crédito.");
+    setMensaje(`Cancelado. Se reembolsaron ${costoInscripcion} créditos.`);
     router.refresh();
   }
 
   return (
-    <div className="group bg-white rounded-2xl border border-gray-200 overflow-hidden hover:border-gray-300 transition-all shadow-sm flex flex-col">
-      <div className="relative h-40 w-full overflow-hidden">
-        {partido.imagenUrl || partido.imagen_url ? (
+    <div className="group bg-white rounded-3xl border border-gray-100 overflow-hidden hover:border-gray-200 transition-all shadow-sm hover:shadow-md flex flex-col">
+      <div className="relative h-44 w-full overflow-hidden bg-gray-900">
+        
+        {/* --- 1. CAPA BASE: LA FOTO (z-0) --- */}
+        {imagenFinal ? (
           <img
-            src={partido.imagenUrl || partido.imagen_url}
+            src={imagenFinal}
             alt={nombreCancha}
-            className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+            className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 z-0 opacity-90"
           />
         ) : (
-          <div className="absolute inset-0 bg-gradient-to-br from-emerald-800 to-teal-900" />
+          <div className="absolute inset-0 bg-gradient-to-br from-emerald-800 to-teal-900 z-0" />
         )}
 
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-black/10" />
+        {/* --- 2. CAPA MEDIA: DEGRADADO INTENSO (z-10) --- */}
+        <div className="absolute inset-0 z-10 bg-gradient-to-t from-black/90 via-black/40 to-black/10" />
 
-        <div className="absolute top-4 right-4">
-          <span className="inline-flex items-center bg-amber-100 border border-amber-300 text-amber-800 text-xs font-bold px-3 py-1.5 rounded-full shadow-md">
-            {partido.precio_creditos ?? 1} crédito
+        {/* --- 3. CAPA SUPERIOR: TEXTOS Y ELEMENTOS (z-20) --- */}
+        <div className="absolute top-4 right-4 z-20">
+          <span className="inline-flex items-center bg-white/95 text-emerald-800 text-[11px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-md">
+            {partido.precio_creditos ?? 1} créditos
           </span>
         </div>
 
-        <div className="absolute bottom-0 left-0 right-0 p-5">
-          <h3 className="font-black text-white text-2xl leading-tight tracking-tight drop-shadow-lg">
+        <div className="absolute bottom-0 left-0 right-0 p-5 z-20">
+          <h3 className="font-black text-white text-2xl leading-tight tracking-tight drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
             {nombreCancha}
           </h3>
-          <p className="text-gray-200 text-xs mt-1 font-semibold drop-shadow-md">{partido.zona}</p>
+          <div className="flex items-center gap-1.5 mt-1 opacity-90">
+            <svg className="w-3.5 h-3.5 text-[#00FF9D]" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" /></svg>
+            <p className="text-white text-xs font-medium drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{partido.zona}</p>
+          </div>
         </div>
       </div>
 
       <div className="px-5 py-5 flex flex-col gap-5 flex-grow">
-        <div className="flex items-center gap-6 text-sm text-gray-500 font-medium">
+        <div className="flex items-center justify-between text-sm text-gray-600 font-medium bg-gray-50 px-4 py-2.5 rounded-xl border border-gray-100">
           <span className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+            <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
             {formatFecha(partido.fecha)}
           </span>
+          <span className="w-1 h-1 rounded-full bg-gray-300"></span>
           <span className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
             {formatHora(partido.hora)}
           </span>
         </div>
 
         <div>
-          <div className="flex justify-between text-xs text-gray-500 mb-2 font-medium">
-            <span className={lleno ? "text-red-500 font-bold" : ""}>
-              {lleno ? "Cupos agotados" : `${cuposLibres} cupos disponibles`}
+          <div className="flex justify-between items-end mb-2">
+            <span className={`text-xs font-black uppercase tracking-wider ${lleno ? "text-red-500" : "text-gray-500"}`}>
+              {lleno ? "Agotados" : `${cuposLibres} libres`}
             </span>
-            <span className="text-gray-800 font-bold">{cuposOcupados} <span className="text-gray-400 font-normal">/ {cuposTotales}</span></span>
+            <span className="text-gray-900 font-black text-sm">{cuposOcupados} <span className="text-gray-400 font-bold">/ {cuposTotales}</span></span>
           </div>
-          <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+          <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
-                lleno ? "bg-red-500" : ocupacion > 75 ? "bg-yellow-500" : "bg-emerald-500"
+                lleno ? "bg-red-500" : ocupacion > 75 ? "bg-yellow-400" : "bg-emerald-500"
               }`}
               style={{ width: `${Math.min(ocupacion, 100)}%` }}
             />
@@ -323,21 +329,21 @@ export default function PartidoCard({ partido }) {
           </div>
 
           {inscrito && (
-            <div className="flex justify-center">
+            <div className="flex justify-center mt-1">
               {confirmandoCancelacion ? (
-                <div className="flex items-center gap-3 text-xs">
-                  <span className="text-gray-500">¿Cancelar tu inscripción?</span>
+                <div className="flex items-center justify-center gap-3 w-full bg-red-50 p-2 rounded-xl border border-red-100">
+                  <span className="text-xs font-semibold text-red-800">¿Seguro?</span>
                   <button
                     onClick={cancelarInscripcion}
                     disabled={cancelando}
-                    className="font-bold text-red-600 hover:text-red-700 disabled:opacity-50"
+                    className="text-xs font-black text-white bg-red-500 hover:bg-red-600 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
                   >
-                    {cancelando ? "Cancelando..." : "Sí, cancelar"}
+                    {cancelando ? "..." : "Sí"}
                   </button>
                   <button
                     onClick={() => setConfirmandoCancelacion(false)}
                     disabled={cancelando}
-                    className="font-bold text-gray-500 hover:text-gray-700"
+                    className="text-xs font-bold text-gray-500 hover:text-gray-700 bg-white px-3 py-1.5 rounded-lg border border-gray-200 transition-colors"
                   >
                     No
                   </button>
@@ -345,7 +351,7 @@ export default function PartidoCard({ partido }) {
               ) : (
                 <button
                   onClick={() => setConfirmandoCancelacion(true)}
-                  className="text-xs text-gray-400 hover:text-red-600 font-medium underline underline-offset-2 transition-colors"
+                  className="text-[11px] font-bold text-gray-400 hover:text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg uppercase tracking-wider transition-all"
                 >
                   Cancelar inscripción
                 </button>
@@ -356,8 +362,8 @@ export default function PartidoCard({ partido }) {
 
         {mensaje && (
           <div
-            className={`text-xs text-center rounded-xl py-2.5 px-3 font-medium border ${
-              mensaje.includes("uniste") || mensaje.includes("Cancelaste")
+            className={`text-xs text-center rounded-xl py-2.5 px-3 font-bold border ${
+              mensaje.includes("uniste") || mensaje.includes("Cancelado")
                 ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                 : "bg-red-50 text-red-700 border-red-200"
             }`}

@@ -11,8 +11,8 @@ const NAV_POR_DEPORTE = {
     nombre: "Fútbol",
     items: [
       { href: "/futbol", label: "Partidos" },
+      { href: "/futbol/reservar", label: "Reservar" },
       { href: "/futbol/jugadores", label: "Jugadores" },
-      // ¡Eliminamos el "Créditos" redundante de aquí!
       { href: "/futbol/perfil", label: "Mi carta" },
     ],
   },
@@ -41,9 +41,14 @@ export default function Navbar() {
   const [usuario, setUsuario] = useState(null);
   const [cuenta, setCuenta] = useState(null);
   const [esAdmin, setEsAdmin] = useState(false);
+  const [esGerente, setEsGerente] = useState(false);
+  const [esDuenoCancha, setEsDuenoCancha] = useState(false);
   const [creditos, setCreditos] = useState(0);
+  
   const [menuOpen, setMenuOpen] = useState(false);
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
+  const [duenoMenuOpen, setDuenoMenuOpen] = useState(false);
+  
   const [confirmandoSalir, setConfirmandoSalir] = useState(false);
   const [cerrandoSesion, setCerrandoSesion] = useState(false);
 
@@ -56,13 +61,15 @@ export default function Navbar() {
         if (!activo) return;
         setCuenta(null);
         setEsAdmin(false);
+        setEsGerente(false);
+        setEsDuenoCancha(false);
         setCreditos(0);
         return;
       }
 
       const { data: cuentaData } = await supabase
         .from("profiles")
-        .select("nombre, avatar_url, email, is_admin, creditos")
+        .select("nombre, avatar_url, email, is_admin, is_gerente, creditos")
         .eq("id", userId)
         .maybeSingle();
 
@@ -70,13 +77,26 @@ export default function Navbar() {
       
       setCuenta(cuentaData || null);
       setEsAdmin(!!cuentaData?.is_admin);
+      setEsGerente(!!cuentaData?.is_gerente);
       setCreditos(cuentaData?.creditos ?? 0);
+
+      if (cuentaData?.is_gerente) {
+        const { data: sedeData } = await supabase
+          .from("sedes")
+          .select("id")
+          .eq("owner_id", userId)
+          .limit(1);
+          
+        if (activo && sedeData && sedeData.length > 0) {
+          setEsDuenoCancha(true);
+        } else {
+          setEsDuenoCancha(false);
+        }
+      }
     }
 
     async function iniciar() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       if (!activo) return;
       setUsuario(user ?? null);
       await cargarCuenta(user?.id ?? null);
@@ -84,9 +104,7 @@ export default function Navbar() {
 
     iniciar();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const user = session?.user ?? null;
       if (!activo) return;
       setUsuario(user);
@@ -102,6 +120,7 @@ export default function Navbar() {
   useEffect(() => {
     setMenuOpen(false);
     setAdminMenuOpen(false);
+    setDuenoMenuOpen(false);
   }, [pathname]);
 
   async function salir() {
@@ -112,6 +131,8 @@ export default function Navbar() {
       setUsuario(null);
       setCuenta(null);
       setEsAdmin(false);
+      setEsGerente(false);
+      setEsDuenoCancha(false);
       setCreditos(0);
       setConfirmandoSalir(false);
       setMenuOpen(false);
@@ -129,10 +150,11 @@ export default function Navbar() {
   return (
     <>
       <nav className="w-full bg-white/90 border-b border-gray-200 sticky top-0 z-50 backdrop-blur-md transition-all shadow-sm">
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+        {/* Cambiamos max-w-6xl por max-w-7xl para más espacio horizontal */}
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           
-          <div className="flex items-center gap-2 md:gap-4">
-            <Link href="/" className="flex items-center gap-1.5 group" onClick={() => setMenuOpen(false)}>
+          <div className="flex items-center gap-2 md:gap-4 shrink-0">
+            <Link href="/" className="flex items-center gap-1.5 group whitespace-nowrap" onClick={() => setMenuOpen(false)}>
               <span className="text-xl md:text-2xl">🏟️</span>
               <span className="text-gray-900 font-black tracking-tight text-base md:text-lg flex items-center gap-1">
                 SPORTS <span className="text-gray-500 font-medium hidden sm:inline">HUB</span>
@@ -140,7 +162,7 @@ export default function Navbar() {
             </Link>
 
             <div className="relative group hidden lg:block">
-              <button className="flex items-center gap-1 text-sm font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 hover:text-gray-900 px-3 py-1.5 rounded-full transition-colors border border-gray-200">
+              <button className="flex items-center gap-1 text-sm font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 hover:text-gray-900 px-3 py-1.5 rounded-full transition-colors border border-gray-200 whitespace-nowrap">
                 {config ? (
                   <>
                     <span>{config.icono}</span>
@@ -149,7 +171,7 @@ export default function Navbar() {
                 ) : (
                   <span>Elige</span>
                 )}
-                <svg className="w-3.5 h-3.5 text-gray-500 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-3.5 h-3.5 text-gray-500 ml-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
@@ -166,14 +188,15 @@ export default function Navbar() {
           </div>
 
           {mainNav.length > 0 && (
-            <div className="hidden md:flex items-center p-1 bg-gray-100/80 rounded-full border border-gray-200/80">
+            <div className="hidden md:flex items-center p-1 bg-gray-100/80 rounded-full border border-gray-200/80 shrink-0">
               {mainNav.map(({ href, label }) => {
                 const isActive = pathname === href;
                 return (
                   <Link
                     key={href}
                     href={href}
-                    className={`px-4 lg:px-5 py-1.5 lg:py-2 rounded-full text-xs lg:text-sm font-semibold transition-all duration-300 ${
+                    // Agregado whitespace-nowrap y reducidos los px ligeramente
+                    className={`whitespace-nowrap px-3 lg:px-4 py-1.5 lg:py-2 rounded-full text-xs lg:text-sm font-semibold transition-all duration-300 ${
                       isActive
                         ? "bg-white text-gray-900 shadow-sm border border-gray-200/50"
                         : "text-gray-500 hover:text-gray-900 hover:bg-gray-200/50"
@@ -186,17 +209,56 @@ export default function Navbar() {
             </div>
           )}
 
-          <div className="hidden md:flex items-center gap-1.5 lg:gap-3">
+          {/* Reducido el gap a gap-1.5 lg:gap-2 para compactar */}
+          <div className="hidden md:flex items-center gap-1.5 lg:gap-2 shrink-0">
             
+            {usuario && seccion === "futbol" && esGerente && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (esDuenoCancha) {
+                      setDuenoMenuOpen(!duenoMenuOpen);
+                      setAdminMenuOpen(false);
+                    } else {
+                      router.push("/futbol/admin-canchas");
+                    }
+                  }}
+                  // Agregado whitespace-nowrap
+                  className={`whitespace-nowrap px-3 lg:px-4 py-1.5 rounded-full border text-xs font-bold flex items-center gap-1 transition-colors ${
+                    esDuenoCancha 
+                    ? "bg-[#0B0C15] border-gray-900 text-[#00FF9D] hover:bg-gray-800"
+                    : "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+                  }`}
+                >
+                  {esDuenoCancha ? "Mi Cancha" : "+ Registrar Cancha"}
+                  {esDuenoCancha && (
+                    <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M6 9l6 6 6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </button>
+
+                {duenoMenuOpen && esDuenoCancha && (
+                  <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-lg text-xs z-50 overflow-hidden">
+                    <Link href="/futbol/admin-canchas" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700" onClick={() => setDuenoMenuOpen(false)}>
+                      Gestión de Horarios
+                    </Link>
+                  </div>
+                )}
+              </div>
+            )}
+
             {seccion === "futbol" && esAdmin && (
               <div className="relative">
                 <button
                   type="button"
-                  onClick={() => setAdminMenuOpen((prev) => !prev)}
-                  className="px-3 lg:px-4 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold hover:bg-emerald-100 flex items-center gap-1 transition-colors"
+                  onClick={() => {setAdminMenuOpen(!adminMenuOpen); setDuenoMenuOpen(false);}}
+                  // Agregado whitespace-nowrap
+                  className="whitespace-nowrap px-3 lg:px-4 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold hover:bg-emerald-100 flex items-center gap-1 transition-colors"
                 >
                   Admin
-                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                     <path d="M6 9l6 6 6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </button>
@@ -221,7 +283,7 @@ export default function Navbar() {
                 {seccion === "futbol" && (
                   <Link
                     href="/futbol/creditos"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-yellow-50 border border-yellow-200 text-yellow-700 text-xs font-bold hover:bg-yellow-100 transition-colors whitespace-nowrap"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-yellow-50 border border-yellow-200 text-yellow-700 text-xs font-bold hover:bg-yellow-100 transition-colors whitespace-nowrap shrink-0"
                   >
                     <span>{creditos} crd.</span>
                   </Link>
@@ -229,26 +291,26 @@ export default function Navbar() {
 
                 <Link
                   href="/perfil"
-                  className={`flex items-center gap-2 text-xs font-bold pl-1.5 pr-3 py-1.5 rounded-full transition-all border whitespace-nowrap ${
+                  className={`flex items-center gap-2 text-xs font-bold pl-1.5 pr-3 py-1.5 rounded-full transition-all border whitespace-nowrap shrink-0 ${
                     pathname === "/perfil"
                       ? "bg-gray-100 border-gray-300 text-gray-900"
                       : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300 hover:text-gray-900"
                   }`}
                 >
-                  <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white font-black text-[10px] shadow-sm overflow-hidden">
+                  <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white font-black text-[10px] shadow-sm overflow-hidden shrink-0">
                     {avatarUrl ? (
                       <img src={avatarUrl} alt="Foto de perfil" className="w-full h-full object-cover" />
                     ) : (
                       <span>{inicialAvatar}</span>
                     )}
                   </div>
-                  <span className="hidden lg:inline">Mi cuenta</span>
+                  <span className="hidden xl:inline">Mi cuenta</span>
                 </Link>
 
                 <button
                   onClick={() => setConfirmandoSalir(true)}
                   title="Cerrar sesión"
-                  className="text-gray-400 hover:text-red-600 transition-colors p-1.5 rounded-full hover:bg-red-50 text-xs font-medium"
+                  className="text-gray-400 hover:text-red-600 transition-colors p-1.5 rounded-full hover:bg-red-50 text-xs font-medium whitespace-nowrap shrink-0"
                 >
                   Salir
                 </button>
@@ -256,7 +318,7 @@ export default function Navbar() {
             ) : (
               <Link
                 href="/login"
-                className="px-4 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm"
+                className="whitespace-nowrap px-4 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm"
               >
                 Ingresar
               </Link>
@@ -264,7 +326,7 @@ export default function Navbar() {
           </div>
 
           <button
-            className="md:hidden p-2 text-gray-500 hover:text-gray-900 focus:outline-none"
+            className="md:hidden p-2 text-gray-500 hover:text-gray-900 focus:outline-none shrink-0"
             onClick={() => setMenuOpen(!menuOpen)}
           >
             {menuOpen ? (
@@ -275,6 +337,7 @@ export default function Navbar() {
           </button>
         </div>
 
+        {/* --- MENÚ MÓVIL (Sin cambios) --- */}
         {menuOpen && (
           <div className="md:hidden border-t border-gray-200 bg-white px-4 py-4 flex flex-col gap-1.5 shadow-lg absolute w-full left-0 z-50">
             <div className="grid grid-cols-2 gap-2 mb-4 pb-4 border-b border-gray-100">
@@ -287,9 +350,7 @@ export default function Navbar() {
                 <span className="text-xs font-bold text-gray-700">Pádel</span>
               </Link>
             </div>
-            <Link href="/" className="px-4 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50" onClick={() => setMenuOpen(false)}>
-              🏟️ Inicio de Hub
-            </Link>
+            
             {mainNav.map(({ href, label }) => {
               const isActive = pathname === href;
               return (
@@ -298,27 +359,39 @@ export default function Navbar() {
                 </Link>
               );
             })}
+
+            {usuario && seccion === "futbol" && esGerente && (
+              <div className="flex flex-col gap-2 pt-3 mt-2 border-t border-gray-100">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider px-2">Dueños de Canchas</span>
+                <Link 
+                  href="/futbol/admin-canchas" 
+                  className={`px-4 py-3 rounded-xl border text-sm font-bold text-center ${esDuenoCancha ? "bg-[#0B0C15] text-[#00FF9D] border-gray-900" : "bg-indigo-50 text-indigo-700 border-indigo-200"}`}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  {esDuenoCancha ? "Gestión de Horarios" : "+ Registrar Cancha"}
+                </Link>
+              </div>
+            )}
+
             {seccion === "futbol" && esAdmin && (
               <div className="flex flex-col gap-2 pt-3 mt-2 border-t border-gray-100">
-                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider px-2">Panel Admin</span>
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider px-2">Panel Super Admin</span>
                 <Link href="/futbol/admin" className="px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold text-center" onClick={() => setMenuOpen(false)}>Crear partido</Link>
                 <Link href="/futbol/admin/pagos" className="px-4 py-3 rounded-xl bg-sky-50 border border-sky-200 text-sky-700 text-sm font-bold text-center" onClick={() => setMenuOpen(false)}>Pagos</Link>
                 <Link href="/futbol/admin/Logros" className="px-4 py-3 rounded-xl bg-violet-50 border border-violet-200 text-violet-700 text-sm font-bold text-center" onClick={() => setMenuOpen(false)}>Crear logros</Link>
               </div>
             )}
+
             <div className="flex flex-col gap-2 pt-3 mt-2 border-t border-gray-100">
               {usuario ? (
                 <>
                   {seccion === "futbol" && (
                     <Link href="/futbol/creditos" className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-700 text-sm font-bold" onClick={() => setMenuOpen(false)}>{creditos} créditos</Link>
                   )}
-                  <Link href="/perfil" className="flex items-center gap-2 px-4 py-3 rounded-xl bg-gray-50 border border-gray-200 text-gray-800 text-sm font-bold" onClick={() => setMenuOpen(false)}>
-                    <div className="w-7 h-7 rounded-full bg-green-500 flex items-center justify-center text-white font-black text-xs overflow-hidden">
-                      {avatarUrl ? <img src={avatarUrl} alt="Foto" className="w-full h-full object-cover" /> : <span>{inicialAvatar}</span>}
-                    </div>
+                  <Link href="/perfil" className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gray-50 border border-gray-200 text-gray-800 text-sm font-bold" onClick={() => setMenuOpen(false)}>
                     Mi cuenta
                   </Link>
-                  <button onClick={() => { setConfirmandoSalir(true); setMenuOpen(false); }} className="px-4 py-3 rounded-xl text-sm font-bold text-red-600 hover:bg-red-50 text-left">Cerrar sesión</button>
+                  <button onClick={() => { setConfirmandoSalir(true); setMenuOpen(false); }} className="px-4 py-3 rounded-xl text-sm font-bold text-red-600 hover:bg-red-50 text-center">Cerrar sesión</button>
                 </>
               ) : (
                 <Link href="/login" className="px-4 py-3 bg-blue-600 text-white rounded-xl text-sm font-bold text-center hover:bg-blue-700" onClick={() => setMenuOpen(false)}>Ingresar</Link>
