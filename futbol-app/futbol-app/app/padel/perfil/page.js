@@ -54,26 +54,60 @@ const LABELS = {
   },
 };
 
+const TIPOS_VALIDOS = ["amistoso", "competitivo", "mixto"];
+
 function cx(...classes) {
   return classes.filter(Boolean).join(" ");
 }
 
-function normalizarTiposPartido(value) {
-  if (Array.isArray(value)) return value;
+function parseMaybeJson(value) {
+  if (typeof value !== "string") return value;
 
-  if (typeof value === "string" && value.trim()) {
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function extraerTipos(value) {
+  if (value == null) return [];
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => extraerTipos(item));
+  }
+
+  if (typeof value === "string") {
+    const parsed = parseMaybeJson(value);
+
+    if (parsed !== value) {
+      return extraerTipos(parsed);
+    }
+
     return value
       .split(",")
-      .map((item) => item.trim())
+      .map((item) => item.trim().replace(/^"+|"+$/g, ""))
       .filter(Boolean);
   }
 
-  return ["amistoso"];
+  return [];
+}
+
+function normalizarTiposPartido(value) {
+  const tipos = extraerTipos(value)
+    .map((item) => String(item).trim().toLowerCase())
+    .filter((item) => TIPOS_VALIDOS.includes(item));
+
+  const unicos = [...new Set(tipos)];
+  return unicos.length > 0 ? unicos : ["amistoso"];
 }
 
 function StatBox({ label, value }) {
   return (
-    <div className="rounded-2xl bg-white/10 p-4 backdrop-blur-sm border border-white/10">
+    <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur-sm">
       <p className="text-[11px] uppercase tracking-[0.18em] text-white/70">{label}</p>
       <p className="mt-1 text-3xl font-extrabold text-white">{value}</p>
     </div>
@@ -90,7 +124,7 @@ function PreferenceCard({ icon, title, value, action }) {
 
         <div className="min-w-0 flex-1">
           <p className="text-sm text-slate-500">{title}</p>
-          <p className="text-xl font-semibold text-slate-900 break-words">{value}</p>
+          <p className="break-words text-xl font-semibold text-slate-900">{value}</p>
         </div>
 
         {action ? <div className="shrink-0">{action}</div> : null}
@@ -171,7 +205,7 @@ export default function PadelPerfilPage() {
         setMensaje("Perfil de pádel creado correctamente.");
       }
 
-      const tiposNormalizados = normalizarTiposPartido(finalPadel.tipo_partido_preferido);
+      const tiposNormalizados = normalizarTiposPartido(finalPadel?.tipo_partido_preferido);
 
       finalPadel = {
         ...finalPadel,
@@ -204,6 +238,8 @@ export default function PadelPerfilPage() {
       setErrorMsg("");
       setMensaje("");
 
+      const tiposNormalizados = normalizarTiposPartido(form.tipo_partido_preferido);
+
       const payload = {
         nivel: form.nivel,
         posicion: form.posicion,
@@ -211,7 +247,7 @@ export default function PadelPerfilPage() {
         mano_habil: form.mano_habil,
         horario_preferido: form.horario_preferido,
         dia_preferido: form.dia_preferido,
-        tipo_partido_preferido: normalizarTiposPartido(form.tipo_partido_preferido),
+        tipo_partido_preferido: tiposNormalizados,
       };
 
       const { data, error } = await supabase
@@ -229,10 +265,18 @@ export default function PadelPerfilPage() {
       };
 
       setPadelProfile(perfilNormalizado);
-      setForm((prev) => ({
-        ...prev,
+      setForm({
+        nivel: perfilNormalizado.nivel || DEFAULT_PROFILE.nivel,
+        posicion: perfilNormalizado.posicion || DEFAULT_PROFILE.posicion,
+        posicion_preferida:
+          perfilNormalizado.posicion_preferida || DEFAULT_PROFILE.posicion_preferida,
+        mano_habil: perfilNormalizado.mano_habil || DEFAULT_PROFILE.mano_habil,
+        horario_preferido:
+          perfilNormalizado.horario_preferido || DEFAULT_PROFILE.horario_preferido,
+        dia_preferido: perfilNormalizado.dia_preferido || DEFAULT_PROFILE.dia_preferido,
         tipo_partido_preferido: perfilNormalizado.tipo_partido_preferido,
-      }));
+      });
+
       setEditando(false);
       setMensaje("Preferencias actualizadas correctamente.");
     } catch (error) {
@@ -264,9 +308,7 @@ export default function PadelPerfilPage() {
       const actual = normalizarTiposPartido(prev.tipo_partido_preferido);
       const exists = actual.includes(tipo);
 
-      const next = exists
-        ? actual.filter((item) => item !== tipo)
-        : [...actual, tipo];
+      const next = exists ? actual.filter((item) => item !== tipo) : [...actual, tipo];
 
       return {
         ...prev,
@@ -497,7 +539,7 @@ export default function PadelPerfilPage() {
                   <span className="text-sm font-medium text-slate-700">Tipo de partido</span>
 
                   <div className="flex flex-wrap gap-3">
-                    {["amistoso", "competitivo", "mixto"].map((tipo) => {
+                    {TIPOS_VALIDOS.map((tipo) => {
                       const tiposActuales = normalizarTiposPartido(form.tipo_partido_preferido);
                       const active = tiposActuales.includes(tipo);
 
