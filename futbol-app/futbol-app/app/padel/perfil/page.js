@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../../lib/supabaseClient";
+import PadelRecentActivity from "./PadelRecentActivity";
 
 const DEFAULT_PROFILE = {
   nivel: "intermedio",
@@ -147,18 +148,6 @@ function SectionCard({ title, subtitle, children, action }) {
 
       <div className="mt-5">{children}</div>
     </section>
-  );
-}
-
-function EmptyStateBlock({ icon, title, text }) {
-  return (
-    <div className="rounded-[24px] border border-dashed border-slate-300 bg-slate-50/80 px-6 py-10 text-center">
-      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-2xl shadow-sm">
-        <span aria-hidden="true">{icon}</span>
-      </div>
-      <h3 className="mt-4 text-lg font-bold text-slate-900">{title}</h3>
-      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">{text}</p>
-    </div>
   );
 }
 
@@ -699,16 +688,7 @@ export default function PadelPerfilPage() {
           </SectionCard>
 
           <div className="space-y-6">
-            <SectionCard
-              title="Actividad reciente"
-              subtitle="Aquí aparecerán tus próximos encuentros y tus últimos partidos registrados."
-            >
-              <EmptyStateBlock
-                icon="🎾"
-                title="Todavía no hay actividad para mostrar"
-                text="Cuando empecemos a conectar los partidos de pádel al perfil, aquí verás resultados recientes, próximos juegos y rivales frecuentes."
-              />
-            </SectionCard>
+            <PadelRecentActivity />
 
             <SectionCard
               title="Progreso"
@@ -729,7 +709,9 @@ export default function PadelPerfilPage() {
                   <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
                     Próximamente
                   </p>
-                  <p className="mt-3 text-2xl font-black text-slate-900">Ranking y fiabilidad</p>
+                  <p className="mt-3 text-2xl font-black text-slate-900">
+                    Ranking y fiabilidad
+                  </p>
                   <p className="mt-2 text-sm leading-6 text-slate-500">
                     Más adelante aquí podemos mostrar puntos, fiabilidad, evolución de nivel
                     y comparativas de rendimiento.
