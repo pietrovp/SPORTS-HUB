@@ -341,12 +341,12 @@ export default function PadelClubsPage() {
     Ver club
   </Link>
 
-  <button
-    type="button"
-    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-  >
-    Ver partidos
-  </button>
+  <Link
+  href="/padel/partidos"
+  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+>
+  Ver partidos
+</Link>
 </div>
                 </div>
               </article>
