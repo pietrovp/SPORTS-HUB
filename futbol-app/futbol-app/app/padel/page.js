@@ -22,12 +22,19 @@ export default function PadelHome() {
             lleva tu nivel, tus victorias y tus puntos.
           </p>
 
-          <div className="mt-10">
+          <div className="mt-10 flex flex-col sm:flex-row gap-4">
             <Link
               href="/padel/perfil"
               className="px-8 py-4 bg-blue-500 text-white font-black uppercase tracking-wider rounded-full text-sm hover:bg-blue-400 transition-all transform hover:scale-105 shadow-[0_0_30px_rgba(59,130,246,0.35)]"
             >
               Ir a mi perfil de pádel
+            </Link>
+
+            <Link
+              href="/padel/clubes"
+              className="px-8 py-4 bg-white/10 border border-white/15 text-white font-black uppercase tracking-wider rounded-full text-sm hover:bg-white/15 transition-all"
+            >
+              Ver clubes
             </Link>
           </div>
         </div>
@@ -38,35 +45,57 @@ export default function PadelHome() {
         <h2 className="text-2xl md:text-3xl font-black text-gray-900 uppercase tracking-tighter mb-8">
           Qué puedes hacer hoy
         </h2>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {[
-            {
-              icon: "🪪",
-              title: "Crea tu perfil",
-              desc: "Define tu nivel y tu posición preferida en la pista.",
-            },
-            {
-              icon: "📊",
-              title: "Sigue tus estadísticas",
-              desc: "Victorias, derrotas y puntos, listos para cuando lleguen los partidos.",
-            },
-            {
-              icon: "🚧",
-              title: "Próximamente",
-              desc: "Reservas de pista y partidos organizados, igual que en fútbol.",
-            },
-          ].map((item, i) => (
-            <div
-              key={i}
-              className="bg-white rounded-3xl p-8 shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col items-center text-center"
-            >
-              <div className="w-20 h-20 rounded-full bg-[#0B0C2A] flex items-center justify-center mb-6 shadow-lg shadow-gray-300 text-3xl">
-                {item.icon}
-              </div>
-              <h3 className="font-black text-lg text-gray-900 uppercase">{item.title}</h3>
-              <p className="text-gray-500 text-sm font-medium mt-2">{item.desc}</p>
+          <div className="bg-white rounded-3xl p-8 shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col items-center text-center">
+            <div className="w-20 h-20 rounded-full bg-[#0B0C2A] flex items-center justify-center mb-6 shadow-lg shadow-gray-300 text-3xl">
+              🪪
             </div>
-          ))}
+            <h3 className="font-black text-lg text-gray-900 uppercase">Crea tu perfil</h3>
+            <p className="text-gray-500 text-sm font-medium mt-2">
+              Define tu nivel y tu posición preferida en la pista.
+            </p>
+            <Link
+              href="/padel/perfil"
+              className="mt-6 inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-3 text-xs font-black uppercase tracking-wider text-white transition hover:bg-blue-700"
+            >
+              Ir al perfil
+            </Link>
+          </div>
+
+          <div className="bg-white rounded-3xl p-8 shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col items-center text-center">
+            <div className="w-20 h-20 rounded-full bg-[#0B0C2A] flex items-center justify-center mb-6 shadow-lg shadow-gray-300 text-3xl">
+              📊
+            </div>
+            <h3 className="font-black text-lg text-gray-900 uppercase">
+              Sigue tus estadísticas
+            </h3>
+            <p className="text-gray-500 text-sm font-medium mt-2">
+              Victorias, derrotas y puntos, listos para cuando lleguen los partidos.
+            </p>
+            <Link
+              href="/padel/perfil"
+              className="mt-6 inline-flex items-center justify-center rounded-full border border-gray-200 bg-white px-5 py-3 text-xs font-black uppercase tracking-wider text-gray-800 transition hover:bg-gray-50"
+            >
+              Ver estadísticas
+            </Link>
+          </div>
+
+          <div className="bg-white rounded-3xl p-8 shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col items-center text-center">
+            <div className="w-20 h-20 rounded-full bg-[#0B0C2A] flex items-center justify-center mb-6 shadow-lg shadow-gray-300 text-3xl">
+              🏟️
+            </div>
+            <h3 className="font-black text-lg text-gray-900 uppercase">Explora clubes</h3>
+            <p className="text-gray-500 text-sm font-medium mt-2">
+              Mira clubes activos, sus canchas y los partidos programados disponibles.
+            </p>
+            <Link
+              href="/padel/clubes"
+              className="mt-6 inline-flex items-center justify-center rounded-full bg-[#0B0C2A] px-5 py-3 text-xs font-black uppercase tracking-wider text-white transition hover:bg-[#16183f]"
+            >
+              Ver clubes
+            </Link>
+          </div>
         </div>
       </div>
     </div>
