@@ -107,10 +107,10 @@ function normalizarTiposPartido(value) {
 
 function StatCard({ label, value, hint, accent = "from-blue-500 to-cyan-400" }) {
   return (
-    <div className="rounded-3xl border border-white/15 bg-white/12 p-5 backdrop-blur-md shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+    <div className="min-w-0 rounded-3xl border border-white/15 bg-white/12 p-5 backdrop-blur-md shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
       <div className={cx("mb-3 h-1.5 w-14 rounded-full bg-gradient-to-r", accent)} />
       <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">{label}</p>
-      <p className="mt-2 text-3xl font-black text-white">{value}</p>
+      <p className="mt-2 break-words text-3xl font-black text-white">{value}</p>
       {hint ? <p className="mt-1 text-xs text-white/70">{hint}</p> : null}
     </div>
   );
@@ -138,7 +138,7 @@ function SectionCard({ title, subtitle, children, action }) {
   return (
     <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/60">
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h2 className="text-xl font-extrabold text-slate-900">{title}</h2>
           {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
         </div>
@@ -171,7 +171,6 @@ export default function PadelPerfilPage() {
   const [editando, setEditando] = useState(false);
   const [mensaje, setMensaje] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-
   const [form, setForm] = useState(DEFAULT_PROFILE);
 
   useEffect(() => {
@@ -320,7 +319,6 @@ export default function PadelPerfilPage() {
     const partidos = padelProfile?.partidos_jugados ?? 0;
     const victorias = padelProfile?.victorias ?? 0;
     const derrotas = Math.max(partidos - victorias, 0);
-    const puntos = padelProfile?.puntos ?? 0;
     const winRate = partidos > 0 ? Math.round((victorias / partidos) * 100) : 0;
     const racha = padelProfile?.racha_victorias_max ?? 0;
 
@@ -328,7 +326,6 @@ export default function PadelPerfilPage() {
       partidos,
       victorias,
       derrotas,
-      puntos,
       winRate,
       racha,
     };
@@ -386,8 +383,8 @@ export default function PadelPerfilPage() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,#dbeafe_0%,#eff6ff_28%,#f8fafc_55%,#f8fafc_100%)] px-4 py-6 md:px-6">
       <div className="mx-auto max-w-6xl space-y-6">
-        <div className="flex items-center justify-between gap-3">
-          <div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-700">
               Sports Hub · Pádel
             </p>
@@ -398,7 +395,7 @@ export default function PadelPerfilPage() {
 
           <Link
             href="/perfil"
-            className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
             Volver a mi cuenta
           </Link>
@@ -416,9 +413,9 @@ export default function PadelPerfilPage() {
           </div>
         ) : null}
 
-        <section className="overflow-hidden rounded-[32px] bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 p-6 shadow-[0_30px_80px_-35px_rgba(8,47,73,0.82)] md:p-8">
+        <section className="rounded-[32px] bg-gradient-to-br from-slate-950 via-blue-950 to-cyan-950 p-6 shadow-[0_30px_80px_-35px_rgba(8,47,73,0.82)] md:p-8">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-            <div className="max-w-2xl">
+            <div className="min-w-0 max-w-2xl">
               <div className="inline-flex items-center rounded-full border border-cyan-200/30 bg-cyan-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-50 backdrop-blur">
                 Jugador de pádel
               </div>
@@ -428,7 +425,7 @@ export default function PadelPerfilPage() {
               </h2>
 
               <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-white/80">
-                <span>{email}</span>
+                <span className="break-all">{email}</span>
                 <span className="hidden h-1 w-1 rounded-full bg-white/40 md:inline-block" />
                 <span>Nivel {nivelLabel}</span>
               </div>
@@ -459,7 +456,7 @@ export default function PadelPerfilPage() {
             </div>
           </div>
 
-          <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Nivel"
               value={nivelLabel}
