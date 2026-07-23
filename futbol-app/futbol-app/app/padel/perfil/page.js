@@ -433,10 +433,10 @@ export default function PadelPerfilPage() {
                 <span>Nivel {nivelLabel}</span>
               </div>
 
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-white/72 md:text-base">
-                Configura tus preferencias, revisa tu rendimiento y prepara tu perfil
-                para futuros partidos, rankings y progreso dentro del hub.
-              </p>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] md:text-base">
+  Configura tus preferencias, revisa tu rendimiento y prepara tu perfil
+  para futuros partidos, rankings y progreso dentro del hub.
+</p>
             </div>
 
             <div className="flex flex-wrap gap-3">
