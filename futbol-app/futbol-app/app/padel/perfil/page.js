@@ -14,7 +14,9 @@ const CATEGORY_OPTIONS = {
 
 const DEFAULT_PROFILE = {
   nivel_base: "principiante",
-  categoria: "rookies",
+  categoria_solicitada: "rookies",
+  categoria_oficial: "rookies",
+  estado_categoria: "pendiente",
   posicion: "drive",
   posicion_preferida: "lado_derecho",
   mano_habil: "derecha",
@@ -39,6 +41,12 @@ const LABELS = {
     "3era": "3era",
     "2da": "2da",
     open: "Open",
+  },
+  estado_categoria: {
+    pendiente: "Pendiente de revisión",
+    aprobada: "Aprobada",
+    rechazada: "Rechazada",
+    ajustada: "Ajustada por admin",
   },
   posicion: {
     drive: "Drive",
@@ -75,7 +83,6 @@ const LABELS = {
 
 const TIPOS_VALIDOS = ["amistoso", "competitivo", "mixto"];
 const NIVELES_VALIDOS = ["principiante", "intermedio", "avanzado", "profesional"];
-const CATEGORIAS_VALIDAS = ["rookies", "7ma", "6ta", "5ta", "4ta", "3era", "2da", "open"];
 
 function cx(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -96,16 +103,11 @@ function parseMaybeJson(value) {
 function extraerTipos(value) {
   if (value == null) return [];
 
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => extraerTipos(item));
-  }
+  if (Array.isArray(value)) return value.flatMap((item) => extraerTipos(item));
 
   if (typeof value === "string") {
     const parsed = parseMaybeJson(value);
-
-    if (parsed !== value) {
-      return extraerTipos(parsed);
-    }
+    if (parsed !== value) return extraerTipos(parsed);
 
     return value
       .split(",")
@@ -132,10 +134,8 @@ function normalizeMatchRelation(match) {
 
 function normalizeNivelBase(value) {
   const nivel = String(value || "").trim().toLowerCase();
-
   if (NIVELES_VALIDOS.includes(nivel)) return nivel;
   if (nivel === "competitivo") return "profesional";
-
   return "principiante";
 }
 
@@ -145,7 +145,6 @@ function normalizeCategoria(value, nivelBase) {
   const categoria = String(value || "").trim().toLowerCase();
 
   if (permitidas.includes(categoria)) return categoria;
-
   if (categoria === "principiante") return "rookies";
   if (categoria === "intermedio") return "6ta";
   if (categoria === "avanzado") return "5ta";
@@ -153,6 +152,12 @@ function normalizeCategoria(value, nivelBase) {
   if (categoria === "competitivo") return "3era";
 
   return permitidas[0];
+}
+
+function normalizeEstadoCategoria(value) {
+  const estado = String(value || "").trim().toLowerCase();
+  if (["pendiente", "aprobada", "rechazada", "ajustada"].includes(estado)) return estado;
+  return "pendiente";
 }
 
 function StatCard({ label, value, hint, accent = "from-blue-500 to-cyan-400" }) {
@@ -173,7 +178,6 @@ function InfoCard({ icon, title, value, subtitle }) {
         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-50 to-cyan-50 text-2xl">
           <span aria-hidden="true">{icon}</span>
         </div>
-
         <div className="min-w-0">
           <p className="text-sm font-medium text-slate-500">{title}</p>
           <p className="mt-1 break-words text-lg font-bold text-slate-900">{value}</p>
@@ -194,7 +198,6 @@ function SectionCard({ title, subtitle, children, action }) {
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
-
       <div className="mt-5">{children}</div>
     </section>
   );
@@ -253,7 +256,9 @@ export default function PadelPerfilPage() {
         const insertPayload = {
           id: authUser.id,
           nivel_base: DEFAULT_PROFILE.nivel_base,
-          categoria: DEFAULT_PROFILE.categoria,
+          categoria_solicitada: DEFAULT_PROFILE.categoria_solicitada,
+          categoria_oficial: DEFAULT_PROFILE.categoria_oficial,
+          estado_categoria: DEFAULT_PROFILE.estado_categoria,
           posicion: DEFAULT_PROFILE.posicion,
           posicion_preferida: DEFAULT_PROFILE.posicion_preferida,
           mano_habil: DEFAULT_PROFILE.mano_habil,
@@ -273,26 +278,33 @@ export default function PadelPerfilPage() {
         setMensaje("Perfil de pádel creado correctamente.");
       }
 
-      const nivelBaseNormalizado = normalizeNivelBase(
-        finalPadel?.nivel_base || finalPadel?.nivel
-      );
-      const categoriaNormalizada = normalizeCategoria(
-        finalPadel?.categoria || finalPadel?.nivel,
+      const nivelBaseNormalizado = normalizeNivelBase(finalPadel?.nivel_base || finalPadel?.nivel);
+      const categoriaSolicitada = normalizeCategoria(
+        finalPadel?.categoria_solicitada || finalPadel?.categoria || finalPadel?.nivel,
         nivelBaseNormalizado
       );
+      const categoriaOficial = normalizeCategoria(
+        finalPadel?.categoria_oficial || finalPadel?.categoria || finalPadel?.nivel,
+        nivelBaseNormalizado
+      );
+      const estadoCategoria = normalizeEstadoCategoria(finalPadel?.estado_categoria);
       const tiposNormalizados = normalizarTiposPartido(finalPadel?.tipo_partido_preferido);
 
       finalPadel = {
         ...finalPadel,
         nivel_base: nivelBaseNormalizado,
-        categoria: categoriaNormalizada,
+        categoria_solicitada: categoriaSolicitada,
+        categoria_oficial: categoriaOficial,
+        estado_categoria: estadoCategoria,
         tipo_partido_preferido: tiposNormalizados,
       };
 
       setPadelProfile(finalPadel);
       setForm({
         nivel_base: nivelBaseNormalizado,
-        categoria: categoriaNormalizada,
+        categoria_solicitada: categoriaSolicitada,
+        categoria_oficial: categoriaOficial,
+        estado_categoria: estadoCategoria,
         posicion: finalPadel.posicion || DEFAULT_PROFILE.posicion,
         posicion_preferida: finalPadel.posicion_preferida || DEFAULT_PROFILE.posicion_preferida,
         mano_habil: finalPadel.mano_habil || DEFAULT_PROFILE.mano_habil,
@@ -321,7 +333,6 @@ export default function PadelPerfilPage() {
         .order("scheduled_at", { referencedTable: "match", ascending: false });
 
       if (matchesError) throw matchesError;
-
       setMatchesData(playedMatches || []);
     } catch (error) {
       console.error(error);
@@ -340,12 +351,13 @@ export default function PadelPerfilPage() {
       setMensaje("");
 
       const nivelBase = normalizeNivelBase(form.nivel_base);
-      const categoria = normalizeCategoria(form.categoria, nivelBase);
+      const categoriaSolicitada = normalizeCategoria(form.categoria_solicitada, nivelBase);
       const tiposNormalizados = normalizarTiposPartido(form.tipo_partido_preferido);
 
       const payload = {
         nivel_base: nivelBase,
-        categoria,
+        categoria_solicitada: categoriaSolicitada,
+        estado_categoria: "pendiente",
         posicion: form.posicion,
         posicion_preferida: form.posicion_preferida,
         mano_habil: form.mano_habil,
@@ -366,14 +378,24 @@ export default function PadelPerfilPage() {
       const perfilNormalizado = {
         ...data,
         nivel_base: normalizeNivelBase(data?.nivel_base),
-        categoria: normalizeCategoria(data?.categoria, data?.nivel_base),
+        categoria_solicitada: normalizeCategoria(data?.categoria_solicitada, data?.nivel_base),
+        categoria_oficial: normalizeCategoria(
+          data?.categoria_oficial,
+          data?.nivel_base
+        ),
+        estado_categoria: normalizeEstadoCategoria(data?.estado_categoria),
         tipo_partido_preferido: normalizarTiposPartido(data?.tipo_partido_preferido),
       };
 
       setPadelProfile(perfilNormalizado);
       setForm({
         nivel_base: perfilNormalizado.nivel_base || DEFAULT_PROFILE.nivel_base,
-        categoria: perfilNormalizado.categoria || DEFAULT_PROFILE.categoria,
+        categoria_solicitada:
+          perfilNormalizado.categoria_solicitada || DEFAULT_PROFILE.categoria_solicitada,
+        categoria_oficial:
+          perfilNormalizado.categoria_oficial || DEFAULT_PROFILE.categoria_oficial,
+        estado_categoria:
+          perfilNormalizado.estado_categoria || DEFAULT_PROFILE.estado_categoria,
         posicion: perfilNormalizado.posicion || DEFAULT_PROFILE.posicion,
         posicion_preferida:
           perfilNormalizado.posicion_preferida || DEFAULT_PROFILE.posicion_preferida,
@@ -385,7 +407,7 @@ export default function PadelPerfilPage() {
       });
 
       setEditando(false);
-      setMensaje("Preferencias actualizadas correctamente.");
+      setMensaje("Solicitud enviada. Tu categoría quedará pendiente de revisión.");
     } catch (error) {
       console.error(error);
       setErrorMsg(error.message || "No se pudieron guardar los cambios.");
@@ -414,7 +436,6 @@ export default function PadelPerfilPage() {
       (match) => match.winnerTeam && match.winnerTeam === match.team
     ).length;
     const derrotas = Math.max(partidos - victorias, 0);
-    const winRate = partidos > 0 ? Math.round((victorias / partidos) * 100) : 0;
 
     let rachaActual = 0;
     let mejorRacha = 0;
@@ -429,7 +450,7 @@ export default function PadelPerfilPage() {
       }
     }
 
-    return { partidos, victorias, derrotas, winRate, racha: mejorRacha };
+    return { partidos, victorias, derrotas, racha: mejorRacha };
   }, [matchesData]);
 
   function toggleTipoPartido(tipo) {
@@ -470,7 +491,13 @@ export default function PadelPerfilPage() {
 
   const email = user?.email || "Sin correo";
   const nivelBaseLabel = LABELS.nivel_base[padelProfile?.nivel_base] || "Principiante";
-  const categoriaLabel = LABELS.categoria[padelProfile?.categoria] || "Rookies";
+  const categoriaOficialLabel =
+    LABELS.categoria[padelProfile?.categoria_oficial] || "Rookies";
+  const categoriaSolicitadaLabel =
+    LABELS.categoria[padelProfile?.categoria_solicitada] || "Rookies";
+  const estadoCategoriaLabel =
+    LABELS.estado_categoria[padelProfile?.estado_categoria] || "Pendiente de revisión";
+
   const manoLabel = LABELS.mano_habil[padelProfile?.mano_habil] || "Derecha";
   const posicionBaseLabel = LABELS.posicion[padelProfile?.posicion] || "Drive";
   const posicionLabel =
@@ -533,12 +560,12 @@ export default function PadelPerfilPage() {
                 <span className="hidden h-1 w-1 rounded-full bg-white/40 md:inline-block" />
                 <span>{nivelBaseLabel}</span>
                 <span className="hidden h-1 w-1 rounded-full bg-white/40 md:inline-block" />
-                <span>Categoría {categoriaLabel}</span>
+                <span>Categoría oficial {categoriaOficialLabel}</span>
               </div>
 
               <p className="mt-4 max-w-2xl text-sm leading-7 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] md:text-base">
-                Configura tus preferencias, revisa tu rendimiento y prepara tu perfil
-                para futuros partidos, rankings y progreso dentro del hub.
+                Configura tus preferencias, revisa tu rendimiento y envía tu categoría para
+                validación administrativa dentro del hub.
               </p>
             </div>
 
@@ -570,21 +597,21 @@ export default function PadelPerfilPage() {
               accent="from-cyan-400 to-blue-400"
             />
             <StatCard
-              label="Categoría"
-              value={categoriaLabel}
-              hint="Tu categoría competitiva actual"
+              label="Categoría oficial"
+              value={categoriaOficialLabel}
+              hint={estadoCategoriaLabel}
               accent="from-amber-400 to-orange-400"
             />
             <StatCard
-              label="Partidos"
-              value={estadisticas.partidos}
-              hint="Encuentros jugados registrados"
-              accent="from-blue-400 to-indigo-400"
+              label="Solicitada"
+              value={categoriaSolicitadaLabel}
+              hint="Tu categoría enviada al admin"
+              accent="from-fuchsia-400 to-pink-400"
             />
             <StatCard
               label="Victorias"
               value={estadisticas.victorias}
-              hint={`Derrotas: ${estadisticas.derrotas}`}
+              hint={`Partidos: ${estadisticas.partidos}`}
               accent="from-emerald-400 to-cyan-400"
             />
           </div>
@@ -597,7 +624,7 @@ export default function PadelPerfilPage() {
             action={
               !editando ? (
                 <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  Perfil activo
+                  {estadoCategoriaLabel}
                 </span>
               ) : null
             }
@@ -612,9 +639,15 @@ export default function PadelPerfilPage() {
                 />
                 <InfoCard
                   icon="🥇"
-                  title="Categoría actual"
-                  value={categoriaLabel}
-                  subtitle="La referencia principal para jugar y competir."
+                  title="Categoría oficial"
+                  value={categoriaOficialLabel}
+                  subtitle="Esta es la categoría usada para partidos y filtros."
+                />
+                <InfoCard
+                  icon="📨"
+                  title="Categoría solicitada"
+                  value={categoriaSolicitadaLabel}
+                  subtitle={`Estado actual: ${estadoCategoriaLabel}`}
                 />
                 <InfoCard
                   icon="👋"
@@ -649,6 +682,11 @@ export default function PadelPerfilPage() {
               </div>
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
+                <div className="md:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  Tu categoría oficial no se modifica desde aquí. Aquí solo envías o actualizas tu
+                  solicitud para revisión del admin.
+                </div>
+
                 <label className="space-y-2">
                   <span className="text-sm font-semibold text-slate-700">Nivel base</span>
                   <select
@@ -661,7 +699,7 @@ export default function PadelPerfilPage() {
                       setForm((prev) => ({
                         ...prev,
                         nivel_base: nextNivel,
-                        categoria: categoriaInicial,
+                        categoria_solicitada: categoriaInicial,
                       }));
                     }}
                     className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
@@ -674,13 +712,13 @@ export default function PadelPerfilPage() {
                 </label>
 
                 <label className="space-y-2">
-                  <span className="text-sm font-semibold text-slate-700">Categoría</span>
+                  <span className="text-sm font-semibold text-slate-700">Categoría solicitada</span>
                   <select
-                    value={normalizeCategoria(form.categoria, form.nivel_base)}
+                    value={normalizeCategoria(form.categoria_solicitada, form.nivel_base)}
                     onChange={(e) =>
                       setForm((prev) => ({
                         ...prev,
-                        categoria: e.target.value,
+                        categoria_solicitada: e.target.value,
                       }))
                     }
                     className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
@@ -775,7 +813,6 @@ export default function PadelPerfilPage() {
 
                 <div className="space-y-3 pt-2 md:col-span-2">
                   <span className="text-sm font-semibold text-slate-700">Tipo de partido</span>
-
                   <div className="flex flex-wrap gap-3">
                     {TIPOS_VALIDOS.map((tipo) => {
                       const tiposActuales = normalizarTiposPartido(form.tipo_partido_preferido);
@@ -807,7 +844,7 @@ export default function PadelPerfilPage() {
                     disabled={saving}
                     className="rounded-full bg-blue-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {saving ? "Guardando..." : "Guardar cambios"}
+                    {saving ? "Enviando..." : "Enviar para revisión"}
                   </button>
 
                   <button
@@ -816,7 +853,13 @@ export default function PadelPerfilPage() {
                       setEditando(false);
                       setForm({
                         nivel_base: padelProfile?.nivel_base || DEFAULT_PROFILE.nivel_base,
-                        categoria: padelProfile?.categoria || DEFAULT_PROFILE.categoria,
+                        categoria_solicitada:
+                          padelProfile?.categoria_solicitada ||
+                          DEFAULT_PROFILE.categoria_solicitada,
+                        categoria_oficial:
+                          padelProfile?.categoria_oficial || DEFAULT_PROFILE.categoria_oficial,
+                        estado_categoria:
+                          padelProfile?.estado_categoria || DEFAULT_PROFILE.estado_categoria,
                         posicion: padelProfile?.posicion || DEFAULT_PROFILE.posicion,
                         posicion_preferida:
                           padelProfile?.posicion_preferida ||
