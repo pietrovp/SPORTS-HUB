@@ -151,7 +151,6 @@ export default function ReservarCancha() {
 
     if (errorPartido) {
       console.error("Error DB creando partido:", errorPartido);
-      // AQUÍ MOSTRAREMOS EL ERROR EXACTO DE SUPABASE
       setMensaje(`Error BD: ${errorPartido.message}`);
       setProcesando(false);
       return;
@@ -188,23 +187,31 @@ export default function ReservarCancha() {
   }
 
   if (cargando) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin"></div></div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
   }
 
   return (
     <div className="min-h-screen bg-gray-50/50 pb-40">
       
-      <header className="bg-white border-b border-gray-100 px-4 py-4 flex items-center gap-4 sticky top-0 z-40">
-        <Link href="/futbol" className="w-10 h-10 flex items-center justify-center bg-gray-50 rounded-full text-gray-900 hover:bg-gray-100 transition-colors">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7"></path></svg>
-        </Link>
-        <h1 className="text-xl font-black text-gray-900 tracking-tight">Reservar Cancha</h1>
-      </header>
-
-      <main className="max-w-2xl mx-auto px-4 mt-8 space-y-10">
+      <main className="max-w-5xl mx-auto px-4 pt-8 space-y-8">
         
+        {/* ENCABEZADO ESTILO COMUNIDAD */}
+        <div className="border-b border-gray-200/80 pb-5">
+          <h1 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
+            Reservar cancha
+          </h1>
+          <p className="text-sm text-gray-500 mt-1 font-medium">
+            Elige tu complejo favorito, selecciona la fecha y aparta el horario de tu próximo juego.
+          </p>
+        </div>
+        
+        {/* SECCIÓN: ELIGE TU COMPLEJO */}
         <div>
-          <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4">Elige tu complejo</h2>
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">Elige tu complejo</h2>
           <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide snap-x">
             {sedes.map((sede) => (
               <button
@@ -242,10 +249,11 @@ export default function ReservarCancha() {
           </div>
         </div>
 
+        {/* SECCIÓN: FECHA */}
         {sedeSeleccionada && (
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Fecha</h2>
+              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Fecha</h2>
               <span className="text-xs font-black text-white bg-[#0B0C15] px-3 py-1.5 rounded-lg tracking-widest uppercase">
                 {MESES[fechaSeleccionada?.getMonth()]} {fechaSeleccionada?.getFullYear()}
               </span>
@@ -279,16 +287,17 @@ export default function ReservarCancha() {
           </div>
         )}
 
+        {/* SECCIÓN: HORARIOS DISPONIBLES */}
         {sedeSeleccionada && fechaSeleccionada && (
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-            <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-5">Horarios disponibles</h2>
+            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-5">Horarios disponibles</h2>
             
             {franjas.length === 0 ? (
               <div className="text-center py-10 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
                 <p className="text-sm font-bold text-gray-400">No hay canchas para este día.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                 {franjas.map((franja) => {
                   const isOcupada = horasOcupadas.includes(franja.hora_inicio);
                   const isSelected = franjaSeleccionada?.id === franja.id;
@@ -324,6 +333,7 @@ export default function ReservarCancha() {
         )}
       </main>
 
+      {/* FOOTER FLOTANTE PARA CONFIRMAR RESERVA */}
       {franjaSeleccionada && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 pb-8 shadow-[0_-20px_40px_rgba(0,0,0,0.08)] z-50 rounded-t-3xl transition-transform transform translate-y-0">
           <div className="max-w-2xl mx-auto">
