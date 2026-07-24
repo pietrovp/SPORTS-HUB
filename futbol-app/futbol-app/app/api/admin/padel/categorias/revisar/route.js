@@ -42,6 +42,13 @@ function normalizeEstado(value) {
 
 export async function POST(request) {
   try {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return NextResponse.json(
+        { error: "Faltan variables públicas de Supabase en el servidor." },
+        { status: 500 }
+      );
+    }
+
     const token = getAccessTokenFromRequest(request);
 
     if (!token) {
@@ -70,7 +77,7 @@ export async function POST(request) {
 
     if (userError || !user) {
       return NextResponse.json(
-        { error: "Sesión inválida o expirada." },
+        { error: userError?.message || "Sesión inválida o expirada." },
         { status: 401 }
       );
     }
@@ -131,10 +138,11 @@ export async function POST(request) {
     }
 
     const nivelBase = normalizeNivelBase(currentRow.nivel_base);
+    const categoriaSolicitada = String(currentRow.categoria_solicitada || "").trim().toLowerCase();
     const categoriaFinal = normalizeCategoria(categoria_oficial, nivelBase);
 
     let estadoFinal = normalizeEstado(estado_categoria);
-    if (estadoFinal === "aprobada" && categoriaFinal !== currentRow.categoria_solicitada) {
+    if (estadoFinal === "aprobada" && categoriaFinal !== categoriaSolicitada) {
       estadoFinal = "ajustada";
     }
 
