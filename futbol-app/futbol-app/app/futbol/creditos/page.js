@@ -77,10 +77,11 @@ export default function CreditosPage() {
       setSettings(setRes.data || []);
 
       if (user) {
+        // FIX: Buscamos en 'profiles' y con 'id'
         const { data: perfil } = await supabase
-          .from("futbol_profiles")
+          .from("profiles")
           .select("creditos")
-          .eq("usuario_id", user.id)
+          .eq("id", user.id)
           .single();
 
         setCreditosActuales(perfil?.creditos ?? 0);
@@ -356,7 +357,7 @@ export default function CreditosPage() {
                     </div>
                   </div>
 
-                  {/* Botón de compra (Gris Oscuro vs Verde Esmeralda) */}
+                  {/* Botón de compra */}
                   <button
                     type="button"
                     onClick={() => elegirPaquete(pkg)}
