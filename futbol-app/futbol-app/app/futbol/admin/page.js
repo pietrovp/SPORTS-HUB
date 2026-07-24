@@ -13,14 +13,15 @@ export default function Admin() {
   const router = useRouter();
   const [verificando, setVerificando] = useState(true);
   const [autorizado, setAutorizado] = useState(false);
-  const [user, setUser] = useState(null);
-
+  
+  // Agregamos zona y cupos_minimos al estado inicial
   const [form, setForm] = useState({
     cancha: "",
     zona: "",
     fecha: null,
     hora: null,
     cupos: "",
+    cupos_minimos: "",
   });
 
   const [imagenFile, setImagenFile] = useState(null);
@@ -38,8 +39,6 @@ export default function Admin() {
       const {
         data: { user: currentUser },
       } = await supabase.auth.getUser();
-
-      setUser(currentUser);
 
       if (!currentUser) {
         setVerificando(false);
@@ -73,7 +72,16 @@ export default function Admin() {
     setCargando(true);
     setMensaje({ texto: "", tipo: "" });
 
-    if (!form.cancha || !form.zona || !form.fecha || !form.hora || !form.cupos) {
+    // 1. OBTENER EL USUARIO AL MOMENTO DE PUBLICAR (100% SEGURO)
+    const { data: { user: usuarioActual } } = await supabase.auth.getUser();
+
+    if (!usuarioActual) {
+      setMensaje({ texto: "Error: No se detectó tu sesión.", tipo: "error" });
+      setCargando(false);
+      return;
+    }
+
+    if (!form.cancha || !form.zona || !form.fecha || !form.hora || !form.cupos || !form.cupos_minimos) {
       setMensaje({ texto: "Por favor, completa todos los campos.", tipo: "error" });
       setCargando(false);
       return;
@@ -104,17 +112,20 @@ export default function Admin() {
       imagenUrl = publicUrlData.publicUrl;
     }
 
-    // MAPEO A LAS COLUMNAS REALES DE TU TABLA 'partidos'
+    // 2. MAPEO EXACTO A LAS COLUMNAS DE LA BASE DE DATOS
     const { error } = await supabase.from("partidos").insert({
       titulo: `Partido en ${form.cancha}`,
       cancha_lugar: form.cancha,
+      zona: form.zona,
+      imagen_url: imagenUrl,
       fecha: fechaDB,
       hora: horaDB,
       cupos_totales: Number(form.cupos),
-      cupos_disponibles: Number(form.cupos),
+      cupos_minimos: Number(form.cupos_minimos),
       precio_creditos: 1,
-      organizador_id: user?.id || null,
+      creador_id: usuarioActual.id, // <--- AQUÍ ESTÁ LA SOLUCIÓN DEL PERMISO
       estado: "abierto",
+      tipo_acceso: "publico" // Los creados por el admin son públicos
     });
 
     setCargando(false);
@@ -133,7 +144,7 @@ export default function Admin() {
   if (verificando) {
     return (
       <div className="flex justify-center items-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#00FF9D]"></div>
       </div>
     );
   }
@@ -148,7 +159,7 @@ export default function Admin() {
   }
 
   return (
-    <div className="max-w-xl mx-auto flex flex-col gap-6 relative">
+    <div className="max-w-xl mx-auto flex flex-col gap-6 relative pb-20 mt-6 px-4">
       <div className="border-b border-gray-200 pb-5">
         <h1 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Crear partido</h1>
         <p className="text-sm text-gray-500 mt-1.5 font-medium">
@@ -156,12 +167,12 @@ export default function Admin() {
         </p>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-8 flex flex-col gap-6">
+      <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 md:p-8 flex flex-col gap-6">
         <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Foto de la cancha</label>
+          <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Foto de la cancha</label>
           <label
             htmlFor="imagen-cancha"
-            className="relative flex flex-col items-center justify-center w-full h-44 rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 overflow-hidden cursor-pointer hover:border-green-500 transition-all"
+            className="relative flex flex-col items-center justify-center w-full h-44 rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 overflow-hidden cursor-pointer hover:border-[#00FF9D]/50 transition-all"
           >
             {imagenPreview ? (
               <img src={imagenPreview} alt="Preview" className="absolute inset-0 w-full h-full object-cover" />
@@ -182,20 +193,20 @@ export default function Admin() {
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Nombre de la cancha</label>
+          <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Nombre de la cancha</label>
           <input
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500/20 focus:border-green-500 transition-all"
-            placeholder="Ej. Cancha Los Leones"
+            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00FF9D]/20 focus:border-[#00FF9D] transition-all"
+            placeholder="Ej. Canchas Colegio Rioclaro"
             value={form.cancha}
             onChange={(e) => actualizar("cancha", e.target.value)}
           />
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Zona</label>
+          <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Zona</label>
           <input
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500/20 focus:border-green-500 transition-all"
-            placeholder="Ej. Barquisimeto Este"
+            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00FF9D]/20 focus:border-[#00FF9D] transition-all"
+            placeholder="Ej. Este"
             value={form.zona}
             onChange={(e) => actualizar("zona", e.target.value)}
           />
@@ -203,18 +214,18 @@ export default function Admin() {
 
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col">
-            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Fecha</label>
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Fecha</label>
             <DatePicker
               selected={form.fecha}
               onChange={(date) => actualizar("fecha", date)}
               locale={es}
               dateFormat="dd 'de' MMMM, yyyy"
               placeholderText="Selecciona el día"
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-green-500/20 focus:border-green-500 transition-all cursor-pointer"
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#00FF9D]/20 focus:border-[#00FF9D] transition-all cursor-pointer"
             />
           </div>
           <div className="flex flex-col">
-            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Hora</label>
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Hora</label>
             <DatePicker
               selected={form.hora}
               onChange={(time) => actualizar("hora", time)}
@@ -224,38 +235,51 @@ export default function Admin() {
               timeCaption="Hora"
               dateFormat="h:mm aa"
               placeholderText="Selecciona la hora"
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-green-500/20 focus:border-green-500 transition-all cursor-pointer"
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#00FF9D]/20 focus:border-[#00FF9D] transition-all cursor-pointer"
             />
           </div>
         </div>
 
-        <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Cupos Totales</label>
-          <input
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500/20 focus:border-green-500 transition-all"
-            type="number"
-            min="1"
-            placeholder="Ej. 14 (para un 7 vs 7)"
-            value={form.cupos}
-            onChange={(e) => actualizar("cupos", e.target.value)}
-          />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Cupos Totales</label>
+            <input
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00FF9D]/20 focus:border-[#00FF9D] transition-all"
+              type="number"
+              min="2"
+              placeholder="Máximo (Ej. 14)"
+              value={form.cupos}
+              onChange={(e) => actualizar("cupos", e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Cupos Mínimos</label>
+            <input
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00FF9D]/20 focus:border-[#00FF9D] transition-all"
+              type="number"
+              min="2"
+              placeholder="Mínimo (Ej. 10)"
+              value={form.cupos_minimos}
+              onChange={(e) => actualizar("cupos_minimos", e.target.value)}
+            />
+          </div>
         </div>
 
         {mensaje.texto && (
-          <div className={`p-4 rounded-xl text-sm font-bold flex items-center gap-2 ${
-            mensaje.tipo === "exito" ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"
+          <div className={`p-4 rounded-2xl text-sm font-bold flex items-center justify-center text-center ${
+            mensaje.tipo === "exito" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"
           }`}>
-            {mensaje.tipo === "exito" ? "✅" : "⚠️"} {mensaje.texto}
+            {mensaje.texto}
           </div>
         )}
 
         <button
           disabled={cargando}
           onClick={publicar}
-          className={`w-full rounded-xl py-3.5 text-sm font-bold shadow-sm transition-all ${
+          className={`w-full rounded-2xl py-4 mt-2 text-sm font-black uppercase tracking-widest shadow-lg transition-all ${
             cargando
               ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-              : "bg-green-600 hover:bg-green-500 text-white active:scale-[0.98]"
+              : "bg-[#0B0C15] hover:bg-gray-900 text-[#00FF9D] shadow-gray-900/20 active:scale-[0.98]"
           }`}
         >
           {cargando ? "Publicando partido..." : "Publicar partido"}

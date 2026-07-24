@@ -68,19 +68,16 @@ export default function AdminCanchasDashboard() {
   const [cargando, setCargando] = useState(true);
   const [usuarioActual, setUsuarioActual] = useState(null);
   
-  // Soporte Multicancha
   const [misSedes, setMisSedes] = useState([]);
   const [sedeActiva, setSedeActiva] = useState(null);
   
-  // Vistas del Panel
   const [mostrarFormularioSede, setMostrarFormularioSede] = useState(false);
   const [editandoSede, setEditandoSede] = useState(false);
-  const [vistaActiva, setVistaActiva] = useState("horarios"); // "horarios" | "reservas"
+  const [vistaActiva, setVistaActiva] = useState("horarios");
 
   const [creando, setCreando] = useState(false);
   const [formData, setFormData] = useState({ nombre: "", direccion: "", zona: "", telefono: "", imagen_url: "" });
 
-  // ESTADOS DEL RECORTADOR DE IMÁGENES
   const [imageSrc, setImageSrc] = useState(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -88,16 +85,22 @@ export default function AdminCanchasDashboard() {
   const [blobToUpload, setBlobToUpload] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
 
-  // Estados Horarios y Reservas
   const [franjas, setFranjas] = useState([]);
   const [diaActivo, setDiaActivo] = useState(1); 
   const [creandoFranja, setCreandoFranja] = useState(false);
-  const [formFranja, setFormFranja] = useState({ dia_semana: 1, hora_inicio: "18:00", hora_fin: "19:30", precio_creditos: 14 });
+  
+  const [formFranja, setFormFranja] = useState({ 
+    dia_semana: 1, 
+    hora_inicio: "18:00", 
+    hora_fin: "19:30", 
+    precio_creditos: 14,
+    cupos_minimos: 10,
+    cupos_maximos: 14 
+  });
 
   const [partidosReservados, setPartidosReservados] = useState([]);
   const [procesandoCancelacion, setProcesandoCancelacion] = useState(null);
 
-  // 1. Cargar Usuario y Sedes
   useEffect(() => {
     async function cargarDatos() {
       if (!supabase) return;
@@ -123,12 +126,10 @@ export default function AdminCanchasDashboard() {
     cargarDatos();
   }, []);
 
-  // 2. Cargar Franjas y Partidos Reservados cuando cambia la Sede Activa
   useEffect(() => {
     async function cargarDatosSede() {
       if (!sedeActiva || !supabase) return;
       
-      // Cargar Franjas (Plantillas)
       const { data: franjasData } = await supabase
         .from("franjas_horarias")
         .select("*")
@@ -138,28 +139,51 @@ export default function AdminCanchasDashboard() {
         
       setFranjas(franjasData || []);
 
-      // Cargar Partidos Reales Reservados (Abiertos)
-      const { data: partidosData } = await supabase
+      const { data: partidosData, error: pError } = await supabase
         .from("partidos")
-        .select("*, partido_jugadores(id)")
+        .select("*") 
         .eq("sede_id", sedeActiva.id)
         .eq("estado", "abierto")
         .order("fecha", { ascending: true })
         .order("hora", { ascending: true });
 
-      setPartidosReservados(partidosData || []);
+      if (pError) {
+        console.error("Error al cargar reservas:", pError);
+        return;
+      }
+
+      if (partidosData && partidosData.length > 0) {
+        const partidoIds = partidosData.map(p => p.id);
+        
+        const { data: jugadoresData } = await supabase
+          .from("partido_jugadores")
+          .select("partido_id")
+          .in("partido_id", partidoIds);
+
+        const conteoPorPartido = {};
+        (jugadoresData || []).forEach(j => {
+          conteoPorPartido[j.partido_id] = (conteoPorPartido[j.partido_id] || 0) + 1;
+        });
+
+        const partidosCompletos = partidosData.map(p => ({
+          ...p,
+          inscritos_count: conteoPorPartido[p.id] || 0
+        }));
+
+        setPartidosReservados(partidosCompletos);
+      } else {
+        setPartidosReservados([]);
+      }
     }
     cargarDatosSede();
   }, [sedeActiva]);
 
-  // --- LÓGICA DE CANCELACIÓN CON DEVOLUCIÓN DE CRÉDITOS ---
   async function cancelarPartidoPorGerente(partido) {
     if (!confirm(`🚨 ¡ALERTA!\n\n¿Estás seguro de cancelar el partido del ${formatFecha(partido.fecha)} a las ${formatHora12(partido.hora)}?\n\nSe le devolverán los créditos automáticamente a todos los jugadores inscritos y el partido desaparecerá.`)) return;
 
     setProcesandoCancelacion(partido.id);
 
     try {
-      // 1. Obtener todos los jugadores inscritos en este partido específico
       const { data: inscripciones, error: insError } = await supabase
         .from("partido_jugadores")
         .select("id, user_id")
@@ -167,64 +191,53 @@ export default function AdminCanchasDashboard() {
 
       if (insError) throw insError;
 
-      // 2. Loop de Devolución: Por cada jugador, reembolsar los créditos
       if (inscripciones && inscripciones.length > 0) {
         const costo = partido.precio_creditos ?? 1;
 
         for (const inscripcion of inscripciones) {
           const userId = inscripcion.user_id;
+          
+          let montoADevolver = costo;
+          if (partido.tipo_acceso === "privado") {
+             if (userId === partido.creador_id) {
+                 montoADevolver = partido.cupos_totales || 14; 
+             } else {
+                 montoADevolver = 0;
+             }
+          }
 
-          // Obtener perfil actual
-          const { data: perfil } = await supabase
-            .from("profiles")
-            .select("creditos")
-            .eq("id", userId)
-            .single();
+          if (montoADevolver > 0) {
+            const { data: perfil } = await supabase.from("profiles").select("creditos").eq("id", userId).single();
+            const nuevoBalance = (perfil?.creditos ?? 0) + montoADevolver;
 
-          const creditosActuales = perfil?.creditos ?? 0;
-          const nuevoBalance = creditosActuales + costo;
-
-          // Actualizar perfil del jugador
-          await supabase
-            .from("profiles")
-            .update({ creditos: nuevoBalance })
-            .eq("id", userId);
-
-          // Registrar la devolución en el Ledger
-          await supabase.from("credit_ledger").insert({
-            user_id: userId,
-            partido_id: partido.id,
-            delta: costo,
-            reason: "cancellation_by_manager_emergency",
-            balance_after: nuevoBalance,
-          });
+            await supabase.from("profiles").update({ creditos: nuevoBalance }).eq("id", userId);
+            await supabase.from("credit_ledger").insert({
+              user_id: userId,
+              partido_id: partido.id,
+              delta: montoADevolver,
+              reason: "cancellation_by_manager_emergency",
+              balance_after: nuevoBalance,
+            });
+          }
         }
-
-        // Eliminar las inscripciones para limpiar la base de datos
         await supabase.from("partido_jugadores").delete().eq("partido_id", partido.id);
       }
 
-      // 3. Cambiar el estado del partido a "cancelado"
-      const { error: updateError } = await supabase
-        .from("partidos")
-        .update({ estado: "cancelado" })
-        .eq("id", partido.id);
+      const { error: updateError } = await supabase.from("partidos").update({ estado: "cancelado" }).eq("id", partido.id);
 
       if (updateError) throw updateError;
 
-      // 4. Actualizar la UI localmente
       setPartidosReservados(partidosReservados.filter(p => p.id !== partido.id));
-      alert("✅ Partido cancelado correctamente. Los créditos fueron devueltos a los jugadores.");
+      alert("✅ Partido cancelado correctamente. Los créditos fueron devueltos.");
 
     } catch (error) {
       console.error("Error al cancelar partido:", error);
-      alert("Hubo un error procesando la cancelación y devolución.");
+      alert("Hubo un error procesando la cancelación.");
     } finally {
       setProcesandoCancelacion(null);
     }
   }
 
-  // --- LÓGICA DE SELECCIÓN Y RECORTE DE IMAGEN ---
   const onFileChange = async (e) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
@@ -250,7 +263,6 @@ export default function AdminCanchasDashboard() {
     }
   };
 
-  // --- GUARDAR SEDE EN BASE DE DATOS Y STORAGE ---
   async function guardarSede(e) {
     e.preventDefault();
     setCreando(true);
@@ -340,6 +352,11 @@ export default function AdminCanchasDashboard() {
 
   async function agregarFranja(e) {
     e.preventDefault();
+    if (formFranja.cupos_minimos > formFranja.cupos_maximos) {
+        alert("Los cupos mínimos no pueden ser mayores que los cupos máximos.");
+        return;
+    }
+
     setCreandoFranja(true);
     const { data: nuevaFranja, error } = await supabase
       .from("franjas_horarias")
@@ -349,6 +366,8 @@ export default function AdminCanchasDashboard() {
         hora_inicio: formFranja.hora_inicio,
         hora_fin: formFranja.hora_fin,
         precio_creditos: formFranja.precio_creditos,
+        cupos_minimos: formFranja.cupos_minimos,
+        cupos_maximos: formFranja.cupos_maximos,
       })
       .select()
       .single();
@@ -392,7 +411,6 @@ export default function AdminCanchasDashboard() {
   return (
     <div className="min-h-screen bg-gray-50 pb-24 overflow-x-hidden w-full relative">
       
-      {/* --- MODAL DE RECORTE DE IMAGEN --- */}
       {imageSrc && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col">
           <div className="relative flex-1">
@@ -530,7 +548,7 @@ export default function AdminCanchasDashboard() {
               <span className="bg-[#00FF9D]/10 text-emerald-800 text-xs font-bold px-3 py-1.5 rounded-lg border border-[#00FF9D]/20 self-start md:self-auto shrink-0">Operativa</span>
             </div>
 
-            {/* --- SWITCHER DE VISTAS (HORARIOS vs RESERVAS) --- */}
+            {/* --- SWITCHER DE VISTAS --- */}
             <div className="flex gap-2 bg-gray-200/50 p-1 rounded-xl w-fit">
               <button 
                 onClick={() => setVistaActiva("horarios")}
@@ -551,7 +569,7 @@ export default function AdminCanchasDashboard() {
               </button>
             </div>
 
-            {/* --- VISTA 1: GESTIÓN DE HORARIOS (PLANTILLAS) --- */}
+            {/* --- VISTA 1: GESTIÓN DE HORARIOS --- */}
             {vistaActiva === "horarios" && (
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-6 items-start w-full">
                 <div className="md:col-span-4 min-w-0 bg-white rounded-3xl p-5 md:p-6 shadow-sm border border-gray-100 md:sticky md:top-24 h-fit relative">
@@ -573,14 +591,28 @@ export default function AdminCanchasDashboard() {
                         <input type="time" required value={formFranja.hora_fin} onChange={(e) => setFormFranja({...formFranja, hora_fin: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-sm font-bold text-gray-700 focus:outline-none focus:border-[#00FF9D]" />
                       </div>
                     </div>
+                    
+                    {/* COSTO Y CUPOS REDISEÑADO */}
                     <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Costo Total</label>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1" title="Costo Total de la Cancha">Costo Total (Créditos)</label>
                       <div className="relative">
-                        <input type="number" min="1" required value={formFranja.precio_creditos} onChange={(e) => setFormFranja({...formFranja, precio_creditos: Number(e.target.value)})} className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-3 pr-16 py-2.5 text-sm font-bold text-gray-700 focus:outline-none focus:border-[#00FF9D]" />
+                        <input type="number" min="1" required value={formFranja.precio_creditos} onChange={(e) => setFormFranja({...formFranja, precio_creditos: Number(e.target.value)})} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold text-gray-700 focus:outline-none focus:border-[#00FF9D]" />
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-black text-gray-400 uppercase">créditos</span>
                       </div>
                     </div>
-                    <button disabled={creandoFranja} type="submit" className="w-full mt-2 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-wider rounded-xl py-3 hover:bg-gray-900 disabled:opacity-50 transition-colors text-xs">
+
+                    <div className="grid grid-cols-2 gap-3 w-full mt-1">
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1" title="Mínimo de Jugadores">Cupo Mínimo</label>
+                        <input type="number" min="2" required value={formFranja.cupos_minimos} onChange={(e) => setFormFranja({...formFranja, cupos_minimos: Number(e.target.value)})} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold text-gray-700 focus:outline-none focus:border-[#00FF9D]" />
+                      </div>
+                      <div className="min-w-0">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1" title="Máximo de Jugadores">Cupo Máximo</label>
+                        <input type="number" min="2" required value={formFranja.cupos_maximos} onChange={(e) => setFormFranja({...formFranja, cupos_maximos: Number(e.target.value)})} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold text-gray-700 focus:outline-none focus:border-[#00FF9D]" />
+                      </div>
+                    </div>
+
+                    <button disabled={creandoFranja} type="submit" className="w-full mt-3 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-wider rounded-xl py-3 hover:bg-gray-900 disabled:opacity-50 transition-colors text-xs">
                       {creandoFranja ? "..." : "+ Crear Horario"}
                     </button>
                   </form>
@@ -607,11 +639,14 @@ export default function AdminCanchasDashboard() {
                     ) : (
                       <div className="flex flex-col gap-2">
                         {franjasDelDiaActivo.map((franja) => (
-                          <div key={franja.id} className="group flex items-center justify-between bg-white border border-gray-100 hover:border-[#00FF9D]/50 shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:shadow-md p-3 rounded-xl transition-all gap-2">
+                          <div key={franja.id} className="group flex flex-col sm:flex-row sm:items-center justify-between bg-white border border-gray-100 hover:border-[#00FF9D]/50 shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:shadow-md p-3 rounded-xl transition-all gap-2">
                             <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
-                              <p className="text-base font-black text-gray-800 tabular-nums leading-none">
-                                {formatHora12(franja.hora_inicio)} <span className="text-gray-300 font-medium mx-0.5">-</span> {formatHora12(franja.hora_fin)}
-                              </p>
+                              <div className="flex items-center gap-2">
+                                <p className="text-base font-black text-gray-800 tabular-nums leading-none">
+                                  {formatHora12(franja.hora_inicio)} <span className="text-gray-300 font-medium mx-0.5">-</span> {formatHora12(franja.hora_fin)}
+                                </p>
+                                <span className="text-[10px] text-gray-400 font-bold ml-1 hidden sm:inline-block">({franja.cupos_minimos}-{franja.cupos_maximos} Jugadores)</span>
+                              </div>
                               <span className="text-[10px] font-bold text-[#00FF9D] bg-[#0B0C15] w-fit px-2 py-0.5 rounded uppercase tracking-wide">
                                 {franja.precio_creditos} créditos
                               </span>
@@ -642,7 +677,7 @@ export default function AdminCanchasDashboard() {
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {partidosReservados.map((partido) => {
-                      const jugadoresInscritos = partido.partido_jugadores?.length || 0;
+                      const jugadoresInscritos = partido.inscritos_count || 0;
                       return (
                         <div key={partido.id} className="bg-gray-50 border border-gray-200 rounded-2xl p-5 flex flex-col gap-4 relative overflow-hidden">
                           <div className="absolute top-0 left-0 w-1.5 h-full bg-[#00FF9D]"></div>

@@ -150,7 +150,6 @@ export default function Navbar() {
   return (
     <>
       <nav className="w-full bg-white/90 border-b border-gray-200 sticky top-0 z-50 backdrop-blur-md transition-all shadow-sm">
-        {/* Cambiamos max-w-6xl por max-w-7xl para más espacio horizontal */}
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           
           <div className="flex items-center gap-2 md:gap-4 shrink-0">
@@ -195,7 +194,6 @@ export default function Navbar() {
                   <Link
                     key={href}
                     href={href}
-                    // Agregado whitespace-nowrap y reducidos los px ligeramente
                     className={`whitespace-nowrap px-3 lg:px-4 py-1.5 lg:py-2 rounded-full text-xs lg:text-sm font-semibold transition-all duration-300 ${
                       isActive
                         ? "bg-white text-gray-900 shadow-sm border border-gray-200/50"
@@ -209,7 +207,6 @@ export default function Navbar() {
             </div>
           )}
 
-          {/* Reducido el gap a gap-1.5 lg:gap-2 para compactar */}
           <div className="hidden md:flex items-center gap-1.5 lg:gap-2 shrink-0">
             
             {usuario && seccion === "futbol" && esGerente && (
@@ -224,10 +221,10 @@ export default function Navbar() {
                       router.push("/futbol/admin-canchas");
                     }
                   }}
-                  // Agregado whitespace-nowrap
+                  // CAMBIO 1: El botón de "Mi Cancha" ahora es Verde Esmeralda (como era el admin viejo)
                   className={`whitespace-nowrap px-3 lg:px-4 py-1.5 rounded-full border text-xs font-bold flex items-center gap-1 transition-colors ${
                     esDuenoCancha 
-                    ? "bg-[#0B0C15] border-gray-900 text-[#00FF9D] hover:bg-gray-800"
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
                     : "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
                   }`}
                 >
@@ -254,8 +251,8 @@ export default function Navbar() {
                 <button
                   type="button"
                   onClick={() => {setAdminMenuOpen(!adminMenuOpen); setDuenoMenuOpen(false);}}
-                  // Agregado whitespace-nowrap
-                  className="whitespace-nowrap px-3 lg:px-4 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold hover:bg-emerald-100 flex items-center gap-1 transition-colors"
+                  // CAMBIO 2: El botón de "Admin" ahora es Morado/Violeta
+                  className="whitespace-nowrap px-3 lg:px-4 py-1.5 rounded-full bg-violet-50 border border-violet-200 text-violet-700 text-xs font-bold hover:bg-violet-100 flex items-center gap-1 transition-colors"
                 >
                   Admin
                   <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -281,11 +278,16 @@ export default function Navbar() {
             {usuario ? (
               <>
                 {seccion === "futbol" && (
+                  // CAMBIO 3: Icono de Moneda SVG para los Créditos
                   <Link
                     href="/futbol/creditos"
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-yellow-50 border border-yellow-200 text-yellow-700 text-xs font-bold hover:bg-yellow-100 transition-colors whitespace-nowrap shrink-0"
                   >
-                    <span>{creditos} crd.</span>
+                    <svg className="w-4 h-4 shrink-0 text-yellow-600" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34-.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z" />
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.843c-.391-.015-.776-.11-1.116-.281-.51-.255-.884-.71-.884-1.22a1 1 0 10-2 0c0 1.25-.96 2.38 2.215 2.875A4.535 4.535 0 009 14.908V15a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C13.398 13.766 14 12.991 14 12c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0011 9.092V7.249c.391.015.776.11 1.116.281.51.255.884.71.884 1.22a1 1 0 102 0c0-1.25-.96-2.38-2.215-2.875A4.535 4.535 0 0011 5.092V5z" clipRule="evenodd" />
+                    </svg>
+                    <span>{creditos}</span>
                   </Link>
                 )}
 
@@ -337,7 +339,7 @@ export default function Navbar() {
           </button>
         </div>
 
-        {/* --- MENÚ MÓVIL (Sin cambios) --- */}
+        {/* --- MENÚ MÓVIL --- */}
         {menuOpen && (
           <div className="md:hidden border-t border-gray-200 bg-white px-4 py-4 flex flex-col gap-1.5 shadow-lg absolute w-full left-0 z-50">
             <div className="grid grid-cols-2 gap-2 mb-4 pb-4 border-b border-gray-100">
@@ -365,7 +367,8 @@ export default function Navbar() {
                 <span className="text-xs font-bold text-gray-400 uppercase tracking-wider px-2">Dueños de Canchas</span>
                 <Link 
                   href="/futbol/admin-canchas" 
-                  className={`px-4 py-3 rounded-xl border text-sm font-bold text-center ${esDuenoCancha ? "bg-[#0B0C15] text-[#00FF9D] border-gray-900" : "bg-indigo-50 text-indigo-700 border-indigo-200"}`}
+                  // CAMBIO MENÚ MÓVIL: Verde esmeralda para la cancha
+                  className={`px-4 py-3 rounded-xl border text-sm font-bold text-center ${esDuenoCancha ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-indigo-50 text-indigo-700 border-indigo-200"}`}
                   onClick={() => setMenuOpen(false)}
                 >
                   {esDuenoCancha ? "Gestión de Horarios" : "+ Registrar Cancha"}
@@ -376,7 +379,8 @@ export default function Navbar() {
             {seccion === "futbol" && esAdmin && (
               <div className="flex flex-col gap-2 pt-3 mt-2 border-t border-gray-100">
                 <span className="text-xs font-bold text-gray-400 uppercase tracking-wider px-2">Panel Super Admin</span>
-                <Link href="/futbol/admin" className="px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold text-center" onClick={() => setMenuOpen(false)}>Crear partido</Link>
+                {/* CAMBIO MENÚ MÓVIL: Morado para concordar con el nuevo Admin Desktop */}
+                <Link href="/futbol/admin" className="px-4 py-3 rounded-xl bg-violet-50 border border-violet-200 text-violet-700 text-sm font-bold text-center" onClick={() => setMenuOpen(false)}>Crear partido</Link>
                 <Link href="/futbol/admin/pagos" className="px-4 py-3 rounded-xl bg-sky-50 border border-sky-200 text-sky-700 text-sm font-bold text-center" onClick={() => setMenuOpen(false)}>Pagos</Link>
                 <Link href="/futbol/admin/Logros" className="px-4 py-3 rounded-xl bg-violet-50 border border-violet-200 text-violet-700 text-sm font-bold text-center" onClick={() => setMenuOpen(false)}>Crear logros</Link>
               </div>
@@ -386,7 +390,13 @@ export default function Navbar() {
               {usuario ? (
                 <>
                   {seccion === "futbol" && (
-                    <Link href="/futbol/creditos" className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-700 text-sm font-bold" onClick={() => setMenuOpen(false)}>{creditos} créditos</Link>
+                    <Link href="/futbol/creditos" className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-700 text-sm font-bold" onClick={() => setMenuOpen(false)}>
+                      <svg className="w-5 h-5 shrink-0 text-yellow-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34-.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z" />
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.843c-.391-.015-.776-.11-1.116-.281-.51-.255-.884-.71-.884-1.22a1 1 0 10-2 0c0 1.25-.96 2.38 2.215 2.875A4.535 4.535 0 009 14.908V15a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C13.398 13.766 14 12.991 14 12c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0011 9.092V7.249c.391.015.776.11 1.116.281.51.255.884.71.884 1.22a1 1 0 102 0c0-1.25-.96-2.38-2.215-2.875A4.535 4.535 0 0011 5.092V5z" clipRule="evenodd" />
+                      </svg>
+                      {creditos}
+                    </Link>
                   )}
                   <Link href="/perfil" className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gray-50 border border-gray-200 text-gray-800 text-sm font-bold" onClick={() => setMenuOpen(false)}>
                     Mi cuenta
