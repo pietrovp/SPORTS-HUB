@@ -34,6 +34,21 @@ const LABELS = {
     ajustada: "Ajustada",
     rechazada: "Rechazada",
   },
+  mano_habil: {
+    derecha: "Derecha",
+    izquierda: "Izquierda",
+    ambidiestro: "Ambidiestro",
+    Derecha: "Derecha",
+    Izquierda: "Izquierda",
+  },
+  posicion: {
+    drive: "Drive",
+    reves: "Revés",
+    ambos: "Ambos lados",
+    Drive: "Drive",
+    Revés: "Revés",
+    reves: "Revés",
+  },
 };
 
 function cx(...classes) {
@@ -100,24 +115,92 @@ function EstadoBadge({ estado }) {
   );
 }
 
+function CounterCard({ title, value, tone = "slate" }) {
+  const tones = {
+    slate: "border-slate-200 bg-white text-slate-950",
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    sky: "border-sky-200 bg-sky-50 text-sky-900",
+    rose: "border-rose-200 bg-rose-50 text-rose-900",
+  };
+
+  return (
+    <div className={cx("rounded-3xl border p-5", tones[tone] || tones.slate)}>
+      <p className="text-xs uppercase tracking-[0.18em] opacity-70">{title}</p>
+      <p className="mt-3 text-3xl font-black">{value}</p>
+    </div>
+  );
+}
+
 export default function AdminCategoriasPage() {
   const [loading, setLoading] = useState(true);
-  const [savingId, setSavingId] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   const [rows, setRows] = useState([]);
+  const [savingId, setSavingId] = useState(null);
   const [mensaje, setMensaje] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("pendiente");
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    cargarSolicitudes();
+    validarAcceso();
   }, []);
+
+  async function validarAcceso() {
+    try {
+      setLoading(true);
+      setMensaje("");
+      setErrorMsg("");
+
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError) throw authError;
+
+      if (!user) {
+        setAuthChecked(true);
+        setIsAdmin(false);
+        setLoading(false);
+        return;
+      }
+
+      setCurrentUser(user);
+
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("id, nombre, email, is_admin")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profileError) throw profileError;
+
+      if (!profile?.is_admin) {
+        setAuthChecked(true);
+        setIsAdmin(false);
+        setLoading(false);
+        return;
+      }
+
+      setIsAdmin(true);
+      setAuthChecked(true);
+      await cargarSolicitudes();
+    } catch (error) {
+      console.error(error);
+      setErrorMsg(error.message || "No se pudo validar el acceso.");
+      setAuthChecked(true);
+      setIsAdmin(false);
+      setLoading(false);
+    }
+  }
 
   async function cargarSolicitudes() {
     try {
-      setLoading(true);
-      setErrorMsg("");
       setMensaje("");
+      setErrorMsg("");
 
       const { data, error } = await supabase
         .from("padel_profiles")
@@ -130,15 +213,24 @@ export default function AdminCategoriasPage() {
           categoria_solicitada,
           categoria_oficial,
           estado_categoria,
+          categoria_revision_admin,
           categoria_comentario_admin,
           categoria_revisada_at,
+          categoria_revisada_por,
           created_at,
           posicion,
+          posicion_preferida,
           mano_habil,
+          rating,
+          partidos_jugados,
+          victorias,
+          derrotas,
           profiles:profiles!padel_profiles_id_fkey (
             id,
             nombre,
-            username
+            apellido,
+            email,
+            is_admin
           )
         `)
         .order("created_at", { ascending: false });
@@ -155,16 +247,17 @@ export default function AdminCategoriasPage() {
           item.categoria_oficial || item.categoria || item.nivel,
           nivelBase
         );
+        const estado = normalizeEstado(item.estado_categoria);
 
         return {
           ...item,
           nivel_base: nivelBase,
           categoria_solicitada: categoriaSolicitada,
           categoria_oficial: categoriaOficial,
-          estado_categoria: normalizeEstado(item.estado_categoria),
+          estado_categoria: estado,
           categoria_comentario_admin: item.categoria_comentario_admin || "",
           draft_categoria_oficial: categoriaOficial,
-          draft_estado_categoria: normalizeEstado(item.estado_categoria),
+          draft_estado_categoria: estado,
           draft_comentario: item.categoria_comentario_admin || "",
         };
       });
@@ -180,6 +273,13 @@ export default function AdminCategoriasPage() {
 
   function patchRow(id, patch) {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  }
+
+  function aprobarDirecto(row) {
+    patchRow(row.id, {
+      draft_categoria_oficial: row.categoria_solicitada,
+      draft_estado_categoria: "aprobada",
+    });
   }
 
   async function guardarRevision(row) {
@@ -198,6 +298,8 @@ export default function AdminCategoriasPage() {
       const payload = {
         categoria_oficial: categoriaFinal,
         estado_categoria: estadoFinal,
+        categoria_revision_admin: currentUser?.id || null,
+        categoria_revisada_por: currentUser?.id || null,
         categoria_comentario_admin: row.draft_comentario?.trim() || null,
         categoria_revisada_at: new Date().toISOString(),
       };
@@ -212,9 +314,10 @@ export default function AdminCategoriasPage() {
       if (error) throw error;
 
       patchRow(row.id, {
-        ...row,
         categoria_oficial: data.categoria_oficial,
         estado_categoria: data.estado_categoria,
+        categoria_revision_admin: data.categoria_revision_admin,
+        categoria_revisada_por: data.categoria_revisada_por,
         categoria_comentario_admin: data.categoria_comentario_admin || "",
         categoria_revisada_at: data.categoria_revisada_at,
         draft_categoria_oficial: data.categoria_oficial,
@@ -231,36 +334,31 @@ export default function AdminCategoriasPage() {
     }
   }
 
-  function aprobarDirecto(row) {
-    patchRow(row.id, {
-      draft_categoria_oficial: row.categoria_solicitada,
-      draft_estado_categoria: "aprobada",
-    });
-  }
-
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       const estadoOk = filtroEstado === "todos" ? true : row.estado_categoria === filtroEstado;
 
-      const nombre =
-        row?.profiles?.nombre ||
-        row?.profiles?.username ||
-        row?.cuenta_id ||
-        row?.id ||
-        "";
+      const nombreCompleto = [
+        row?.profiles?.nombre,
+        row?.profiles?.apellido,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      const bag = [
+        nombreCompleto,
+        row?.profiles?.email,
+        row?.id,
+        row?.cuenta_id,
+        row?.nivel_base,
+        row?.categoria_solicitada,
+        row?.categoria_oficial,
+      ]
+        .filter(Boolean)
+        .map((v) => String(v).toLowerCase());
 
       const q = search.trim().toLowerCase();
-      const searchOk = !q
-        ? true
-        : [
-            nombre,
-            row.id,
-            row.categoria_solicitada,
-            row.categoria_oficial,
-            row.nivel_base,
-          ]
-            .filter(Boolean)
-            .some((value) => String(value).toLowerCase().includes(q));
+      const searchOk = !q ? true : bag.some((value) => value.includes(q));
 
       return estadoOk && searchOk;
     });
@@ -276,6 +374,32 @@ export default function AdminCategoriasPage() {
     };
   }, [rows]);
 
+  if (!loading && authChecked && !isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-10">
+        <div className="mx-auto max-w-xl rounded-[28px] border border-rose-200 bg-white p-8 text-center shadow-sm">
+          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-rose-600">
+            Acceso restringido
+          </p>
+          <h1 className="mt-3 text-2xl font-black text-slate-950">
+            No tienes permisos de administrador
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-slate-500">
+            Esta sección está disponible solo para usuarios marcados como admin en tu perfil.
+          </p>
+          <div className="mt-6">
+            <Link
+              href="/padel"
+              className="inline-flex items-center justify-center rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+            >
+              Volver a pádel
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-6">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -288,8 +412,8 @@ export default function AdminCategoriasPage() {
               Revisión de categorías
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-500">
-              Revisa solicitudes, aprueba categorías o ajusta el nivel competitivo oficial de
-              cada jugador.
+              Revisa solicitudes pendientes, aprueba categorías o ajusta la categoría oficial
+              usada por los partidos de pádel.
             </p>
           </div>
 
@@ -324,59 +448,40 @@ export default function AdminCategoriasPage() {
         ) : null}
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded-3xl border border-slate-200 bg-white p-5">
-            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Total</p>
-            <p className="mt-3 text-3xl font-black text-slate-950">{counters.total}</p>
-          </div>
-          <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5">
-            <p className="text-xs uppercase tracking-[0.18em] text-amber-700">Pendientes</p>
-            <p className="mt-3 text-3xl font-black text-amber-900">{counters.pendiente}</p>
-          </div>
-          <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
-            <p className="text-xs uppercase tracking-[0.18em] text-emerald-700">Aprobadas</p>
-            <p className="mt-3 text-3xl font-black text-emerald-900">{counters.aprobada}</p>
-          </div>
-          <div className="rounded-3xl border border-sky-200 bg-sky-50 p-5">
-            <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Ajustadas</p>
-            <p className="mt-3 text-3xl font-black text-sky-900">{counters.ajustada}</p>
-          </div>
-          <div className="rounded-3xl border border-rose-200 bg-rose-50 p-5">
-            <p className="text-xs uppercase tracking-[0.18em] text-rose-700">Rechazadas</p>
-            <p className="mt-3 text-3xl font-black text-rose-900">{counters.rechazada}</p>
-          </div>
+          <CounterCard title="Total" value={counters.total} tone="slate" />
+          <CounterCard title="Pendientes" value={counters.pendiente} tone="amber" />
+          <CounterCard title="Aprobadas" value={counters.aprobada} tone="emerald" />
+          <CounterCard title="Ajustadas" value={counters.ajustada} tone="sky" />
+          <CounterCard title="Rechazadas" value={counters.rechazada} tone="rose" />
         </section>
 
         <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-4 lg:grid-cols-[220px,1fr]">
-            <div>
-              <label className="space-y-2">
-                <span className="text-sm font-semibold text-slate-700">Filtrar por estado</span>
-                <select
-                  value={filtroEstado}
-                  onChange={(e) => setFiltroEstado(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
-                >
-                  <option value="todos">Todos</option>
-                  <option value="pendiente">Pendiente</option>
-                  <option value="aprobada">Aprobada</option>
-                  <option value="ajustada">Ajustada</option>
-                  <option value="rechazada">Rechazada</option>
-                </select>
-              </label>
-            </div>
+            <label className="space-y-2">
+              <span className="text-sm font-semibold text-slate-700">Filtrar por estado</span>
+              <select
+                value={filtroEstado}
+                onChange={(e) => setFiltroEstado(e.target.value)}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
+              >
+                <option value="todos">Todos</option>
+                <option value="pendiente">Pendiente</option>
+                <option value="aprobada">Aprobada</option>
+                <option value="ajustada">Ajustada</option>
+                <option value="rechazada">Rechazada</option>
+              </select>
+            </label>
 
-            <div>
-              <label className="space-y-2">
-                <span className="text-sm font-semibold text-slate-700">Buscar jugador</span>
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Nombre, id, categoría..."
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
-                />
-              </label>
-            </div>
+            <label className="space-y-2">
+              <span className="text-sm font-semibold text-slate-700">Buscar jugador</span>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Nombre, email, id, categoría..."
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
+              />
+            </label>
           </div>
         </section>
 
@@ -391,12 +496,14 @@ export default function AdminCategoriasPage() {
             </div>
           ) : (
             filteredRows.map((row) => {
-              const nombre =
-                row?.profiles?.nombre ||
-                row?.profiles?.username ||
-                row?.cuenta_id ||
-                row?.id;
+              const nombreCompleto = [
+                row?.profiles?.nombre,
+                row?.profiles?.apellido,
+              ]
+                .filter(Boolean)
+                .join(" ");
 
+              const nombre = nombreCompleto || row?.profiles?.email || row?.id;
               const categoriasPermitidas =
                 CATEGORY_OPTIONS[normalizeNivelBase(row.nivel_base)] || CATEGORY_OPTIONS.principiante;
 
@@ -406,7 +513,7 @@ export default function AdminCategoriasPage() {
                   className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm"
                 >
                   <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0 space-y-4">
+                    <div className="min-w-0 flex-1 space-y-4">
                       <div className="flex flex-wrap items-center gap-3">
                         <h2 className="text-xl font-black text-slate-950">{nombre}</h2>
                         <EstadoBadge estado={row.estado_categoria} />
@@ -424,7 +531,7 @@ export default function AdminCategoriasPage() {
 
                         <div className="rounded-2xl bg-slate-50 p-4">
                           <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Solicitada
+                            Categoría solicitada
                           </p>
                           <p className="mt-2 text-lg font-bold text-slate-950">
                             {LABELS.categoria[row.categoria_solicitada] || "Rookies"}
@@ -433,7 +540,7 @@ export default function AdminCategoriasPage() {
 
                         <div className="rounded-2xl bg-slate-50 p-4">
                           <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Oficial actual
+                            Categoría oficial
                           </p>
                           <p className="mt-2 text-lg font-bold text-slate-950">
                             {LABELS.categoria[row.categoria_oficial] || "Rookies"}
@@ -450,8 +557,46 @@ export default function AdminCategoriasPage() {
                         </div>
                       </div>
 
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded-2xl border border-slate-200 p-4">
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                            Email
+                          </p>
+                          <p className="mt-2 break-all text-sm font-semibold text-slate-900">
+                            {row?.profiles?.email || "Sin email"}
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 p-4">
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                            Mano hábil
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-900">
+                            {LABELS.mano_habil[row.mano_habil] || row.mano_habil || "No definida"}
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 p-4">
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                            Posición
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-900">
+                            {LABELS.posicion[row.posicion] || row.posicion || "No definida"}
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 p-4">
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                            Registro
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-slate-900">
+                            PJ {row.partidos_jugados || 0} · V {row.victorias || 0} · D {row.derrotas || 0}
+                          </p>
+                        </div>
+                      </div>
+
                       <div className="text-xs text-slate-400">
-                        ID: {row.id}
+                        ID jugador: {row.id}
                       </div>
                     </div>
 
