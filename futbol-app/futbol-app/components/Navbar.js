@@ -298,7 +298,7 @@ export default function Navbar() {
                   href={seccion === "padel" ? "/padel" : "/futbol/creditos"}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-xs font-black hover:bg-amber-100 transition-colors whitespace-nowrap shrink-0 shadow-sm"
                 >
-                  {/* NUEVO ICONO SVG DE TOKENS */}
+                  {/* ICONO SVG DE TOKENS */}
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 shrink-0 text-amber-500 drop-shadow-sm">
                     <path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2m0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8" />
                     <path d="m16.6 11.39-2.77-1.23-1.23-2.77a.68.68 0 0 0-.6-.4c-.27-.02-.5.15-.61.39l-1.23 2.67-2.78 1.34c-.23.11-.38.35-.38.61s.16.49.4.6l2.77 1.23 1.23 2.77a.663.663 0 0 0 1.22 0l1.23-2.77 2.77-1.23c.24-.11.4-.35.4-.61s-.16-.5-.4-.61Z" />
@@ -306,7 +306,7 @@ export default function Navbar() {
                   <span>{creditos}</span>
                 </Link>
 
-                {/* Avatar Desktop / Mobile Dropdown */}
+                {/* Avatar Desktop / Mobile Dropdown (Único menú móvil para usuarios logueados) */}
                 <div className="relative">
                   <button
                     onClick={() => setMenuOpen(!menuOpen)}
@@ -394,22 +394,24 @@ export default function Navbar() {
               </Link>
             )}
 
-            {/* BOTÓN HAMBURGUESA (MÓVIL) */}
-            <button
-              className="md:hidden p-2 text-gray-500 hover:text-gray-900 focus:outline-none shrink-0"
-              onClick={() => setMenuOpen(!menuOpen)}
-            >
-              {menuOpen ? (
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-              ) : (
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
-              )}
-            </button>
+            {/* BOTÓN HAMBURGUESA EXTRA (SOLO PARA USUARIOS NO LOGUEADOS EN MÓVIL) */}
+            {!usuario && (
+              <button
+                className="md:hidden p-2 text-gray-500 hover:text-gray-900 focus:outline-none shrink-0"
+                onClick={() => setMenuOpen(!menuOpen)}
+              >
+                {menuOpen ? (
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                ) : (
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+                )}
+              </button>
+            )}
           </div>
         </div>
 
         {/* ==================================================== */}
-        {/* SUB-MENÚ MÓVIL (LAS PASTILLITAS ARRIBA BLINDADAS)    */}
+        {/* SUB-MENÚ MÓVIL (PASTILLAS DE NAVEGACIÓN RÁPIDA)      */}
         {/* ==================================================== */}
         {mainNav.length > 0 && (
           <div className="md:hidden w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
