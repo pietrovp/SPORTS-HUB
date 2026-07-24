@@ -30,8 +30,8 @@ const NAV_POR_DEPORTE = {
     nombre: "Pádel",
     items: [
       { href: "/padel", label: "Inicio" },
-      { href: "/padel/partidos", label: "Partidos" }, // <-- AGREGADO
-      { href: "/padel/clubes", label: "Clubes" },     // <-- AGREGADO
+      { href: "/padel/partidos", label: "Partidos" },
+      { href: "/padel/clubes", label: "Clubes" },
       { href: "/padel/perfil", label: "Mis estadísticas" },
     ],
   },
@@ -224,7 +224,8 @@ export default function Navbar() {
           {/* Iconos a la derecha y Menú Hamburguesa */}
           <div className="flex items-center gap-2 lg:gap-2 shrink-0">
             
-            {usuario && esGerente && (
+            {/* Mi Cancha solo aparece en Fútbol */}
+            {usuario && seccion === "futbol" && esGerente && (
               <div className="relative hidden md:block">
                 <button
                   type="button"
@@ -233,7 +234,7 @@ export default function Navbar() {
                       setDuenoMenuOpen(!duenoMenuOpen);
                       setAdminMenuOpen(false);
                     } else {
-                      router.push(seccion === "padel" ? "/padel/admin-canchas" : "/futbol/admin-canchas");
+                      router.push("/futbol/admin-canchas");
                     }
                   }}
                   className={`whitespace-nowrap px-3 lg:px-4 py-1.5 rounded-full border text-xs font-bold flex items-center gap-1 transition-colors ${
@@ -252,7 +253,7 @@ export default function Navbar() {
 
                 {duenoMenuOpen && esDuenoCancha && (
                   <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-lg text-xs z-50 overflow-hidden">
-                    <Link href={seccion === "padel" ? "/padel/admin-canchas" : "/futbol/admin-canchas"} className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700" onClick={() => setDuenoMenuOpen(false)}>
+                    <Link href="/futbol/admin-canchas" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700" onClick={() => setDuenoMenuOpen(false)}>
                       Gestión de Horarios
                     </Link>
                   </div>
@@ -260,6 +261,7 @@ export default function Navbar() {
               </div>
             )}
 
+            {/* Admin global para Pádel y Fútbol */}
             {esAdmin && (
               <div className="relative hidden md:block">
                 <button
@@ -296,8 +298,10 @@ export default function Navbar() {
                   href={seccion === "padel" ? "/padel" : "/futbol/creditos"}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-xs font-black hover:bg-amber-100 transition-colors whitespace-nowrap shrink-0 shadow-sm"
                 >
+                  {/* NUEVO ICONO SVG DE TOKENS */}
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 shrink-0 text-amber-500 drop-shadow-sm">
-                    <path fillRule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25ZM9 7.5A.75.75 0 0 0 9 9h1.5v.75a.75.75 0 0 0 1.5 0V9h1.5a.75.75 0 0 0 0-1.5H9Zm4.5 6a.75.75 0 0 0 0-1.5h-1.5v-.75a.75.75 0 0 0-1.5 0v.75H9a.75.75 0 0 0 0 1.5h4.5Zm-4.5 3a.75.75 0 0 0 0 1.5h1.5v.75a.75.75 0 0 0 1.5 0v-.75h1.5a.75.75 0 0 0 0-1.5H9Z" clipRule="evenodd" />
+                    <path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2m0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8" />
+                    <path d="m16.6 11.39-2.77-1.23-1.23-2.77a.68.68 0 0 0-.6-.4c-.27-.02-.5.15-.61.39l-1.23 2.67-2.78 1.34c-.23.11-.38.35-.38.61s.16.49.4.6l2.77 1.23 1.23 2.77a.663.663 0 0 0 1.22 0l1.23-2.77 2.77-1.23c.24-.11.4-.35.4-.61s-.16-.5-.4-.61Z" />
                   </svg>
                   <span>{creditos}</span>
                 </Link>
@@ -334,10 +338,11 @@ export default function Navbar() {
                         </div>
                       </div>
 
-                      {esGerente && (
+                      {/* Mi Cancha solo aparece en Fútbol (Móvil) */}
+                      {seccion === "futbol" && esGerente && (
                         <div className="md:hidden border-b border-gray-100">
                           <Link 
-                            href={seccion === "padel" ? "/padel/admin-canchas" : "/futbol/admin-canchas"}
+                            href="/futbol/admin-canchas"
                             className="block px-4 py-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-50" 
                             onClick={() => setMenuOpen(false)}
                           >
