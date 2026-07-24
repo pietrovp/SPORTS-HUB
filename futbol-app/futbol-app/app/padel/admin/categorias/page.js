@@ -282,47 +282,57 @@ export default function AdminCategoriasPage() {
     });
   }
 
-  async function guardarRevision(row) {
+    async function guardarRevision(row) {
     try {
       setSavingId(row.id);
       setMensaje("");
       setErrorMsg("");
 
-      const categoriaFinal = normalizeCategoria(row.draft_categoria_oficial, row.nivel_base);
-      let estadoFinal = normalizeEstado(row.draft_estado_categoria);
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-      if (estadoFinal === "aprobada" && categoriaFinal !== row.categoria_solicitada) {
-        estadoFinal = "ajustada";
+      if (sessionError || !session) {
+        setErrorMsg("No se pudo obtener la sesión.");
+        setSavingId(null);
+        return;
       }
 
-      const payload = {
-        categoria_oficial: categoriaFinal,
-        estado_categoria: estadoFinal,
-        categoria_revision_admin: currentUser?.id || null,
-        categoria_revisada_por: currentUser?.id || null,
-        categoria_comentario_admin: row.draft_comentario?.trim() || null,
-        categoria_revisada_at: new Date().toISOString(),
+      const body = {
+        padelProfileId: row.id,
+        categoria_oficial: row.draft_categoria_oficial,
+        estado_categoria: row.draft_estado_categoria,
+        categoria_comentario_admin: row.draft_comentario?.trim() || "",
       };
 
-      const { data, error } = await supabase
-        .from("padel_profiles")
-        .update(payload)
-        .eq("id", row.id)
-        .select()
-        .single();
+      const res = await fetch("/api/admin/padel/categorias/revisar", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(body),
+      });
 
-      if (error) throw error;
+      const result = await res.json();
+
+      if (!res.ok) {
+        throw new Error(result.error || "No se pudo guardar la revisión.");
+      }
+
+      const updated = result.data;
 
       patchRow(row.id, {
-        categoria_oficial: data.categoria_oficial,
-        estado_categoria: data.estado_categoria,
-        categoria_revision_admin: data.categoria_revision_admin,
-        categoria_revisada_por: data.categoria_revisada_por,
-        categoria_comentario_admin: data.categoria_comentario_admin || "",
-        categoria_revisada_at: data.categoria_revisada_at,
-        draft_categoria_oficial: data.categoria_oficial,
-        draft_estado_categoria: data.estado_categoria,
-        draft_comentario: data.categoria_comentario_admin || "",
+        categoria_oficial: updated.categoria_oficial,
+        estado_categoria: updated.estado_categoria,
+        categoria_revision_admin: updated.categoria_revision_admin,
+        categoria_revisada_por: updated.categoria_revisada_por,
+        categoria_comentario_admin: updated.categoria_comentario_admin || "",
+        categoria_revisada_at: updated.categoria_revisada_at,
+        draft_categoria_oficial: updated.categoria_oficial,
+        draft_estado_categoria: updated.estado_categoria,
+        draft_comentario: updated.categoria_comentario_admin || "",
       });
 
       setMensaje("Revisión guardada correctamente.");
@@ -333,7 +343,6 @@ export default function AdminCategoriasPage() {
       setSavingId(null);
     }
   }
-
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       const estadoOk = filtroEstado === "todos" ? true : row.estado_categoria === filtroEstado;
