@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../../lib/supabaseClient";
 
-// Categorías oficiales
 const CATEGORIAS = ["Rookies", "7ma", "6ta", "5ta", "4ta", "3era", "2da", "Open"];
 
 function formatHora12(hora24) {
@@ -21,7 +20,7 @@ export default function PadelClubsPage() {
   const [clubs, setClubs] = useState([]);
   const [matches, setMatches] = useState([]);
   const [user, setUser] = useState(null);
-  const [userPadelProfile, setUserPadelProfile] = useState(null);
+  const [userCreditos, setUserCreditos] = useState(0);
 
   // Estados de Interacción
   const [search, setSearch] = useState("");
@@ -30,12 +29,12 @@ export default function PadelClubsPage() {
     new Date().toISOString().split("T")[0]
   );
 
-  // Modal para Crear / Configurar Partido (Regla del Primer Jugador)
-  const [slotSeleccionado, setSlotSeleccionado] = useState(null); // { court, time }
+  // Modal para Crear / Configurar Partido
+  const [slotSeleccionado, setSlotSeleccionado] = useState(null); // { court, time, price }
   const [modalConfigOpen, setModalConfigOpen] = useState(false);
   const [procesando, setProcesando] = useState(false);
 
-  // Formulario de Configuración de Partido Abierto
+  // Formulario de Configuración de Partido
   const [formMatch, setFormMatch] = useState({
     tipo_acceso: "abierto", // 'abierto' | 'privado'
     tipo_partido: "competitivo", // 'competitivo' | 'amistoso'
@@ -54,24 +53,34 @@ export default function PadelClubsPage() {
       setUser(authUser);
 
       if (authUser) {
-        const { data: pProfile } = await supabase
-          .from("padel_profiles")
-          .select("*")
+        // Cargar créditos del perfil global
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("creditos")
           .eq("id", authUser.id)
           .maybeSingle();
-        setUserPadelProfile(pProfile);
+
+        setUserCreditos(profileData?.creditos ?? 0);
+
+        // Cargar categoría de pádel para pre-seleccionarla
+        const { data: pProfile } = await supabase
+          .from("padel_profiles")
+          .select("categoria_oficial")
+          .eq("id", authUser.id)
+          .maybeSingle();
+
         if (pProfile?.categoria_oficial) {
           setFormMatch((prev) => ({ ...prev, categoria_permitida: pProfile.categoria_oficial }));
         }
       }
 
-      // Cargar Clubes con sus canchas
+      // Cargar Clubes y Partidos
       const [{ data: clubsData }, { data: matchesData }] = await Promise.all([
         supabase
           .from("padel_clubs")
           .select(`
             id, name, slug, city, address, image_url, is_active,
-            courts:padel_courts ( id, name, court_type, surface_type, is_active )
+            courts:padel_courts ( id, name, court_type, surface_type, is_active, price_credits )
           `)
           .eq("is_active", true),
 
@@ -79,7 +88,7 @@ export default function PadelClubsPage() {
           .from("padel_matches")
           .select(`
             id, status, match_type, scheduled_at, club_id, court_id,
-            category_restriction, gender_restriction, is_competitive,
+            category_restriction, gender_restriction, is_competitive, price_per_player,
             players:padel_match_players ( user_id, team )
           `)
       ]);
@@ -93,7 +102,6 @@ export default function PadelClubsPage() {
     }
   }
 
-  // Filtrar clubes por búsqueda
   const clubesFiltrados = useMemo(() => {
     return clubs.filter(
       (c) =>
@@ -102,26 +110,56 @@ export default function PadelClubsPage() {
     );
   }, [clubs, search]);
 
-  // Manejar apertura de Modal para configurar Slot libre
   function abrirConfiguracionSlot(court, hora) {
     if (!user) {
       alert("Debes iniciar sesión para reservar o abrir un partido.");
       return;
     }
-    setSlotSeleccionado({ court, hora });
+    // Precio por defecto de cancha si no está definido en BD = 16 créditos totales
+    const precioTotalCancha = court.price_credits || 16;
+    setSlotSeleccionado({ court, hora, precioTotal: precioTotalCancha });
     setModalConfigOpen(true);
   }
 
-  // Crear Partido Abierto o Reserva
+  // LÓGICA DE PAGO Y CREACIÓN CON CRÉDITOS
   async function confirmarCreacionPartido(e) {
     e.preventDefault();
     if (!slotSeleccionado || !clubSeleccionado || procesando) return;
+
+    // Calcular costo en créditos
+    const esPrivado = formMatch.tipo_acceso === "privado";
+    const costoTotalCancha = slotSeleccionado.precioTotal;
+    const costoIndividual = Math.ceil(costoTotalCancha / 4);
+    const costoAPagar = esPrivado ? costoTotalCancha : costoIndividual;
+
+    // Verificar si el usuario tiene saldo suficiente
+    if (userCreditos < costoAPagar) {
+      alert(`⚠️ Saldo insuficiente. Esta acción requiere ${costoAPagar} créditos y tienes ${userCreditos}. Recarga créditos en tu cuenta.`);
+      return;
+    }
 
     try {
       setProcesando(true);
       const fechaHoraSchedule = `${fechaSeleccionada}T${slotSeleccionado.hora}:00`;
 
-      // 1. Insertar partido
+      // 1. Descontar Créditos del Usuario
+      const nuevoSaldo = userCreditos - costoAPagar;
+      const { error: balanceError } = await supabase
+        .from("profiles")
+        .update({ creditos: nuevoSaldo })
+        .eq("id", user.id);
+
+      if (balanceError) throw balanceError;
+
+      // 2. Registrar Transacción en el Ledger
+      await supabase.from("credit_ledger").insert({
+        user_id: user.id,
+        delta: -costoAPagar,
+        reason: esPrivado ? "reserva_privada_padel" : "creacion_partido_abierto_padel",
+        balance_after: nuevoSaldo
+      });
+
+      // 3. Crear Partido en `padel_matches`
       const { data: nuevoPartido, error: matchError } = await supabase
         .from("padel_matches")
         .insert({
@@ -129,10 +167,12 @@ export default function PadelClubsPage() {
           court_id: slotSeleccionado.court.id,
           scheduled_at: fechaHoraSchedule,
           status: "programado",
-          match_type: formMatch.tipo_acceso === "privado" ? "privado" : "abierto",
+          match_type: esPrivado ? "privado" : "abierto",
           category_restriction: formMatch.categoria_permitida,
           gender_restriction: formMatch.genero,
           is_competitive: formMatch.tipo_partido === "competitivo",
+          price_per_player: costoIndividual,
+          total_price: costoTotalCancha,
           created_by: user.id
         })
         .select()
@@ -140,7 +180,7 @@ export default function PadelClubsPage() {
 
       if (matchError) throw matchError;
 
-      // 2. Unir al creador automáticamente como Jugador 1 (Pareja A)
+      // 4. Inscribir al creador como Jugador 1
       const { error: playerError } = await supabase.from("padel_match_players").insert({
         match_id: nuevoPartido.id,
         user_id: user.id,
@@ -150,23 +190,24 @@ export default function PadelClubsPage() {
       if (playerError) throw playerError;
 
       alert(
-        formMatch.tipo_acceso === "privado"
-          ? "✅ Cancha reservada con éxito."
-          : "🎉 ¡Partido Abierto creado! Eres el primer jugador en la pista."
+        esPrivado
+          ? `✅ Reserva privada confirmada (-${costoAPagar} créditos).`
+          : `🎉 ¡Partido abierto publicado! Tu cupo quedó apartado (-${costoAPagar} créditos).`
       );
 
+      setUserCreditos(nuevoSaldo);
       setModalConfigOpen(false);
       setSlotSeleccionado(null);
       await cargarDatos();
     } catch (error) {
-      console.error(error);
-      alert("Error al crear la reserva o partido.");
+      console.error("Error al procesar reserva:", error);
+      alert("Ocurrió un error al procesar la reserva. Intenta de nuevo.");
     } finally {
       setProcesando(false);
     }
   }
 
-  // Unirse a un partido abierto existente
+  // UNIRSE A PARTIDO EXISTENTE CON CRÉDITOS
   async function unirseAPartido(match) {
     if (!user) {
       alert("Debes iniciar sesión para unirte a un partido.");
@@ -185,23 +226,43 @@ export default function PadelClubsPage() {
       return;
     }
 
+    const costoInscripcion = match.price_per_player || 4;
+    if (userCreditos < costoInscripcion) {
+      alert(`⚠️ Saldo insuficiente. Para unirte necesitas ${costoInscripcion} créditos y tienes ${userCreditos}.`);
+      return;
+    }
+
     try {
       setProcesando(true);
+
+      // 1. Descontar Créditos
+      const nuevoSaldo = userCreditos - costoInscripcion;
+      await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", user.id);
+
+      // 2. Registrar en Ledger
+      await supabase.from("credit_ledger").insert({
+        user_id: user.id,
+        match_id: match.id,
+        delta: -costoInscripcion,
+        reason: "inscripcion_partido_abierto_padel",
+        balance_after: nuevoSaldo
+      });
+
+      // 3. Unir al equipo disponible (Pareja A o Pareja B)
       const teamAsignado = match.players?.filter((p) => p.team === "A").length < 2 ? "A" : "B";
 
-      const { error } = await supabase.from("padel_match_players").insert({
+      await supabase.from("padel_match_players").insert({
         match_id: match.id,
         user_id: user.id,
         team: teamAsignado
       });
 
-      if (error) throw error;
-
-      alert("🎾 ¡Te has unido al partido correctamente!");
+      alert(`🎾 ¡Inscrito con éxito! Se descontaron ${costoInscripcion} créditos.`);
+      setUserCreditos(nuevoSaldo);
       await cargarDatos();
     } catch (error) {
-      console.error(error);
-      alert("No se pudo completar tu registro al partido.");
+      console.error("Error al unirse:", error);
+      alert("No se pudo procesar la inscripción.");
     } finally {
       setProcesando(false);
     }
@@ -221,7 +282,7 @@ export default function PadelClubsPage() {
     <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
 
-        {/* HEADER GENERAL (SÓLO APARECE SI NO HAY CLUB SELECCIONADO) */}
+        {/* HEADER DIRECTORIO */}
         {!clubSeleccionado && (
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -232,7 +293,7 @@ export default function PadelClubsPage() {
                 Clubes y Canchas
               </h1>
               <p className="text-xs text-slate-500 font-semibold mt-1">
-                Encuentra tu complejo favorito, reserva pistas completas o abre partidos públicos.
+                Reserva canchas completas o únete a partidos abiertos creados por la comunidad.
               </p>
             </div>
 
@@ -248,11 +309,11 @@ export default function PadelClubsPage() {
           </div>
         )}
 
-        {/* SI SELECCIONÓ UN CLUB: CABECERA DEDICADA DEL CLUB Y CANCHAS */}
+        {/* DETALLE DEL CLUB Y CANCHAS */}
         {clubSeleccionado ? (
           <div className="space-y-6">
             
-            {/* CABECERA DEDICADA DEL CLUB (ÚNICA Y MÓVIL-FRIENDLY) */}
+            {/* CABECERA DEDICADA DEL CLUB */}
             <div className="bg-white rounded-3xl p-5 md:p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 md:gap-4 w-full md:w-auto">
@@ -339,7 +400,7 @@ export default function PadelClubsPage() {
                                     : "bg-blue-600 hover:bg-blue-500 text-white shadow-md"
                                 }`}
                               >
-                                {inscritos >= 4 ? "Lleno" : "+ Unirme"}
+                                {inscritos >= 4 ? "Lleno" : `+ Unirme (${matchExistente.price_per_player || 4} cr)`}
                               </button>
                             </div>
                           ) : (
@@ -367,7 +428,7 @@ export default function PadelClubsPage() {
 
           </div>
         ) : (
-          /* VISTA DIRECTORIO DE CLUBES COMPLETO */
+          /* DIRECTORIO DE CLUBES */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {clubesFiltrados.map((club) => {
               const totalCanchas = club.courts?.length || 0;
@@ -417,7 +478,7 @@ export default function PadelClubsPage() {
 
       </div>
 
-      {/* MODAL CONFIGURACIÓN PRIMER JUGADOR */}
+      {/* MODAL CONFIGURACIÓN DE RESERVA CON PRECIO CLARO EN CRÉDITOS */}
       {modalConfigOpen && slotSeleccionado && (
         <div
           className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
@@ -444,6 +505,14 @@ export default function PadelClubsPage() {
             </div>
 
             <form onSubmit={confirmarCreacionPartido} className="space-y-4 text-xs font-bold text-slate-700">
+              
+              {/* Saldo actual del usuario */}
+              <div className="bg-amber-50 border border-amber-200 p-3 rounded-2xl flex justify-between items-center text-amber-900 text-xs">
+                <span>Tu Saldo disponible:</span>
+                <span className="font-black text-amber-800 text-sm">{userCreditos} Créditos</span>
+              </div>
+
+              {/* Opción Reserva Privada vs Partido Abierto */}
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">
                   Modalidad de Reserva
@@ -458,9 +527,14 @@ export default function PadelClubsPage() {
                         : "bg-slate-50 border-slate-200 text-slate-600"
                     }`}
                   >
-                    <span className="font-black">🎾 Partido Abierto</span>
-                    <span className="text-[10px] font-medium text-slate-500 mt-1">
-                      Público. Se unirá gente para completar 4 jugadores.
+                    <div>
+                      <span className="font-black block">🎾 Partido Abierto</span>
+                      <span className="text-[10px] font-medium text-slate-500 mt-1 block">
+                        Pagas solo tu cupo (1/4 de la pista).
+                      </span>
+                    </div>
+                    <span className="mt-2 text-xs font-black text-blue-700">
+                      Coste: {Math.ceil(slotSeleccionado.precioTotal / 4)} cr
                     </span>
                   </button>
 
@@ -473,14 +547,20 @@ export default function PadelClubsPage() {
                         : "bg-slate-50 border-slate-200 text-slate-600"
                     }`}
                   >
-                    <span className="font-black">🔒 Reserva Privada</span>
-                    <span className="text-[10px] font-medium opacity-80 mt-1">
-                      Alquilas la pista entera para tus amigos.
+                    <div>
+                      <span className="font-black block">🔒 Cancha Privada</span>
+                      <span className="text-[10px] font-medium opacity-80 mt-1 block">
+                        Alquilas el 100% de la pista para amigos.
+                      </span>
+                    </div>
+                    <span className="mt-2 text-xs font-black text-emerald-400">
+                      Coste: {slotSeleccionado.precioTotal} cr
                     </span>
                   </button>
                 </div>
               </div>
 
+              {/* Ajustes de Partido Abierto */}
               {formMatch.tipo_acceso === "abierto" && (
                 <>
                   <div>
@@ -565,7 +645,7 @@ export default function PadelClubsPage() {
                   disabled={procesando}
                   className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl text-xs uppercase tracking-wider shadow-lg disabled:opacity-50 transition-colors"
                 >
-                  {procesando ? "Guardando..." : "Confirmar y Publicar"}
+                  {procesando ? "Procesando pago..." : "Confirmar y Pagar"}
                 </button>
               </div>
 
