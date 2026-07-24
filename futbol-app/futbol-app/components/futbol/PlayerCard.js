@@ -78,10 +78,13 @@ const SIZES = {
     posMarginTop: "mt-10",
     avatarMargin: "mt-3 mb-3",
     name: "text-sm",
+    lastName: "text-[10px]",
     nameMargin: "mb-4",
     pad: "px-3 pt-4 pb-5",
     barPad: "py-1.5",
     barText: "text-[11px]",
+    attrValue: "text-[11px]",
+    attrLabel: "text-[9px]",
   },
   md: {
     width: "w-[230px]",
@@ -94,11 +97,14 @@ const SIZES = {
     posGap: "gap-1.5",
     posMarginTop: "mt-11",
     avatarMargin: "my-3",
-    name: "text-sm",
+    name: "text-base",
+    lastName: "text-[12px]",
     nameMargin: "",
     pad: "px-3 pt-4",
     barPad: "py-1.5",
     barText: "text-[11px]",
+    attrValue: "text-sm",
+    attrLabel: "text-[10px]",
   },
   lg: {
     width: "w-[300px]",
@@ -111,11 +117,14 @@ const SIZES = {
     posGap: "gap-1.5",
     posMarginTop: "mt-16",
     avatarMargin: "my-3",
-    name: "text-xl",
+    name: "text-2xl",
+    lastName: "text-base",
     nameMargin: "",
     pad: "px-6 pt-8",
     barPad: "py-2.5",
     barText: "text-sm",
+    attrValue: "text-lg",
+    attrLabel: "text-xs",
   },
 };
 
@@ -132,12 +141,10 @@ function getTier(media) {
 
 function normalizarPosicion(posicion) {
   const p = String(posicion || "").trim().toUpperCase();
-
   if (["POR", "PORTERO", "ARQUERO", "GK"].includes(p)) return "POR";
   if (["DEF", "DEFENSA", "DEFENSOR", "CB", "LB", "RB"].includes(p)) return "DEF";
   if (["MED", "MEDIO", "MEDIOCAMPO", "MEDIOCAMPISTA", "MC", "MCD", "MCO"].includes(p)) return "MED";
   if (["DEL", "DELANTERO", "ATACANTE", "ST", "DC", "FW"].includes(p)) return "DEL";
-
   return "MED";
 }
 
@@ -178,8 +185,7 @@ function Sheen() {
       aria-hidden="true"
       className="pointer-events-none absolute inset-y-0 -left-1/2 w-1/3 animate-sheen motion-reduce:animate-none"
       style={{
-        background:
-          "linear-gradient(75deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%)",
+        background: "linear-gradient(75deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%)",
       }}
     />
   );
@@ -187,6 +193,7 @@ function Sheen() {
 
 export default function PlayerCard({
   nombre = "Jugador",
+  apellido = "",
   posicion = "MED",
   media = 64,
   stats = null,
@@ -196,14 +203,15 @@ export default function PlayerCard({
   size,
 }) {
   const mediaSegura = Number(media) || 0;
-  const nombreSeguro = nombre?.trim() || "Jugador";
-  const posicionSegura = normalizarPosicion(posicion);
+  
+  const nombreMostrar = typeof nombre === "string" ? nombre.trim() : "Jugador";
+  const apellidoMostrar = typeof apellido === "string" ? apellido.trim() : "";
 
+  const posicionSegura = normalizarPosicion(posicion);
   const tier = getTier(mediaSegura);
   const resolvedSize = size || (mini ? "mini" : "md");
   const dims = SIZES[resolvedSize] ?? SIZES.md;
   const isMini = resolvedSize === "mini";
-
   const bandera = nacionalidad ? getFlagEmoji(nacionalidad) : "";
 
   const attrs = [
@@ -232,12 +240,8 @@ export default function PlayerCard({
 
       <div className={`relative flex flex-col items-center ${dims.pad}`}>
         <div className="absolute top-3 left-1/2 -translate-x-1/2 flex flex-col items-center text-center">
-          <span className={`${dims.label} font-bold tracking-[0.2em]`} style={{ color: tier.subText }}>
-            OVR
-          </span>
-          <span className={`${dims.ovr} font-black leading-none`} style={{ color: tier.textColor }}>
-            {mediaSegura}
-          </span>
+          <span className={`${dims.label} font-bold tracking-[0.2em]`} style={{ color: tier.subText }}>OVR</span>
+          <span className={`${dims.ovr} font-black leading-none`} style={{ color: tier.textColor }}>{mediaSegura}</span>
         </div>
 
         <span
@@ -248,47 +252,62 @@ export default function PlayerCard({
           {bandera ? (
             <>
               <span className="opacity-50">|</span>
-              <span
-                className={`${dims.flag} leading-none`}
-                aria-label={String(nacionalidad).toUpperCase()}
-              >
-                {bandera}
-              </span>
+              <span className={`${dims.flag} leading-none`} aria-label={String(nacionalidad).toUpperCase()}>{bandera}</span>
             </>
           ) : null}
         </span>
 
         <div className={dims.avatarMargin}>
-          <Avatar src={avatar} alt={nombreSeguro} size={dims.avatar} />
+          <Avatar src={avatar} alt={nombreMostrar} size={dims.avatar} />
         </div>
 
-        <p
-          className={`text-center ${dims.name} ${dims.nameMargin} font-extrabold leading-tight line-clamp-2 px-1`}
-          style={{ color: tier.textColor }}
-        >
-          {nombreSeguro}
-        </p>
+        {/* NOMBRES Y APELLIDOS */}
+        <div className={`text-center ${dims.nameMargin} flex flex-col items-center px-1 w-full`}>
+          <p className={`${dims.name} font-black leading-none truncate w-full`} style={{ color: tier.textColor }}>
+            {nombreMostrar}
+          </p>
+          {apellidoMostrar !== "" && (
+            <p className={`${dims.lastName} font-medium mt-1 truncate w-full opacity-85`} style={{ color: tier.textColor }}>
+              {apellidoMostrar}
+            </p>
+          )}
+        </div>
 
+        {/* SECCIÓN DE ESTADÍSTICAS CON DIVISORES CRUZADOS */}
         {!isMini && (
-          <div className="mt-3 grid grid-cols-3 gap-x-3 gap-y-2 w-full pb-3">
-            {attrs.map((a) => (
-              <div key={a.label} className="flex items-center justify-center gap-1">
-                <span className={`${dims.attrValue} font-black`} style={{ color: tier.textColor }}>
-                  {a.value ?? "-"}
-                </span>
-                <span className={`${dims.attrLabel} font-semibold opacity-70`} style={{ color: tier.subText }}>
-                  {a.label}
-                </span>
-              </div>
-            ))}
+          <div className="w-full flex flex-col items-center mt-2 pb-2">
+            
+            {/* LÍNEA HORIZONTAL SUPERIOR (Separador del nombre) */}
+            <div 
+              className="w-[85%] h-[1px]" 
+              style={{ backgroundColor: `${tier.textColor}33` }} 
+            />
+
+            {/* GRILLA PERFECTA SIN GAPS PARA QUE LAS LÍNEAS SE CRUCEN */}
+            <div className="grid grid-cols-3 w-[85%]">
+              {attrs.map((a, index) => (
+                <div 
+                  key={a.label} 
+                  className="flex items-center justify-center gap-1.5 py-1.5"
+                  style={{
+                    borderColor: `${tier.textColor}33`,
+                    // Agrega la línea derecha a todas las columnas excepto a la última (índices 2 y 5)
+                    borderRightWidth: index % 3 !== 2 ? "1px" : "0px",
+                    // Agrega la línea inferior solo a la primera fila (índices 0, 1 y 2)
+                    borderBottomWidth: index < 3 ? "1px" : "0px",
+                  }}
+                >
+                  <span className={`${dims.attrValue} font-black`} style={{ color: tier.textColor }}>{a.value ?? "-"}</span>
+                  <span className={`${dims.attrLabel} font-semibold opacity-70`} style={{ color: tier.subText }}>{a.label}</span>
+                </div>
+              ))}
+            </div>
+
           </div>
         )}
       </div>
 
-      <div
-        className={`relative ${dims.barPad} text-center ${dims.barText} font-bold tracking-[0.15em]`}
-        style={{ background: tier.barBg, color: tier.subText }}
-      >
+      <div className={`relative ${dims.barPad} text-center ${dims.barText} font-bold tracking-[0.15em]`} style={{ background: tier.barBg, color: tier.subText }}>
         {tier.label}
       </div>
     </div>

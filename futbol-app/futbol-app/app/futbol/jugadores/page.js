@@ -19,11 +19,11 @@ export default function Jugadores() {
         return;
       }
 
-      // CORRECCIÓN: Ahora pedimos la columna 'rating' que es la que realmente existe en tu base de datos
+      // 🔥 CORRECCIÓN 1: Pedimos el APELLIDO a la tabla profiles
       const { data, error } = await supabase
         .from("futbol_profiles")
         .select(
-          "id, posicion, rating, profiles(nombre, pais, avatar_url)"
+          "id, posicion, rating, profiles(nombre, apellido, pais, avatar_url)"
         );
 
       if (error) {
@@ -34,16 +34,20 @@ export default function Jugadores() {
         return;
       }
 
-      // Mapeamos los datos para que tu componente PlayerCard los entienda igual que antes
-      // Usamos j.rating y se lo pasamos a media_general
-      const dataMapeada = data?.map(j => ({
-        id: j.id,
-        nombre: j.profiles?.nombre || "Jugador",
-        posicion_preferida: j.posicion,
-        media_general: j.rating != null ? j.rating : 65, 
-        avatar_url: j.profiles?.avatar_url,
-        nacionalidad: j.profiles?.pais
-      })) || [];
+      const dataMapeada = data?.map(j => {
+        // Extractor seguro para perfiles
+        const userData = Array.isArray(j.profiles) ? j.profiles[0] : (j.profiles || {});
+
+        return {
+          id: j.id,
+          nombre: userData.nombre || "Jugador",
+          apellido: userData.apellido || "", // 🔥 CORRECCIÓN 2: Extraemos el apellido
+          posicion_preferida: j.posicion,
+          media_general: j.rating != null ? j.rating : 65, 
+          avatar_url: userData.avatar_url,
+          nacionalidad: userData.pais
+        };
+      }) || [];
 
       setJugadores(dataMapeada);
       setCargando(false);
@@ -53,7 +57,10 @@ export default function Jugadores() {
   }, []);
 
   const filtrados = jugadores
-    .filter((j) => j.nombre?.toLowerCase().includes(busqueda.toLowerCase()))
+    .filter((j) => {
+      const nombreCompleto = `${j.nombre || ""} ${j.apellido || ""}`.toLowerCase();
+      return nombreCompleto.includes(busqueda.toLowerCase());
+    })
     .sort((a, b) => {
       const mediaA = a.media_general ?? 0;
       const mediaB = b.media_general ?? 0;
@@ -80,7 +87,7 @@ export default function Jugadores() {
           </span>
           <input
             type="text"
-            placeholder="Buscar jugador por nombre..."
+            placeholder="Buscar jugador por nombre o apellido..."
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
             className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500/20 focus:border-green-500 transition-all"
@@ -126,7 +133,8 @@ export default function Jugadores() {
               >
                 <PlayerCard
                   mini
-                  nombre={j.nombre || "Jugador"}
+                  nombre={j.nombre}
+                  apellido={j.apellido} // 🔥 CORRECCIÓN 3: Pasamos el apellido
                   posicion={j.posicion_preferida || "MED"}
                   media={j.media_general ?? 65}
                   avatar={j.avatar_url || null}

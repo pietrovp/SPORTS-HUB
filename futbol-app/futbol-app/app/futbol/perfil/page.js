@@ -10,7 +10,7 @@ import Link from "next/link";
 import Cropper from "react-easy-crop";
 
 // ==========================================
-// FUNCIONES AUXILIARES PARA EL RECORTE DE AVATAR (1:1)
+// FUNCIONES AUXILIARES
 // ==========================================
 const createImage = (url) =>
   new Promise((resolve, reject) => {
@@ -55,13 +55,19 @@ function formatFechaCorta(fechaStr) {
   return `${d.getDate()} ${meses[d.getMonth()]}`;
 }
 
-function formatHora12(hora24) {
-  if (!hora24) return "";
-  const [h, m] = hora24.split(":");
-  const horas = parseInt(h, 10);
-  const ampm = horas >= 12 ? "PM" : "AM";
-  const h12 = horas % 12 || 12;
-  return `${h12}:${m} ${ampm}`;
+// Cálculo preciso de edad
+function calcularEdad(fechaNacimiento) {
+  if (!fechaNacimiento) return "--";
+  const hoy = new Date();
+  const fechaNac = new Date(fechaNacimiento);
+  if (isNaN(fechaNac.getTime())) return "--";
+  
+  let edad = hoy.getFullYear() - fechaNac.getFullYear();
+  const m = hoy.getMonth() - fechaNac.getMonth();
+  if (m < 0 || (m === 0 && hoy.getDate() < fechaNac.getDate())) {
+    edad--;
+  }
+  return edad >= 0 ? edad : "--";
 }
 
 export default function Perfil() {
@@ -73,7 +79,7 @@ export default function Perfil() {
   const [proximosPartidos, setProximosPartidos] = useState([]);
   const [partidosJugados, setPartidosJugados] = useState([]);
 
-  // ESTADOS DE FILTRO, PAGINACIÓN Y CARGA DE SEGUNDO PLANO
+  // ESTADOS DE FILTRO Y PAGINACIÓN
   const [filtroHistorial, setFiltroHistorial] = useState("todos");
   const [cantidadVisible, setCantidadVisible] = useState(5);
   const [cargandoPartidos, setCargandoPartidos] = useState(true);
@@ -85,6 +91,18 @@ export default function Perfil() {
   const [userId, setUserId] = useState(null);
   const [conSesion, setConSesion] = useState(false);
 
+  // ESTADOS PARA EDITAR EL PERFIL DE FÚTBOL
+  const [editandoPerfil, setEditandoPerfil] = useState(false);
+  const [guardandoPerfil, setGuardandoPerfil] = useState(false);
+  const [editNacionalidad, setEditNacionalidad] = useState("VE");
+  const [editPosicion, setEditPosicion] = useState("MED");
+  const [editPierna, setEditPierna] = useState("Derecha");
+  
+  // FECHA DE NACIMIENTO EN TRES ESTADOS
+  const [editDia, setEditDia] = useState("");
+  const [editMes, setEditMes] = useState("");
+  const [editAno, setEditAno] = useState("");
+
   // ESTADOS DEL CROPPER DE FOTO DE PERFIL
   const [imageSrc, setImageSrc] = useState(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
@@ -95,6 +113,7 @@ export default function Perfil() {
   const [creandoPerfil, setCreandoPerfil] = useState(false);
   const [nacionalidadNueva, setNacionalidadNueva] = useState("VE");
   const [posicionNueva, setPosicionNueva] = useState("MED");
+  const [piernaNueva, setPiernaNueva] = useState("Derecha");
 
   useEffect(() => {
     async function cargar() {
@@ -104,7 +123,6 @@ export default function Perfil() {
           return;
         }
 
-        // 1. Obtenemos el usuario activo
         const { data: { user }, error: userError } = await supabase.auth.getUser();
 
         if (userError || !user) {
@@ -115,40 +133,21 @@ export default function Perfil() {
         setUserId(user.id);
         setConSesion(true);
 
-        // 2. SÚPER CONSULTA PARALELA
-        // Traemos el perfil, los logros, y TODA la información de los partidos (con sus canchas) EN UN SOLO VIAJE.
+        // 1. CARGA DE DATOS BÁSICOS
         const [
           { data: fProfile, error: perfilError },
           { data: logrosCatalogo },
           { data: logrosUsuario },
-          { data: inscripcionesCompletas }
+          { data: misInscripciones }
         ] = await Promise.all([
-          // Petición A: Perfil completo
           supabase
             .from("futbol_profiles")
-            .select("*, profiles(nombre, telefono, pais, avatar_url, creditos)")
+            .select("*, profiles(nombre, apellido, telefono, pais, avatar_url, creditos, fecha_nacimiento)")
             .eq("id", user.id)
             .maybeSingle(),
-            
-          // Petición B: Catálogo de logros
           supabase.from("logros").select("*"),
-          
-          // Petición C: Logros del usuario
           supabase.from("user_logros").select("logro_id").eq("user_id", user.id),
-          
-          // Petición D: El Join mágico (Trae la inscripción + los datos del partido + la imagen de la sede)
-          supabase
-            .from("partido_jugadores")
-            .select(`
-              equipo, 
-              goles, 
-              partido_id,
-              partidos (
-                *,
-                sedes(imagen_url)
-              )
-            `)
-            .eq("user_id", user.id)
+          supabase.from("partido_jugadores").select("partido_id, equipo, goles").eq("user_id", user.id)
         ]);
 
         if (perfilError) {
@@ -157,25 +156,50 @@ export default function Perfil() {
           return;
         }
 
-        // --- PROCESAMIENTO DEL PERFIL ---
+        // PROCESAMIENTO DEL PERFIL
         if (fProfile) {
+          // Asegurarnos de extraer nombre y apellido correctamente incluso si viene en Array
+          const userData = Array.isArray(fProfile.profiles) ? fProfile.profiles[0] : (fProfile.profiles || {});
+
           const p = {
             ...fProfile,
-            nombre: fProfile.profiles?.nombre,
-            telefono: fProfile.profiles?.telefono,
-            nacionalidad: fProfile.profiles?.pais,
-            avatar_url: fProfile.profiles?.avatar_url,
-            creditos: fProfile.profiles?.creditos,
+            nombre: userData.nombre,
+            apellido: userData.apellido, // <--- EXTRACCIÓN SEGURA AQUÍ
+            telefono: userData.telefono,
+            nacionalidad: userData.pais,
+            avatar_url: userData.avatar_url,
+            creditos: userData.creditos,
+            fecha_nacimiento: userData.fecha_nacimiento,
+            edad: calcularEdad(userData.fecha_nacimiento),
             posicion_preferida: fProfile.posicion,
+            pierna_buena: fProfile.pierna_buena || "Derecha",
             goles_total: fProfile.goles || 0,
           };
 
           setPerfil(p);
           
+          setEditNacionalidad(p.nacionalidad || "VE");
+          setEditPosicion(p.posicion_preferida || "MED");
+          setEditPierna(p.pierna_buena || "Derecha");
+          
+          // Dividir la fecha que viene de la base de datos en los 3 selectores
+          if (p.fecha_nacimiento) {
+            const partes = p.fecha_nacimiento.split("-");
+            if (partes.length === 3) {
+              setEditAno(partes[0]);
+              setEditMes(partes[1]);
+              setEditDia(partes[2]);
+            }
+          }
+
           const partidos_jugados = p.partidos_jugados ?? 0;
           const goles_total = p.goles_total ?? 0;
           const victorias = p.victorias ?? 0;
           const derrotas = p.derrotas ?? 0;
+
+          const win_rate = partidos_jugados > 0 
+            ? `${Math.round((victorias / partidos_jugados) * 100)}%` 
+            : "0%";
 
           setStats({
             partidos_jugados,
@@ -190,11 +214,11 @@ export default function Perfil() {
             victorias,
             derrotas,
             promedio_goles: partidos_jugados > 0 ? (goles_total / partidos_jugados).toFixed(2) : "0.00",
-            ratio_vd: derrotas > 0 ? (victorias / derrotas).toFixed(2) : victorias > 0 ? "100%" : "0.00",
+            win_rate,
           });
         }
 
-        // --- PROCESAMIENTO DE LOGROS ---
+        // PROCESAMIENTO DE LOGROS
         const idsDesbloqueados = new Set((logrosUsuario || []).map((d) => d.logro_id));
         setLogros(
           (logrosCatalogo || []).map((l) => ({
@@ -204,55 +228,64 @@ export default function Perfil() {
           }))
         );
 
-        // ¡Apagamos la carga principal instantáneamente!
         setCargando(false);
 
-        // --- PROCESAMIENTO DE PARTIDOS EN MEMORIA (Sin volver a hacer peticiones) ---
-        if (inscripcionesCompletas && inscripcionesCompletas.length > 0) {
-          const proximos = [];
-          const jugados = [];
+        // 2. CARGA DE PARTIDOS
+        if (misInscripciones && misInscripciones.length > 0) {
+          const misPartidoIds = misInscripciones.map(i => i.partido_id);
 
-          // Extraemos todos los IDs de partidos para buscar sus ocupaciones en 1 solo viaje extra y rápido
-          const misPartidoIds = inscripcionesCompletas.map(i => i.partido_id);
-          
-          // Solo hacemos 1 viaje extra rápido para contar los cupos ocupados globales de esos partidos
-          const { data: ocupacionData } = await supabase
+          const [{ data: partidosData }, { data: ocupacionData }] = await Promise.all([
+            supabase
+              .from("partidos")
+              .select("*, sedes(imagen_url)")
+              .in("id", misPartidoIds),
+            supabase
               .from("partido_jugadores")
               .select("partido_id")
-              .in("partido_id", misPartidoIds);
+              .in("partido_id", misPartidoIds)
+          ]);
 
           const conteoPorPartido = {};
           (ocupacionData || []).forEach(row => {
              conteoPorPartido[row.partido_id] = (conteoPorPartido[row.partido_id] || 0) + 1;
           });
 
-          inscripcionesCompletas.forEach((inscripcion) => {
-            const partido = inscripcion.partidos;
-            
-            // Si el partido fue eliminado o cancelado, lo ignoramos
-            if (!partido || partido.estado === "cancelado") return;
+          if (partidosData) {
+            const proximos = [];
+            const jugados = [];
+            const ahora = new Date();
 
-            const partidoObj = {
-              ...partido,
-              mi_equipo: Number(inscripcion.equipo) || null,
-              mis_goles: Number(inscripcion.goles) || 0,
-              cancha: partido.cancha_lugar || partido.titulo || "Cancha",
-              cupos_ocupados: conteoPorPartido[partido.id] || 0
-            };
+            partidosData.forEach((partido) => {
+              const inscripcion = misInscripciones.find(i => String(i.partido_id) === String(partido.id));
+              if (!inscripcion) return;
 
-            if (partido.estado === "finalizado") {
-              jugados.push(partidoObj);
-            } else {
-              proximos.push(partidoObj);
-            }
-          });
+              const est = (partido.estado || "").toLowerCase().trim();
+              if (est === "cancelado" || est === "cancelada") return;
 
-          // Ordenamientos
-          proximos.sort((a, b) => new Date(`${a.fecha}T${a.hora || "00:00:00"}`) - new Date(`${b.fecha}T${b.hora || "00:00:00"}`));
-          jugados.sort((a, b) => new Date(`${b.fecha}T${b.hora || "00:00:00"}`) - new Date(`${a.fecha}T${a.hora || "00:00:00"}`));
-          
-          setProximosPartidos(proximos);
-          setPartidosJugados(jugados);
+              const partidoObj = {
+                ...partido,
+                mi_equipo: Number(inscripcion.equipo) || null,
+                mis_goles: Number(inscripcion.goles) || 0,
+                cancha: partido.cancha_lugar || partido.titulo || "Cancha",
+                cupos_ocupados: conteoPorPartido[partido.id] || 0
+              };
+
+              const fechaHoraPartido = new Date(`${partido.fecha}T${partido.hora || "00:00:00"}`);
+              const esPasado = fechaHoraPartido < ahora;
+
+              if (est === "finalizado" || est === "terminado" || est === "completado" || est === "jugado" || esPasado) {
+                jugados.push(partidoObj);
+              } else {
+                proximos.push(partidoObj);
+              }
+            });
+
+            proximos.sort((a, b) => new Date(`${a.fecha}T${a.hora || "00:00:00"}`) - new Date(`${b.fecha}T${b.hora || "00:00:00"}`));
+            jugados.sort((a, b) => new Date(`${b.fecha}T${b.hora || "00:00:00"}`) - new Date(`${a.fecha}T${a.hora || "00:00:00"}`));
+
+            setProximosPartidos(proximos);
+            setPartidosJugados(jugados);
+          }
         }
         
         setCargandoPartidos(false);
@@ -268,7 +301,6 @@ export default function Perfil() {
     cargar();
   }, []);
 
-  // SELECCIONAR IMAGEN Y ABRIR CROPPER
   const onFileChange = (e) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
@@ -290,7 +322,6 @@ export default function Perfil() {
     setCroppedAreaPixels(croppedAreaPixels);
   }, []);
 
-  // GUARDAR RECORTE DE FOTO Y SUBIR A SUPABASE
   const guardarFotoRecortada = async () => {
     try {
       setSubiendoFoto(true);
@@ -316,9 +347,10 @@ export default function Perfil() {
 
       setPerfil((prev) => ({ ...prev, avatar_url }));
       setMensajeFoto("¡Foto de perfil actualizada!");
+      setTimeout(() => setMensajeFoto(""), 3000);
     } catch (error) {
       console.error("Error al recortar/subir foto:", error);
-      setMensajeFoto("Ocurrió un error al actualizar la foto.");
+      setMensajeFoto(`Error: ${error.message || "Verifica políticas RLS del bucket avatars"}`);
     } finally {
       setSubiendoFoto(false);
     }
@@ -334,6 +366,7 @@ export default function Perfil() {
     const { error } = await supabase.from("futbol_profiles").upsert({
       id: userId,
       posicion: posicionNueva,
+      pierna_buena: piernaNueva,
     });
 
     setCreandoPerfil(false);
@@ -346,7 +379,57 @@ export default function Perfil() {
     window.location.reload();
   }
 
-  // LÓGICA DE PROCESAMIENTO, FILTRADO Y PAGINACIÓN DEL HISTORIAL
+  async function actualizarPerfilFutbol() {
+    if (!supabase || !userId) return;
+    setGuardandoPerfil(true);
+
+    let fechaNacCombinada = null;
+    if (editAno && editMes && editDia) {
+      fechaNacCombinada = `${editAno}-${editMes}-${editDia}`;
+    }
+
+    try {
+      const { error: errorProfile } = await supabase
+        .from("profiles")
+        .update({ 
+          pais: editNacionalidad,
+          fecha_nacimiento: fechaNacCombinada
+        })
+        .eq("id", userId);
+
+      if (errorProfile) throw errorProfile;
+
+      const { error: errorFutbol } = await supabase
+        .from("futbol_profiles")
+        .update({ 
+          posicion: editPosicion,
+          pierna_buena: editPierna 
+        })
+        .eq("id", userId);
+
+      if (errorFutbol) throw errorFutbol;
+
+      const nuevaEdad = calcularEdad(fechaNacCombinada);
+
+      setPerfil((prev) => ({ 
+        ...prev, 
+        nacionalidad: editNacionalidad, 
+        posicion_preferida: editPosicion,
+        pierna_buena: editPierna,
+        fecha_nacimiento: fechaNacCombinada,
+        edad: nuevaEdad
+      }));
+
+      setEditandoPerfil(false);
+
+    } catch (error) {
+      console.error("Error actualizando perfil:", error);
+      alert("Hubo un error al actualizar los datos.");
+    } finally {
+      setGuardandoPerfil(false);
+    }
+  }
+
   const partidosHistorialProcesados = partidosJugados.map((partido) => {
     const g1 = partido.goles_equipo1 || 0;
     const g2 = partido.goles_equipo2 || 0;
@@ -406,18 +489,42 @@ export default function Perfil() {
 
         <div className="bg-white rounded-3xl shadow-sm p-6 flex flex-col gap-5 border border-gray-100">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Nacionalidad (Código de País)</label>
-            <input value={nacionalidadNueva} onChange={(e) => setNacionalidadNueva(e.target.value.toUpperCase())} maxLength={2} placeholder="Ej. VE" className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]" />
+            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Nacionalidad</label>
+            <select 
+              value={nacionalidadNueva} 
+              onChange={(e) => setNacionalidadNueva(e.target.value)} 
+              className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+            >
+              <option value="VE">🇻🇪 Venezuela</option>
+              <option value="AR">🇦🇷 Argentina</option>
+              <option value="CO">🇨🇴 Colombia</option>
+              <option value="CL">🇨🇱 Chile</option>
+              <option value="ES">🇪🇸 España</option>
+              <option value="MX">🇲🇽 México</option>
+              <option value="US">🇺🇸 USA</option>
+              <option value="OTRO">🌍 Otro</option>
+            </select>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Posición preferida</label>
-            <select value={posicionNueva} onChange={(e) => setPosicionNueva(e.target.value)} className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]">
-              <option value="POR">Portero (POR)</option>
-              <option value="DEF">Defensor (DEF)</option>
-              <option value="MED">Mediocampista (MED)</option>
-              <option value="DEL">Delantero (DEL)</option>
-            </select>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Posición preferida</label>
+              <select value={posicionNueva} onChange={(e) => setPosicionNueva(e.target.value)} className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]">
+                <option value="POR">POR</option>
+                <option value="DEF">DEF</option>
+                <option value="MED">MED</option>
+                <option value="DEL">DEL</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Pierna hábil</label>
+              <select value={piernaNueva} onChange={(e) => setPiernaNueva(e.target.value)} className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]">
+                <option value="Derecha">Derecha</option>
+                <option value="Izquierda">Izquierda</option>
+                <option value="Ambidiestro">Ambidiestra</option>
+              </select>
+            </div>
           </div>
 
           <button onClick={crearPerfilFutbol} disabled={creandoPerfil} className="mt-2 py-4 rounded-2xl bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest text-xs hover:bg-gray-900 transition-colors disabled:opacity-50">
@@ -436,7 +543,133 @@ export default function Perfil() {
   });
 
   return (
-    <div className="min-h-screen bg-gray-50/50 pb-24 pt-8">
+    <div className="min-h-screen bg-gray-50/50 pb-24 pt-8 relative">
+
+      {/* MODAL ENGRANAJE: EDITAR FICHA DE FÚTBOL CON DROPDOWNS PARA FECHA */}
+      {editandoPerfil && (
+        <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm flex flex-col gap-4 shadow-2xl">
+            <h3 className="font-black text-xl text-gray-900 uppercase tracking-tight text-center">Editar Ficha</h3>
+            
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Nacionalidad</label>
+              <select 
+                value={editNacionalidad} 
+                onChange={(e) => setEditNacionalidad(e.target.value)} 
+                className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+              >
+                <option value="VE">🇻🇪 Venezuela</option>
+                <option value="AR">🇦🇷 Argentina</option>
+                <option value="CO">🇨🇴 Colombia</option>
+                <option value="CL">🇨🇱 Chile</option>
+                <option value="ES">🇪🇸 España</option>
+                <option value="MX">🇲🇽 México</option>
+                <option value="US">🇺🇸 USA</option>
+                <option value="OTRO">🌍 Otro</option>
+              </select>
+            </div>
+
+            {/* SECCIÓN FECHA DE NACIMIENTO: TRES DROPDOWNS (UX SUPERIOR) */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Fecha de Nacimiento</label>
+              <div className="grid grid-cols-3 gap-2">
+                {/* Día */}
+                <select 
+                  value={editDia} 
+                  onChange={(e) => setEditDia(e.target.value)} 
+                  className="border border-gray-200 rounded-xl px-2 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+                >
+                  <option value="" disabled>Día</option>
+                  {Array.from({ length: 31 }, (_, i) => {
+                    const val = String(i + 1).padStart(2, "0");
+                    return <option key={val} value={val}>{i + 1}</option>;
+                  })}
+                </select>
+
+                {/* Mes */}
+                <select 
+                  value={editMes} 
+                  onChange={(e) => setEditMes(e.target.value)} 
+                  className="border border-gray-200 rounded-xl px-2 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+                >
+                  <option value="" disabled>Mes</option>
+                  <option value="01">Ene</option>
+                  <option value="02">Feb</option>
+                  <option value="03">Mar</option>
+                  <option value="04">Abr</option>
+                  <option value="05">May</option>
+                  <option value="06">Jun</option>
+                  <option value="07">Jul</option>
+                  <option value="08">Ago</option>
+                  <option value="09">Sep</option>
+                  <option value="10">Oct</option>
+                  <option value="11">Nov</option>
+                  <option value="12">Dic</option>
+                </select>
+
+                {/* Año */}
+                <select 
+                  value={editAno} 
+                  onChange={(e) => setEditAno(e.target.value)} 
+                  className="border border-gray-200 rounded-xl px-2 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+                >
+                  <option value="" disabled>Año</option>
+                  {Array.from({ length: 100 }, (_, i) => {
+                    const year = new Date().getFullYear() - 10 - i; // Para que no empiecen en bebés
+                    return <option key={year} value={year}>{year}</option>;
+                  })}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Posición</label>
+                <select 
+                  value={editPosicion} 
+                  onChange={(e) => setEditPosicion(e.target.value)} 
+                  className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+                >
+                  <option value="POR">POR</option>
+                  <option value="DEF">DEF</option>
+                  <option value="MED">MED</option>
+                  <option value="DEL">DEL</option>
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Pierna Hábil</label>
+                <select 
+                  value={editPierna} 
+                  onChange={(e) => setEditPierna(e.target.value)} 
+                  className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+                >
+                  <option value="Derecha">Derecha</option>
+                  <option value="Izquierda">Izquierda</option>
+                  <option value="Ambidiestro">Ambidiestra</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-2">
+              <button 
+                onClick={() => setEditandoPerfil(false)} 
+                disabled={guardandoPerfil}
+                className="flex-1 py-3.5 font-bold text-gray-600 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors text-xs uppercase tracking-wider"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={actualizarPerfilFutbol} 
+                disabled={guardandoPerfil}
+                className="flex-1 py-3.5 font-black text-white bg-[#0B0C15] rounded-xl hover:bg-gray-900 transition-colors text-xs uppercase tracking-wider shadow-md disabled:opacity-50"
+              >
+                {guardandoPerfil ? "Guardando..." : "Guardar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL DE RECORTE DE FOTO DE PERFIL */}
       {imageSrc && (
@@ -490,8 +723,10 @@ export default function Perfil() {
               <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">OVR {stats?.media_general || 64}</span>
             </div>
 
+            {/* 🔥 AQUÍ ESTABA EL ERROR: Faltaba pasar el apellido a PlayerCard 🔥 */}
             <PlayerCard
               nombre={perfil.nombre || "Jugador"}
+              apellido={perfil.apellido || ""}
               posicion={perfil.posicion_preferida || perfil.posicion || "MED"}
               media={stats?.media_general || 64}
               stats={{
@@ -511,44 +746,56 @@ export default function Perfil() {
           {/* COLUMNA DERECHA: DATOS, AVATAR Y ESTADÍSTICAS */}
           <div className="md:col-span-7 flex flex-col gap-6">
             
-            {/* TARJETA DE INFORMACIÓN Y AVATAR */}
             <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 flex flex-col gap-6">
-              <div className="flex items-center gap-4">
-                <div className="relative group shrink-0">
-                  <div className="w-16 h-16 rounded-full overflow-hidden bg-emerald-50 border-2 border-gray-200 flex items-center justify-center text-emerald-800 font-black text-xl shadow-sm">
-                    {perfil.avatar_url ? (
-                      <img src={perfil.avatar_url} alt="Foto de perfil" className="w-full h-full object-cover" />
-                    ) : (
-                      perfil.nombre ? perfil.nombre.slice(0, 2).toUpperCase() : "?"
-                    )}
+              
+              {/* ENCABEZADO DE TARJETA CON BOTÓN ENGRANAJE EN LA ESQUINA DERECHA */}
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="relative group shrink-0">
+                    <div className="w-16 h-16 rounded-full overflow-hidden bg-emerald-50 border-2 border-gray-200 flex items-center justify-center text-emerald-800 font-black text-xl shadow-sm">
+                      {perfil.avatar_url ? (
+                        <img src={perfil.avatar_url} alt="Foto de perfil" className="w-full h-full object-cover" />
+                      ) : (
+                        perfil.nombre ? perfil.nombre.slice(0, 2).toUpperCase() : "?"
+                      )}
+                    </div>
+                    
+                    <label className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h0.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><circle cx="12" cy="13" r="3" /></svg>
+                      <input type="file" accept="image/*" onChange={onFileChange} className="hidden" disabled={subiendoFoto} />
+                    </label>
                   </div>
-                  
-                  {/* BOTÓN OVERLAY PARA SUBIR FOTO */}
-                  <label className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h0.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><circle cx="12" cy="13" r="3" /></svg>
-                    <input type="file" accept="image/*" onChange={onFileChange} className="hidden" disabled={subiendoFoto} />
-                  </label>
+
+                  <div className="flex-1 min-w-0">
+                    <h2 className="text-xl font-black text-gray-900 leading-tight truncate">{perfil.nombre || "Sin nombre"} {perfil.apellido || ""}</h2>
+                    <p className="text-xs font-semibold text-gray-400 mt-0.5">{perfil.telefono || "Sin teléfono registrado"}</p>
+                    
+                    <label className="inline-flex items-center gap-1.5 mt-2 text-xs font-bold text-emerald-600 hover:text-emerald-700 cursor-pointer transition-colors">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                      {subiendoFoto ? "Procesando..." : "Cambiar foto de perfil"}
+                      <input type="file" accept="image/*" onChange={onFileChange} className="hidden" disabled={subiendoFoto} />
+                    </label>
+                  </div>
                 </div>
 
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-xl font-black text-gray-900 leading-tight truncate">{perfil.nombre || "Sin nombre"}</h2>
-                  <p className="text-xs font-semibold text-gray-400 mt-0.5">{perfil.telefono || "Sin teléfono registrados"}</p>
-                  
-                  <label className="inline-flex items-center gap-1.5 mt-2 text-xs font-bold text-emerald-600 hover:text-emerald-700 cursor-pointer transition-colors">
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                    {subiendoFoto ? "Procesando..." : "Cambiar foto de perfil"}
-                    <input type="file" accept="image/*" onChange={onFileChange} className="hidden" disabled={subiendoFoto} />
-                  </label>
-                </div>
+                <button 
+                  onClick={() => setEditandoPerfil(true)} 
+                  className="w-10 h-10 rounded-2xl bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-[#0B0C15] hover:text-[#00FF9D] transition-all shadow-sm shrink-0"
+                  title="Editar Ficha"
+                >
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd"></path>
+                  </svg>
+                </button>
               </div>
 
               {mensajeFoto && (
-                <div className={`p-3 rounded-xl text-xs font-bold text-center ${mensajeFoto.includes("error") || mensajeFoto.includes("Solo") || mensajeFoto.includes("peso") ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
+                <div className={`p-3 rounded-xl text-xs font-bold text-center ${mensajeFoto.includes("Error") ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
                   {mensajeFoto}
                 </div>
               )}
 
-              {/* CRÉDITOS DISPONIBLES */}
+              {/* CRÉDITOS */}
               <div className="flex items-center justify-between bg-yellow-50/60 border border-yellow-200/80 rounded-2xl p-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-yellow-100 flex items-center justify-center text-yellow-600">
@@ -585,8 +832,18 @@ export default function Perfil() {
                 </div>
 
                 <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Efectividad V/D</p>
-                  <p className="font-black text-gray-900 text-xl mt-0.5">{stats?.ratio_vd || "0.00"}</p>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">% Victorias</p>
+                  <p className="font-black text-emerald-600 text-xl mt-0.5">{stats?.win_rate || "0%"}</p>
+                </div>
+
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Edad</p>
+                  <p className="font-black text-gray-900 text-xl mt-0.5">{perfil?.edad || "--"}</p>
+                </div>
+
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Pierna Hábil</p>
+                  <p className="font-black text-gray-900 text-xl mt-0.5">{perfil?.pierna_buena || "--"}</p>
                 </div>
 
                 <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5 col-span-2 flex items-center justify-between">
@@ -607,7 +864,7 @@ export default function Perfil() {
           </div>
         </div>
 
-        {/* SECCIÓN 2: LOGROS (CARRUSEL HORIZONTAL FLUIDO) */}
+        {/* SECCIÓN 2: LOGROS */}
         <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 pb-4">
             <div>
@@ -616,7 +873,6 @@ export default function Perfil() {
             </div>
             
             <div className="flex items-center gap-2">
-              {/* FILTROS DE LOGROS */}
               <div className="flex bg-gray-100 p-1 rounded-xl text-xs font-bold shrink-0">
                 <button onClick={() => setLogrosFiltro("todos")} className={`px-3 py-1 rounded-lg transition-all ${logrosFiltro === "todos" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>
                   Todos ({logros.length})
@@ -631,7 +887,6 @@ export default function Perfil() {
           {logrosFiltrados.length === 0 ? (
             <p className="text-sm font-bold text-gray-400 text-center py-6">No hay logros en esta categoría.</p>
           ) : (
-            // CONTENEDOR DESLIZABLE HORIZONTAL EN MÓVIL
             <div className="flex gap-3 overflow-x-auto pb-3 scrollbar-hide snap-x w-full">
               {logrosFiltrados.map((l) => (
                 <div key={l.id} className="snap-start shrink-0 w-64 md:w-72">
@@ -685,12 +940,11 @@ export default function Perfil() {
           )}
         </div>
 
-        {/* SECCIÓN 4: HISTORIAL DE PARTIDOS JUGADOS CON FILTRO Y PAGINACIÓN */}
+        {/* SECCIÓN 4: HISTORIAL DE PARTIDOS JUGADOS */}
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-200/80 pb-3">
             <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Historial de Partidos</h2>
             
-            {/* FILTROS DE HISTORIAL (ESTILO PÍLDORAS) */}
             <div className="flex bg-gray-100 p-1 rounded-xl text-xs font-bold w-fit shrink-0">
               <button onClick={() => {setFiltroHistorial("todos"); setCantidadVisible(5);}} className={`px-3 py-1 rounded-lg transition-all ${filtroHistorial === "todos" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>
                 Todos
@@ -727,10 +981,8 @@ export default function Perfil() {
                       href={`/futbol/partido/${partido.id}`}
                       className="bg-[#0B0C15] text-white rounded-3xl p-5 shadow-sm relative overflow-hidden flex items-center justify-between group hover:border border-gray-700 transition-all"
                     >
-                      {/* BARRA LATERAL DE ESTADO */}
                       <div className={`absolute top-0 left-0 w-1.5 h-full ${partido.esEmpate ? "bg-yellow-400" : partido.esVictoria ? "bg-[#00FF9D]" : "bg-red-500"}`}></div>
 
-                      {/* INFO DEL PARTIDO (FLEX-1 Y MIN-W-0 PARA QUE SE CORTE EL TEXTO LARGO) */}
                       <div className="pl-3 pr-2 space-y-1 flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${partido.esEmpate ? "bg-yellow-400/20 text-yellow-400" : partido.esVictoria ? "bg-[#00FF9D]/20 text-[#00FF9D]" : "bg-red-500/20 text-red-400"}`}>
@@ -739,7 +991,6 @@ export default function Perfil() {
                           <span className="text-[10px] text-gray-400 font-bold">{formatFechaCorta(partido.fecha)}</span>
                         </div>
 
-                        {/* TÍTULO CON TRUNCATE PARA QUE NO DESBORDE EN MÓVIL */}
                         <h3 className="font-black text-white text-base leading-tight uppercase truncate">{partido.cancha}</h3>
                         
                         <p className="text-xs text-gray-400 font-bold">
@@ -747,7 +998,6 @@ export default function Perfil() {
                         </p>
                       </div>
 
-                      {/* SCOREBOARD (SHRINK-0 PARA QUE NUNCA SE APLASTE NI SE SALGA) */}
                       <div className="bg-[#121422] rounded-2xl px-4 py-2.5 border border-[#1f233a] text-center shrink-0 ml-auto">
                         <p className="text-xl font-black text-white tracking-wider">
                           {partido.g1}<span className="text-emerald-400 mx-1.5">-</span>{partido.g2}
@@ -759,7 +1009,6 @@ export default function Perfil() {
                 })}
               </div>
 
-              {/* BOTÓN DE CARGAR ANTERIORES SI QUEDAN MÁS PARTIDOS EN LA LISTA FILTRADA */}
               {cantidadVisible < historialFiltrado.length && (
                 <button
                   onClick={() => setCantidadVisible(prev => prev + 5)}
