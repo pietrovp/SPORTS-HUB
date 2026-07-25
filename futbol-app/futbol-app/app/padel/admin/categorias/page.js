@@ -30,6 +30,7 @@ const LABELS = {
   },
   estado: {
     pendiente: "Pendiente",
+    en_revision: "En revisión",
     aprobada: "Aprobada",
     ajustada: "Ajustada",
     rechazada: "Rechazada",
@@ -78,7 +79,7 @@ function normalizeCategoria(value, nivelBase) {
 
 function normalizeEstado(value) {
   const estado = String(value || "").trim().toLowerCase();
-  if (["pendiente", "aprobada", "ajustada", "rechazada"].includes(estado)) return estado;
+  if (["pendiente", "en_revision", "aprobada", "ajustada", "rechazada"].includes(estado)) return estado;
   return "pendiente";
 }
 
@@ -102,6 +103,7 @@ function normalizeProfileRelation(profile) {
 function EstadoBadge({ estado }) {
   const styles = {
     pendiente: "border-amber-200 bg-amber-50 text-amber-700",
+    en_revision: "border-blue-200 bg-blue-50 text-blue-700",
     aprobada: "border-emerald-200 bg-emerald-50 text-emerald-700",
     ajustada: "border-sky-200 bg-sky-50 text-sky-700",
     rechazada: "border-rose-200 bg-rose-50 text-rose-700",
@@ -123,6 +125,7 @@ function CounterCard({ title, value, tone = "slate" }) {
   const tones = {
     slate: "border-slate-200 bg-white text-slate-950",
     amber: "border-amber-200 bg-amber-50 text-amber-900",
+    blue: "border-blue-200 bg-blue-50 text-blue-900",
     emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
     sky: "border-sky-200 bg-sky-50 text-sky-900",
     rose: "border-rose-200 bg-rose-50 text-rose-900",
@@ -144,7 +147,7 @@ export default function AdminCategoriasPage() {
   const [savingId, setSavingId] = useState(null);
   const [mensaje, setMensaje] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-  const [filtroEstado, setFiltroEstado] = useState("pendiente");
+  const [filtroEstado, setFiltroEstado] = useState("todos"); // Inicia en 'todos' para ver la data real
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -337,15 +340,9 @@ export default function AdminCategoriasPage() {
         categoria_comentario_admin:
           overrides.categoria_comentario_admin ??
           (row.draft_comentario?.trim() ? row.draft_comentario.trim() : null),
-        categoria_revision_admin: overrides.categoria_revision_admin ?? true,
-        categoria_revisada_por:
-          overrides.categoria_revisada_por !== undefined
-            ? overrides.categoria_revisada_por
-            : session.user.id,
-        categoria_revisada_at:
-          overrides.categoria_revisada_at !== undefined
-            ? overrides.categoria_revisada_at
-            : new Date().toISOString(),
+        categoria_revision_admin: true,
+        categoria_revisada_por: session.user.id,
+        categoria_revisada_at: new Date().toISOString(),
       };
 
       const { data: updated, error: updateError } = await supabase
@@ -388,6 +385,8 @@ export default function AdminCategoriasPage() {
         setMensaje("Categoría ajustada y guardada correctamente.");
       } else if (updatedEstado === "rechazada") {
         setMensaje("Solicitud rechazada correctamente.");
+      } else if (updatedEstado === "en_revision") {
+        setMensaje("Jugador enviado a revisión.");
       } else {
         setMensaje("Revisión guardada correctamente.");
       }
@@ -432,6 +431,7 @@ export default function AdminCategoriasPage() {
     return {
       total: rows.length,
       pendiente: rows.filter((r) => r.estado_categoria === "pendiente").length,
+      en_revision: rows.filter((r) => r.estado_categoria === "en_revision").length,
       aprobada: rows.filter((r) => r.estado_categoria === "aprobada").length,
       ajustada: rows.filter((r) => r.estado_categoria === "ajustada").length,
       rechazada: rows.filter((r) => r.estado_categoria === "rechazada").length,
@@ -510,9 +510,10 @@ export default function AdminCategoriasPage() {
           </div>
         ) : null}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="grid gap-4 sm:grid-cols-3 xl:grid-cols-6">
           <CounterCard title="Total" value={counters.total} tone="slate" />
           <CounterCard title="Pendientes" value={counters.pendiente} tone="amber" />
+          <CounterCard title="Revisión" value={counters.en_revision} tone="blue" />
           <CounterCard title="Aprobadas" value={counters.aprobada} tone="emerald" />
           <CounterCard title="Ajustadas" value={counters.ajustada} tone="sky" />
           <CounterCard title="Rechazadas" value={counters.rechazada} tone="rose" />
@@ -527,8 +528,9 @@ export default function AdminCategoriasPage() {
                 onChange={(e) => setFiltroEstado(e.target.value)}
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
               >
-                <option value="pendiente">Pendiente</option>
                 <option value="todos">Todos</option>
+                <option value="pendiente">Pendiente</option>
+                <option value="en_revision">En revisión</option>
                 <option value="aprobada">Aprobada</option>
                 <option value="ajustada">Ajustada</option>
                 <option value="rechazada">Rechazada</option>
@@ -671,6 +673,20 @@ export default function AdminCategoriasPage() {
                             onClick={() =>
                               guardarRevision(row, {
                                 categoria_oficial: row.draft_categoria_oficial,
+                                estado_categoria: "en_revision",
+                              })
+                            }
+                            className="rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50 disabled:opacity-60"
+                          >
+                            Poner en revisión
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={savingId === row.id}
+                            onClick={() =>
+                              guardarRevision(row, {
+                                categoria_oficial: row.draft_categoria_oficial,
                                 estado_categoria: "rechazada",
                               })
                             }
@@ -713,6 +729,7 @@ export default function AdminCategoriasPage() {
                             className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
                           >
                             <option value="pendiente">Pendiente</option>
+                            <option value="en_revision">En revisión</option>
                             <option value="aprobada">Aprobada</option>
                             <option value="ajustada">Ajustada</option>
                             <option value="rechazada">Rechazada</option>
