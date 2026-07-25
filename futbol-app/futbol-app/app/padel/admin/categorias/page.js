@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { supabase } from "@/lib/supabaseClient"; 
+import { supabase } from "../../../../lib/supabaseClient";
 
 const CATEGORY_OPTIONS = {
   principiante: ["rookies", "7ma"],
@@ -85,10 +85,16 @@ function normalizeEstado(value) {
 
 function formatFecha(value) {
   if (!value) return "Sin revisión";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "Sin revisión";
   try {
-    return value.substring(0, 10); // Simplemente devuelve "YYYY-MM-DD"
+    return new Intl.DateTimeFormat("es-VE", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "UTC",
+    }).format(d);
   } catch {
-    return "Sin revisión";
+    return d.toISOString().replace("T", " ").slice(0, 16);
   }
 }
 
@@ -144,7 +150,7 @@ export default function AdminCategoriasPage() {
   const [savingId, setSavingId] = useState(null);
   const [mensaje, setMensaje] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-  const [filtroEstado, setFiltroEstado] = useState("todos"); // Inicia en 'todos' para ver la data real
+  const [filtroEstado, setFiltroEstado] = useState("todos");
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -163,7 +169,6 @@ export default function AdminCategoriasPage() {
       } = await supabase.auth.getUser();
 
       if (authError) throw authError;
-
       if (!user) {
         setAuthChecked(true);
         setIsAdmin(false);
@@ -243,7 +248,6 @@ export default function AdminCategoriasPage() {
       }
 
       const { data, error } = await query;
-
       if (error) throw error;
 
       const normalized = (data || []).map((item) => {
@@ -283,10 +287,8 @@ export default function AdminCategoriasPage() {
   }
 
   useEffect(() => {
-    if (authChecked && isAdmin) {
-      cargarSolicitudes();
-    }
-  }, [filtroEstado]);
+    if (authChecked && isAdmin) cargarSolicitudes();
+  }, [filtroEstado, authChecked, isAdmin]);
 
   function patchRow(id, patch) {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
@@ -303,26 +305,16 @@ export default function AdminCategoriasPage() {
         error: sessionError,
       } = await supabase.auth.getSession();
 
-      if (sessionError || !session) {
-        throw new Error("No se pudo obtener la sesión.");
-      }
+      if (sessionError || !session) throw new Error("No se pudo obtener la sesión.");
 
-      const {
-        data: adminProfile,
-        error: adminError,
-      } = await supabase
+      const { data: adminProfile, error: adminError } = await supabase
         .from("profiles")
         .select("id, is_admin")
         .eq("id", session.user.id)
         .maybeSingle();
 
-      if (adminError) {
-        throw new Error(adminError.message || "No se pudo validar el admin.");
-      }
-
-      if (!adminProfile?.is_admin) {
-        throw new Error("No tienes permisos de administrador.");
-      }
+      if (adminError) throw new Error(adminError.message || "No se pudo validar el admin.");
+      if (!adminProfile?.is_admin) throw new Error("No tienes permisos de administrador.");
 
       const categoriaFinal = overrides.categoria_oficial ?? row.draft_categoria_oficial;
       let estadoFinal = overrides.estado_categoria ?? row.draft_estado_categoria;
@@ -358,9 +350,7 @@ export default function AdminCategoriasPage() {
         `)
         .single();
 
-      if (updateError) {
-        throw new Error(updateError.message || "No se pudo guardar la revisión.");
-      }
+      if (updateError) throw new Error(updateError.message || "No se pudo guardar la revisión.");
 
       const updatedEstado = normalizeEstado(updated.estado_categoria);
 
@@ -376,17 +366,11 @@ export default function AdminCategoriasPage() {
         draft_comentario: updated.categoria_comentario_admin || "",
       });
 
-      if (updatedEstado === "aprobada") {
-        setMensaje("Categoría aprobada correctamente.");
-      } else if (updatedEstado === "ajustada") {
-        setMensaje("Categoría ajustada y guardada correctamente.");
-      } else if (updatedEstado === "rechazada") {
-        setMensaje("Solicitud rechazada correctamente.");
-      } else if (updatedEstado === "en_revision") {
-        setMensaje("Jugador enviado a revisión.");
-      } else {
-        setMensaje("Revisión guardada correctamente.");
-      }
+      if (updatedEstado === "aprobada") setMensaje("Categoría aprobada correctamente.");
+      else if (updatedEstado === "ajustada") setMensaje("Categoría ajustada y guardada correctamente.");
+      else if (updatedEstado === "rechazada") setMensaje("Solicitud rechazada correctamente.");
+      else if (updatedEstado === "en_revision") setMensaje("Jugador enviado a revisión.");
+      else setMensaje("Revisión guardada correctamente.");
 
       if (filtroEstado !== "todos" && updatedEstado !== filtroEstado) {
         setRows((prev) => prev.filter((item) => item.id !== row.id));
