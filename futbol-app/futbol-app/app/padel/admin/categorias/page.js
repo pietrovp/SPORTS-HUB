@@ -47,7 +47,6 @@ const LABELS = {
     ambos: "Ambos lados",
     Drive: "Drive",
     Revés: "Revés",
-    reves: "Revés",
   },
 };
 
@@ -95,6 +94,11 @@ function formatFecha(value) {
   }
 }
 
+function normalizeProfileRelation(profile) {
+  if (!profile) return null;
+  return Array.isArray(profile) ? profile[0] ?? null : profile;
+}
+
 function EstadoBadge({ estado }) {
   const styles = {
     pendiente: "border-amber-200 bg-amber-50 text-amber-700",
@@ -136,7 +140,6 @@ export default function AdminCategoriasPage() {
   const [loading, setLoading] = useState(true);
   const [authChecked, setAuthChecked] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [currentUser, setCurrentUser] = useState(null);
   const [rows, setRows] = useState([]);
   const [savingId, setSavingId] = useState(null);
   const [mensaje, setMensaje] = useState("");
@@ -167,8 +170,6 @@ export default function AdminCategoriasPage() {
         setLoading(false);
         return;
       }
-
-      setCurrentUser(user);
 
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
@@ -225,7 +226,7 @@ export default function AdminCategoriasPage() {
           partidos_jugados,
           victorias,
           derrotas,
-          profiles:profiles!padel_profiles_id_fkey (
+          profiles:profiles!padel_profiles_cuenta_id_fkey (
             id,
             nombre,
             apellido,
@@ -238,6 +239,7 @@ export default function AdminCategoriasPage() {
       if (error) throw error;
 
       const normalized = (data || []).map((item) => {
+        const profile = normalizeProfileRelation(item.profiles);
         const nivelBase = normalizeNivelBase(item.nivel_base || item.nivel);
         const categoriaSolicitada = normalizeCategoria(
           item.categoria_solicitada || item.categoria || item.nivel,
@@ -251,6 +253,7 @@ export default function AdminCategoriasPage() {
 
         return {
           ...item,
+          profiles: profile,
           nivel_base: nivelBase,
           categoria_solicitada: categoriaSolicitada,
           categoria_oficial: categoriaOficial,
@@ -282,7 +285,7 @@ export default function AdminCategoriasPage() {
     });
   }
 
-    async function guardarRevision(row) {
+  async function guardarRevision(row) {
     try {
       setSavingId(row.id);
       setMensaje("");
@@ -343,14 +346,12 @@ export default function AdminCategoriasPage() {
       setSavingId(null);
     }
   }
+
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       const estadoOk = filtroEstado === "todos" ? true : row.estado_categoria === filtroEstado;
 
-      const nombreCompleto = [
-        row?.profiles?.nombre,
-        row?.profiles?.apellido,
-      ]
+      const nombreCompleto = [row?.profiles?.nombre, row?.profiles?.apellido]
         .filter(Boolean)
         .join(" ");
 
@@ -505,14 +506,11 @@ export default function AdminCategoriasPage() {
             </div>
           ) : (
             filteredRows.map((row) => {
-              const nombreCompleto = [
-                row?.profiles?.nombre,
-                row?.profiles?.apellido,
-              ]
+              const nombreCompleto = [row?.profiles?.nombre, row?.profiles?.apellido]
                 .filter(Boolean)
                 .join(" ");
 
-              const nombre = nombreCompleto || row?.profiles?.email || row?.id;
+              const nombre = nombreCompleto || row?.profiles?.email || row?.cuenta_id;
               const categoriasPermitidas =
                 CATEGORY_OPTIONS[normalizeNivelBase(row.nivel_base)] || CATEGORY_OPTIONS.principiante;
 
@@ -605,7 +603,7 @@ export default function AdminCategoriasPage() {
                       </div>
 
                       <div className="text-xs text-slate-400">
-                        ID jugador: {row.id}
+                        ID jugador: {row.cuenta_id}
                       </div>
                     </div>
 
