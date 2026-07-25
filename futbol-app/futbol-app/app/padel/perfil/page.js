@@ -182,8 +182,8 @@ function normalizeEstadoCategoria(value) {
   return ["pendiente","aprobada","rechazada","ajustada"].includes(e) ? e : "pendiente";
 }
 function normalizarTiposPartido(value) {
-  const arr    = Array.isArray(value) ? value : [value];
-  const tipos  = arr.map((t) => String(t || "").trim().toLowerCase()).filter((t) => TIPOS_VALIDOS.includes(t));
+  const arr   = Array.isArray(value) ? value : [value];
+  const tipos = arr.map((t) => String(t || "").trim().toLowerCase()).filter((t) => TIPOS_VALIDOS.includes(t));
   const unique = [...new Set(tipos)];
   return unique.length > 0 ? unique : ["amistoso"];
 }
@@ -227,7 +227,7 @@ export default function PadelPerfilPage() {
   const [errorMsg,      setErrorMsg]      = useState("");
   const [form,          setForm]          = useState(DEFAULT_PROFILE);
 
-  // ── Onboarding state ──
+  // Onboarding
   const [onboardingOpen,      setOnboardingOpen]      = useState(false);
   const [onboardingStep,      setOnboardingStep]      = useState(0);
   const [onboardingResp,      setOnboardingResp]      = useState({
@@ -256,7 +256,11 @@ export default function PadelPerfilPage() {
         { data: padelData, error: padelError },
       ] = await Promise.all([
         supabase.from("profiles").select("*").eq("id", authUser.id).maybeSingle(),
-        supabase.from("padel_profiles").select("*").eq("user_id", authUser.id).maybeSingle(),
+        supabase
+          .from("padel_profiles")
+          .select("*")
+          .eq("cuenta_id", authUser.id)   // ✅ cuenta_id
+          .maybeSingle(),
       ]);
       if (padelError) throw padelError;
       setBaseProfile(profileData || null);
@@ -265,7 +269,10 @@ export default function PadelPerfilPage() {
       if (!finalPadel) {
         const { data: created, error: createError } = await supabase
           .from("padel_profiles")
-          .upsert({ user_id: authUser.id, ...DEFAULT_PROFILE }, { onConflict: "user_id" })
+          .upsert(
+            { cuenta_id: authUser.id, ...DEFAULT_PROFILE },  // ✅ cuenta_id
+            { onConflict: "cuenta_id" }                       // ✅ cuenta_id
+          )
           .select()
           .single();
         if (createError) throw createError;
@@ -307,7 +314,7 @@ export default function PadelPerfilPage() {
         tipo_partido_preferido: tiposN,
       });
 
-      // ★ Abrir onboarding solo si nunca completó la evaluación
+      // Abrir onboarding solo si nunca completó la evaluación
       if (!finalPadel.evaluacion_inicial_completada) {
         setOnboardingStep(0);
         setOnboardingResp({
@@ -327,7 +334,7 @@ export default function PadelPerfilPage() {
             team_a_score, team_b_score, scheduled_at
           )
         `)
-        .eq("user_id", authUser.id)
+        .eq("user_id", authUser.id)   // ✅ padel_match_players sí usa user_id
         .order("scheduled_at", { referencedTable: "match", ascending: false });
       if (matchesError) throw matchesError;
 
@@ -372,7 +379,7 @@ export default function PadelPerfilPage() {
           dia_preferido:          form.dia_preferido,
           tipo_partido_preferido: tiposN,
         })
-        .eq("user_id", user.id)
+        .eq("cuenta_id", user.id)   // ✅ cuenta_id
         .select()
         .single();
       if (error) throw error;
@@ -383,7 +390,7 @@ export default function PadelPerfilPage() {
         categoria_solicitada:   normalizeCategoria(data?.categoria_solicitada, data?.nivel_base),
         categoria_oficial:      normalizeCategoria(data?.categoria_oficial,    data?.nivel_base),
         estado_categoria:       normalizeEstadoCategoria(data?.estado_categoria),
-        rating:                 Number(data?.rating)     || padelProfile?.rating    || 1.50,
+        rating:                 Number(data?.rating)     || padelProfile?.rating     || 1.50,
         fiabilidad:             Number(data?.fiabilidad) || padelProfile?.fiabilidad || 20,
         tipo_partido_preferido: normalizarTiposPartido(data?.tipo_partido_preferido),
       };
@@ -436,7 +443,7 @@ export default function PadelPerfilPage() {
           edad:                          edadNum,
           evaluacion_inicial_completada: true,
         })
-        .eq("user_id", user.id)
+        .eq("cuenta_id", user.id)   // ✅ cuenta_id
         .select()
         .single();
       if (error) throw error;
@@ -486,22 +493,22 @@ export default function PadelPerfilPage() {
     );
 
   // ── DATOS DE PRESENTACIÓN ─────────────────────────────────────────────────
-  const nombreStr       = baseProfile?.nombre || user?.user_metadata?.nombre || user?.email?.split("@")[0] || "Jugador";
-  const apellidoStr     = baseProfile?.apellido || "";
-  const nombreCompleto  = `${nombreStr} ${apellidoStr}`.trim();
-  const inicial         = nombreStr.charAt(0).toUpperCase();
+  const nombreStr      = baseProfile?.nombre || user?.user_metadata?.nombre || user?.email?.split("@")[0] || "Jugador";
+  const apellidoStr    = baseProfile?.apellido || "";
+  const nombreCompleto = `${nombreStr} ${apellidoStr}`.trim();
+  const inicial        = nombreStr.charAt(0).toUpperCase();
   const catOficialLabel = LABELS.categoria[padelProfile?.categoria_oficial] || "Rookies";
-  const ratingActual    = padelProfile?.rating    || 1.50;
-  const fiabilidadVal   = padelProfile?.fiabilidad || 20;
-  const infoRating      = getInfoRating(ratingActual);
-  const progresoPct     = calcProgresoPorcentaje(ratingActual);
-  const fiabilidadInfo  = getEtiquetaFiabilidad(fiabilidadVal);
+  const ratingActual   = padelProfile?.rating    || 1.50;
+  const fiabilidadVal  = padelProfile?.fiabilidad || 20;
+  const infoRating     = getInfoRating(ratingActual);
+  const progresoPct    = calcProgresoPorcentaje(ratingActual);
+  const fiabilidadInfo = getEtiquetaFiabilidad(fiabilidadVal);
   const categoriasDisponibles = CATEGORY_OPTIONS[normalizeNivelBase(form.nivel_base)] || [];
 
-  const stepActual      = ONBOARDING_STEPS[onboardingStep] || null;
-  const esPantallaRes   = onboardingStep === ONBOARDING_STEPS.length;
-  const respActual      = stepActual ? onboardingResp[stepActual.campo] : null;
-  const progresoBarPct  = Math.round((onboardingStep / TOTAL_STEPS) * 100);
+  const stepActual     = ONBOARDING_STEPS[onboardingStep] || null;
+  const esPantallaRes  = onboardingStep === ONBOARDING_STEPS.length;
+  const respActual     = stepActual ? onboardingResp[stepActual.campo] : null;
+  const progresoBarPct = Math.round((onboardingStep / TOTAL_STEPS) * 100);
   const ratingConAjuste = parseFloat(
     Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2)
   );
@@ -511,7 +518,7 @@ export default function PadelPerfilPage() {
     <div className="min-h-screen bg-gray-50/50 px-4 py-6 md:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
 
-        {/* ── ALERTAS ── */}
+        {/* ALERTAS */}
         {mensaje && (
           <div className="flex items-center justify-between rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 shadow-sm">
             <span className="text-xs font-bold text-emerald-800">✅ {mensaje}</span>
@@ -556,7 +563,7 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* ── PANTALLA PREGUNTA ── */}
+              {/* PANTALLA PREGUNTA */}
               {!esPantallaRes && stepActual && (
                 <div className="flex-1 flex flex-col px-5 pb-6 gap-4">
                   <h2 className="text-xl font-black text-gray-900 leading-snug">
@@ -603,7 +610,7 @@ export default function PadelPerfilPage() {
                 </div>
               )}
 
-              {/* ── PANTALLA RESULTADO ── */}
+              {/* PANTALLA RESULTADO */}
               {esPantallaRes && (
                 <div className="flex-1 flex flex-col px-5 pb-6 gap-5 bg-[#0B1120] text-white">
                   <h2 className="text-base font-bold text-center text-white/80 pt-2">Tu Nivel Inicial</h2>
@@ -663,218 +670,306 @@ export default function PadelPerfilPage() {
         ══════════════════════════════════════════════════════════════════ */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
-          {/* ── CARTA JUGADOR ── */}
+          {/* CARTA JUGADOR */}
           <div className="lg:col-span-5 w-full flex flex-col items-center">
             <div className="w-full bg-gradient-to-b from-[#0B0C2A] via-[#161848] to-[#0B0C2A] rounded-[2.5rem] p-6 md:p-8 text-white text-center shadow-xl border border-blue-500/20 relative overflow-hidden flex flex-col items-center justify-between min-h-[460px]">
               <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-blue-500/20 rounded-full blur-3xl pointer-events-none" />
 
               <div className="relative z-10 flex flex-col items-center gap-3 pt-2">
-                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-400 to-blue-700 flex items-center justify-center text-3xl font-black shadow-lg border-4 border-white/10">
+                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-400 to-blue-700 flex items-center justify-center text-3xl font-black shadow-lg">
                   {inicial}
                 </div>
                 <div>
-                  <p className="text-lg font-black tracking-wide">{nombreCompleto}</p>
-                  <p className="text-xs text-blue-300/80 font-medium mt-0.5">
-                    {LABELS.nivel_base[padelProfile?.nivel_base] || "Principiante"}
-                  </p>
+                  <h1 className="text-2xl font-black tracking-tight">{nombreCompleto}</h1>
+                  <p className="text-blue-300 text-sm mt-0.5">{user?.email}</p>
+                </div>
+                <div className="flex gap-2 flex-wrap justify-center">
+                  <span className="px-3 py-1 rounded-full bg-blue-500/20 border border-blue-400/30 text-blue-200 text-xs font-bold uppercase tracking-wider">
+                    {catOficialLabel}
+                  </span>
+                  <span className={`px-3 py-1 rounded-full bg-white/10 border border-white/20 text-xs font-bold ${
+                    padelProfile?.estado_categoria === "aprobada" ? "text-emerald-300" :
+                    padelProfile?.estado_categoria === "rechazada" ? "text-rose-300" : "text-amber-300"
+                  }`}>
+                    {LABELS.estado_categoria[padelProfile?.estado_categoria] || "En revisión"}
+                  </span>
                 </div>
               </div>
 
-              <div className="relative z-10 flex flex-col items-center gap-1 py-4">
-                <span className="text-6xl font-black text-white tracking-tight">
-                  {ratingActual.toFixed(2)}
-                </span>
-                <span className="text-xs font-bold uppercase tracking-widest text-blue-300/60">Rating</span>
-                <div className="mt-2 flex items-center gap-2">
-                  <span className="rounded-full bg-blue-500/20 px-3 py-1 text-xs font-bold text-blue-200 border border-blue-500/30">
-                    {catOficialLabel}
-                  </span>
-                  <span className={`text-xs font-semibold ${fiabilidadInfo.color}`}>
+              {/* Rating */}
+              <div className="relative z-10 w-full mt-4">
+                <div className="flex items-end justify-center gap-2 mb-1">
+                  <span className="text-5xl font-black text-[#AFEC3B]">{ratingActual.toFixed(2)}</span>
+                  <span className="text-blue-300 text-sm mb-2">/ 7.00</span>
+                </div>
+                <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-blue-400 to-[#AFEC3B] transition-all duration-700"
+                    style={{ width: `${progresoPct}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-blue-300/70 mt-1">
+                  <span>{infoRating.catActual}</span>
+                  <span>{progresoPct}% → {infoRating.nextCat}</span>
+                </div>
+              </div>
+
+              {/* Fiabilidad */}
+              <div className="relative z-10 w-full mt-3 bg-white/5 rounded-2xl p-3 flex items-center justify-between">
+                <span className="text-xs text-blue-200/70">Fiabilidad del rating</span>
+                <div className="flex items-center gap-2">
+                  <div className="w-20 bg-white/10 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-amber-400 to-emerald-400 transition-all"
+                      style={{ width: `${fiabilidadVal}%` }}
+                    />
+                  </div>
+                  <span className={`text-xs font-bold ${fiabilidadInfo.color}`}>
                     {fiabilidadInfo.texto}
                   </span>
                 </div>
               </div>
 
-              <div className="relative z-10 w-full px-2">
-                <div className="flex justify-between text-[10px] text-blue-300/60 mb-1 font-medium">
-                  <span>{infoRating.catActual}</span>
-                  <span>{infoRating.nextCat !== "MAX" ? `→ ${infoRating.nextCat}` : "Nivel máximo"}</span>
-                </div>
-                <div className="h-2 w-full rounded-full bg-blue-900/40 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-blue-400 to-cyan-400 transition-all duration-700"
-                    style={{ width: `${progresoPct}%` }}
-                  />
-                </div>
-                <p className="text-[10px] text-blue-300/40 mt-1 text-right">
-                  {progresoPct}% hacia {infoRating.nextCat}
-                </p>
-              </div>
-
-              <div className="relative z-10 grid grid-cols-3 gap-3 w-full pt-2">
+              {/* Stats rápidas */}
+              <div className="relative z-10 w-full mt-3 grid grid-cols-3 gap-2">
                 {[
-                  { label: "Partidos",   value: estadisticas.partidos },
-                  { label: "Victorias",  value: estadisticas.victorias },
-                  { label: "% Victoria", value: `${estadisticas.porcentajeVictorias}%` },
-                ].map(({ label, value }) => (
-                  <div key={label} className="flex flex-col items-center gap-0.5 bg-white/5 rounded-2xl py-3 px-1">
-                    <span className="text-xl font-black text-white">{value}</span>
-                    <span className="text-[10px] text-blue-300/60 font-medium">{label}</span>
+                  { label: "Partidos", value: estadisticas.partidos },
+                  { label: "Victorias", value: estadisticas.victorias },
+                  { label: "% Ganados", value: `${estadisticas.porcentajeVictorias}%` },
+                ].map((s) => (
+                  <div key={s.label} className="bg-white/5 rounded-xl p-2 text-center">
+                    <div className="text-lg font-black text-white">{s.value}</div>
+                    <div className="text-[10px] text-blue-300/70 uppercase tracking-wider">{s.label}</div>
                   </div>
                 ))}
               </div>
-            </div>
-          </div>
 
-          {/* ── PANEL DERECHO ── */}
-          <div className="lg:col-span-7 flex flex-col gap-5">
-
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-black text-gray-800">Estado de Categoría</h3>
-                <span className={`rounded-full px-3 py-1 text-xs font-bold border ${
-                  padelProfile?.estado_categoria === "aprobada"
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                    : padelProfile?.estado_categoria === "rechazada"
-                    ? "bg-rose-50 text-rose-700 border-rose-200"
-                    : "bg-amber-50 text-amber-700 border-amber-200"
-                }`}>
-                  {LABELS.estado_categoria[padelProfile?.estado_categoria] || "En revisión"}
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-xl bg-gray-50 p-3">
-                  <p className="text-xs text-gray-500 font-medium mb-0.5">Oficial</p>
-                  <p className="font-black text-gray-900">{catOficialLabel}</p>
-                </div>
-                <div className="rounded-xl bg-gray-50 p-3">
-                  <p className="text-xs text-gray-500 font-medium mb-0.5">Solicitada</p>
-                  <p className="font-black text-gray-900">
-                    {LABELS.categoria[padelProfile?.categoria_solicitada] || "—"}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-black text-gray-800">Información del Jugador</h3>
+              {/* Botón editar */}
+              <div className="relative z-10 w-full mt-4">
                 {!editando ? (
                   <button
                     onClick={() => setEditando(true)}
-                    className="rounded-xl bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 transition-colors"
+                    className="w-full py-3 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition-all active:scale-[.98]"
                   >
-                    Editar
+                    Editar perfil
                   </button>
                 ) : (
                   <div className="flex gap-2">
                     <button
                       onClick={() => setEditando(false)}
-                      className="rounded-xl bg-gray-100 px-3 py-1.5 text-xs font-bold text-gray-600 hover:bg-gray-200 transition-colors"
+                      className="flex-1 py-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold text-sm transition-all"
                     >
                       Cancelar
                     </button>
                     <button
                       onClick={guardarCambios}
                       disabled={saving}
-                      className="rounded-xl bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-700 transition-colors disabled:opacity-60"
+                      className="flex-1 py-3 rounded-2xl bg-[#AFEC3B] hover:bg-[#c5ff4a] text-black font-black text-sm transition-all disabled:opacity-60"
                     >
                       {saving ? "Guardando..." : "Guardar"}
                     </button>
                   </div>
                 )}
               </div>
-
-              {!editando ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-                  {[
-                    { label: "Posición",   value: LABELS.posicion[padelProfile?.posicion]     || "—" },
-                    { label: "Mano Hábil", value: LABELS.mano_habil[padelProfile?.mano_habil] || "—" },
-                    { label: "Género",     value: LABELS.genero[padelProfile?.genero]          || "—" },
-                    { label: "Edad",       value: padelProfile?.edad ? `${padelProfile.edad} años` : "—" },
-                    { label: "Horario",    value: padelProfile?.horario_preferido              || "—" },
-                    { label: "Día pref.",  value: padelProfile?.dia_preferido                 || "—" },
-                  ].map(({ label, value }) => (
-                    <div key={label} className="rounded-xl bg-gray-50 p-3">
-                      <p className="text-xs text-gray-500 font-medium mb-0.5">{label}</p>
-                      <p className="font-bold text-gray-900 text-sm capitalize">{value}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-bold text-gray-600 mb-1 block">Nivel</label>
-                    <select
-                      value={form.nivel_base}
-                      onChange={(e) => {
-                        const nv   = normalizeNivelBase(e.target.value);
-                        const cats = CATEGORY_OPTIONS[nv];
-                        setForm((f) => ({ ...f, nivel_base: nv, categoria_solicitada: cats[0] }));
-                      }}
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {NIVELES_VALIDOS.map((n) => (
-                        <option key={n} value={n}>{LABELS.nivel_base[n]}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-600 mb-1 block">Categoría</label>
-                    <select
-                      value={form.categoria_solicitada}
-                      onChange={(e) => setForm((f) => ({ ...f, categoria_solicitada: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {categoriasDisponibles.map((c) => (
-                        <option key={c} value={c}>{LABELS.categoria[c] || c}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-600 mb-1 block">Posición</label>
-                    <select
-                      value={form.posicion}
-                      onChange={(e) => setForm((f) => ({ ...f, posicion: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {Object.entries(LABELS.posicion).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-600 mb-1 block">Mano Hábil</label>
-                    <select
-                      value={form.mano_habil}
-                      onChange={(e) => setForm((f) => ({ ...f, mano_habil: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {Object.entries(LABELS.mano_habil).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-600 mb-1 block">Género</label>
-                    <select
-                      value={form.genero}
-                      onChange={(e) => setForm((f) => ({ ...f, genero: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {Object.entries(LABELS.genero).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-600 mb-1 block">Edad</label>
-                    <input
-                      type="number" min={10} max={99}
-                      value={form.edad}
-                      onChange={(e) => setForm((f) => ({ ...f, edad: e.target.value }))}
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
-              )}
             </div>
+          </div>
 
-            <PadelRecentActivity userId={user?.id} />
+          {/* PANEL DERECHO */}
+          <div className="lg:col-span-7 flex flex-col gap-6">
+
+            {/* Formulario edición */}
+            {editando && (
+              <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 space-y-5">
+                <h3 className="text-base font-black text-gray-900">Editar perfil de juego</h3>
+
+                {/* Nivel base */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Nivel base</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {NIVELES_VALIDOS.map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => setForm((f) => ({
+                          ...f,
+                          nivel_base: n,
+                          categoria_solicitada: CATEGORY_OPTIONS[n][0],
+                        }))}
+                        className={`py-2.5 rounded-xl text-sm font-bold transition-all border-2 ${
+                          form.nivel_base === n
+                            ? "border-blue-600 bg-blue-50 text-blue-700"
+                            : "border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-300"
+                        }`}
+                      >
+                        {LABELS.nivel_base[n]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Categoría solicitada */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Categoría solicitada</label>
+                  <div className="flex flex-wrap gap-2">
+                    {categoriasDisponibles.map((cat) => (
+                      <button
+                        key={cat}
+                        onClick={() => setForm((f) => ({ ...f, categoria_solicitada: cat }))}
+                        className={`px-4 py-2 rounded-xl text-sm font-bold transition-all border-2 ${
+                          form.categoria_solicitada === cat
+                            ? "border-blue-600 bg-blue-50 text-blue-700"
+                            : "border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-300"
+                        }`}
+                      >
+                        {LABELS.categoria[cat]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Posición */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Posición</label>
+                  <div className="flex gap-2">
+                    {Object.entries(LABELS.posicion).map(([v, l]) => (
+                      <button
+                        key={v}
+                        onClick={() => setForm((f) => ({ ...f, posicion: v }))}
+                        className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all border-2 ${
+                          form.posicion === v
+                            ? "border-blue-600 bg-blue-50 text-blue-700"
+                            : "border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-300"
+                        }`}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Mano hábil */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Mano hábil</label>
+                  <div className="flex gap-2">
+                    {Object.entries(LABELS.mano_habil).map(([v, l]) => (
+                      <button
+                        key={v}
+                        onClick={() => setForm((f) => ({ ...f, mano_habil: v }))}
+                        className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all border-2 ${
+                          form.mano_habil === v
+                            ? "border-blue-600 bg-blue-50 text-blue-700"
+                            : "border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-300"
+                        }`}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Género */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Género</label>
+                  <div className="flex gap-2">
+                    {Object.entries(LABELS.genero).map(([v, l]) => (
+                      <button
+                        key={v}
+                        onClick={() => setForm((f) => ({ ...f, genero: v }))}
+                        className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all border-2 ${
+                          form.genero === v
+                            ? "border-blue-600 bg-blue-50 text-blue-700"
+                            : "border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-300"
+                        }`}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Edad */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">
+                    Edad: <span className="text-blue-600">{form.edad}</span>
+                  </label>
+                  <input
+                    type="range" min={16} max={80} value={form.edad}
+                    onChange={(e) => setForm((f) => ({ ...f, edad: Number(e.target.value) }))}
+                    className="w-full accent-blue-600"
+                  />
+                </div>
+
+                {/* Tipo de partido */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Tipo de partido preferido</label>
+                  <div className="flex gap-2">
+                    {TIPOS_VALIDOS.map((t) => {
+                      const selected = (form.tipo_partido_preferido || []).includes(t);
+                      return (
+                        <button
+                          key={t}
+                          onClick={() => {
+                            const actual = form.tipo_partido_preferido || [];
+                            const next   = selected ? actual.filter((x) => x !== t) : [...actual, t];
+                            setForm((f) => ({ ...f, tipo_partido_preferido: next.length > 0 ? next : [t] }));
+                          }}
+                          className={`flex-1 py-2.5 rounded-xl text-sm font-bold capitalize transition-all border-2 ${
+                            selected
+                              ? "border-blue-600 bg-blue-50 text-blue-700"
+                              : "border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-300"
+                          }`}
+                        >
+                          {t}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Horario */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Horario preferido</label>
+                  <div className="flex gap-2">
+                    {[["manana","Mañana"],["tarde","Tarde"],["noche","Noche"]].map(([v,l]) => (
+                      <button
+                        key={v}
+                        onClick={() => setForm((f) => ({ ...f, horario_preferido: v }))}
+                        className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all border-2 ${
+                          form.horario_preferido === v
+                            ? "border-blue-600 bg-blue-50 text-blue-700"
+                            : "border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-300"
+                        }`}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Día preferido */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Día preferido</label>
+                  <div className="flex gap-2">
+                    {[["semana","Entre semana"],["fin_de_semana","Fin de semana"]].map(([v,l]) => (
+                      <button
+                        key={v}
+                        onClick={() => setForm((f) => ({ ...f, dia_preferido: v }))}
+                        className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all border-2 ${
+                          form.dia_preferido === v
+                            ? "border-blue-600 bg-blue-50 text-blue-700"
+                            : "border-gray-100 bg-gray-50 text-gray-600 hover:border-gray-300"
+                        }`}
+                      >
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Actividad reciente */}
+            <PadelRecentActivity matchesData={matchesData} />
+
           </div>
         </div>
       </div>
