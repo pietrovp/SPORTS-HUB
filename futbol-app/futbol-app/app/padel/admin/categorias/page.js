@@ -203,7 +203,7 @@ export default function AdminCategoriasPage() {
       setMensaje("");
       setErrorMsg("");
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("padel_profiles")
         .select(`
           id,
@@ -218,6 +218,7 @@ export default function AdminCategoriasPage() {
           categoria_comentario_admin,
           categoria_revisada_at,
           categoria_revisada_por,
+          evaluacion_inicial_completada,
           created_at,
           posicion,
           posicion_preferida,
@@ -234,7 +235,14 @@ export default function AdminCategoriasPage() {
             is_admin
           )
         `)
+        .eq("evaluacion_inicial_completada", true)
         .order("created_at", { ascending: false });
+
+      if (filtroEstado !== "todos") {
+        query = query.eq("estado_categoria", filtroEstado);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
 
@@ -274,18 +282,17 @@ export default function AdminCategoriasPage() {
     }
   }
 
+  useEffect(() => {
+    if (authChecked && isAdmin) {
+      cargarSolicitudes();
+    }
+  }, [filtroEstado]);
+
   function patchRow(id, patch) {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
   }
 
-  function aprobarDirecto(row) {
-    patchRow(row.id, {
-      draft_categoria_oficial: row.categoria_solicitada,
-      draft_estado_categoria: "aprobada",
-    });
-  }
-
-  async function guardarRevision(row) {
+  async function guardarRevision(row, overrides = {}) {
     try {
       setSavingId(row.id);
       setMensaje("");
@@ -304,9 +311,10 @@ export default function AdminCategoriasPage() {
 
       const body = {
         padelProfileId: row.id,
-        categoria_oficial: row.draft_categoria_oficial,
-        estado_categoria: row.draft_estado_categoria,
-        categoria_comentario_admin: row.draft_comentario?.trim() || "",
+        categoria_oficial: overrides.categoria_oficial ?? row.draft_categoria_oficial,
+        estado_categoria: overrides.estado_categoria ?? row.draft_estado_categoria,
+        categoria_comentario_admin:
+          overrides.categoria_comentario_admin ?? row.draft_comentario?.trim() ?? "",
       };
 
       const res = await fetch("/api/admin/padel/categorias/revisar", {
@@ -349,8 +357,6 @@ export default function AdminCategoriasPage() {
 
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
-      const estadoOk = filtroEstado === "todos" ? true : row.estado_categoria === filtroEstado;
-
       const nombreCompleto = [row?.profiles?.nombre, row?.profiles?.apellido]
         .filter(Boolean)
         .join(" ");
@@ -368,11 +374,9 @@ export default function AdminCategoriasPage() {
         .map((v) => String(v).toLowerCase());
 
       const q = search.trim().toLowerCase();
-      const searchOk = !q ? true : bag.some((value) => value.includes(q));
-
-      return estadoOk && searchOk;
+      return !q ? true : bag.some((value) => value.includes(q));
     });
-  }, [rows, filtroEstado, search]);
+  }, [rows, search]);
 
   const counters = useMemo(() => {
     return {
@@ -422,8 +426,7 @@ export default function AdminCategoriasPage() {
               Revisión de categorías
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-500">
-              Revisa solicitudes pendientes, aprueba categorías o ajusta la categoría oficial
-              usada por los partidos de pádel.
+              Solo se muestran usuarios que ya completaron el onboarding y enviaron su revisión.
             </p>
           </div>
 
@@ -474,8 +477,8 @@ export default function AdminCategoriasPage() {
                 onChange={(e) => setFiltroEstado(e.target.value)}
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
               >
-                <option value="todos">Todos</option>
                 <option value="pendiente">Pendiente</option>
+                <option value="todos">Todos</option>
                 <option value="aprobada">Aprobada</option>
                 <option value="ajustada">Ajustada</option>
                 <option value="rechazada">Rechazada</option>
@@ -528,9 +531,7 @@ export default function AdminCategoriasPage() {
 
                       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                         <div className="rounded-2xl bg-slate-50 p-4">
-                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Nivel base
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Nivel base</p>
                           <p className="mt-2 text-lg font-bold text-slate-950">
                             {LABELS.nivel_base[row.nivel_base] || "Principiante"}
                           </p>
@@ -566,45 +567,35 @@ export default function AdminCategoriasPage() {
 
                       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                         <div className="rounded-2xl border border-slate-200 p-4">
-                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Email
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Email</p>
                           <p className="mt-2 break-all text-sm font-semibold text-slate-900">
                             {row?.profiles?.email || "Sin email"}
                           </p>
                         </div>
 
                         <div className="rounded-2xl border border-slate-200 p-4">
-                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Mano hábil
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Mano hábil</p>
                           <p className="mt-2 text-sm font-semibold text-slate-900">
                             {LABELS.mano_habil[row.mano_habil] || row.mano_habil || "No definida"}
                           </p>
                         </div>
 
                         <div className="rounded-2xl border border-slate-200 p-4">
-                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Posición
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Posición</p>
                           <p className="mt-2 text-sm font-semibold text-slate-900">
                             {LABELS.posicion[row.posicion] || row.posicion || "No definida"}
                           </p>
                         </div>
 
                         <div className="rounded-2xl border border-slate-200 p-4">
-                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Registro
-                          </p>
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Registro</p>
                           <p className="mt-2 text-sm font-semibold text-slate-900">
                             PJ {row.partidos_jugados || 0} · V {row.victorias || 0} · D {row.derrotas || 0}
                           </p>
                         </div>
                       </div>
 
-                      <div className="text-xs text-slate-400">
-                        ID jugador: {row.cuenta_id}
-                      </div>
+                      <div className="text-xs text-slate-400">ID jugador: {row.cuenta_id}</div>
                     </div>
 
                     <div className="w-full max-w-xl rounded-[24px] border border-slate-200 bg-slate-50 p-4">
@@ -612,38 +603,42 @@ export default function AdminCategoriasPage() {
                         <div className="flex flex-wrap gap-3">
                           <button
                             type="button"
-                            onClick={() => aprobarDirecto(row)}
-                            className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                            disabled={savingId === row.id}
+                            onClick={() =>
+                              guardarRevision(row, {
+                                categoria_oficial: row.categoria_solicitada,
+                                estado_categoria: "aprobada",
+                              })
+                            }
+                            className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
                           >
-                            Aprobar solicitada
+                            {savingId === row.id ? "Guardando..." : "Aprobar solicitada"}
                           </button>
 
                           <button
                             type="button"
+                            disabled={savingId === row.id}
                             onClick={() =>
-                              patchRow(row.id, {
-                                draft_estado_categoria: "rechazada",
+                              guardarRevision(row, {
+                                categoria_oficial: row.draft_categoria_oficial,
+                                estado_categoria: "rechazada",
                               })
                             }
-                            className="rounded-full border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"
+                            className="rounded-full border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60"
                           >
                             Marcar rechazada
                           </button>
                         </div>
 
                         <label className="space-y-2">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Categoría oficial
-                          </span>
+                          <span className="text-sm font-semibold text-slate-700">Categoría oficial</span>
                           <select
                             value={row.draft_categoria_oficial}
                             onChange={(e) =>
                               patchRow(row.id, {
                                 draft_categoria_oficial: e.target.value,
                                 draft_estado_categoria:
-                                  e.target.value === row.categoria_solicitada
-                                    ? "aprobada"
-                                    : "ajustada",
+                                  e.target.value === row.categoria_solicitada ? "aprobada" : "ajustada",
                               })
                             }
                             className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
@@ -657,9 +652,7 @@ export default function AdminCategoriasPage() {
                         </label>
 
                         <label className="space-y-2">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Estado de revisión
-                          </span>
+                          <span className="text-sm font-semibold text-slate-700">Estado de revisión</span>
                           <select
                             value={row.draft_estado_categoria}
                             onChange={(e) =>
@@ -677,9 +670,7 @@ export default function AdminCategoriasPage() {
                         </label>
 
                         <label className="space-y-2">
-                          <span className="text-sm font-semibold text-slate-700">
-                            Comentario admin
-                          </span>
+                          <span className="text-sm font-semibold text-slate-700">Comentario admin</span>
                           <textarea
                             rows={4}
                             value={row.draft_comentario}
