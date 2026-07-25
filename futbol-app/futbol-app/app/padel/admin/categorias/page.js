@@ -336,11 +336,16 @@ export default function AdminCategoriasPage() {
         estado_categoria: estadoFinal,
         categoria_comentario_admin:
           overrides.categoria_comentario_admin ??
-          row.draft_comentario?.trim() ??
-          null,
-        categoria_revision_admin: true,
-        categoria_revisada_por: session.user.id,
-        categoria_revisada_at: new Date().toISOString(),
+          (row.draft_comentario?.trim() ? row.draft_comentario.trim() : null),
+        categoria_revision_admin: overrides.categoria_revision_admin ?? true,
+        categoria_revisada_por:
+          overrides.categoria_revisada_por !== undefined
+            ? overrides.categoria_revisada_por
+            : session.user.id,
+        categoria_revisada_at:
+          overrides.categoria_revisada_at !== undefined
+            ? overrides.categoria_revisada_at
+            : new Date().toISOString(),
       };
 
       const { data: updated, error: updateError } = await supabase
@@ -363,23 +368,35 @@ export default function AdminCategoriasPage() {
         throw new Error(updateError.message || "No se pudo guardar la revisión.");
       }
 
+      const updatedEstado = normalizeEstado(updated.estado_categoria);
+
       patchRow(row.id, {
         categoria_oficial: updated.categoria_oficial,
-        estado_categoria: updated.estado_categoria,
+        estado_categoria: updatedEstado,
         categoria_revision_admin: updated.categoria_revision_admin,
         categoria_revisada_por: updated.categoria_revisada_por,
         categoria_comentario_admin: updated.categoria_comentario_admin || "",
         categoria_revisada_at: updated.categoria_revisada_at,
         draft_categoria_oficial: updated.categoria_oficial,
-        draft_estado_categoria: updated.estado_categoria,
+        draft_estado_categoria: updatedEstado,
         draft_comentario: updated.categoria_comentario_admin || "",
       });
 
-      setMensaje("Revisión guardada correctamente.");
+      if (updatedEstado === "aprobada") {
+        setMensaje("Categoría aprobada correctamente.");
+      } else if (updatedEstado === "ajustada") {
+        setMensaje("Categoría ajustada y guardada correctamente.");
+      } else if (updatedEstado === "rechazada") {
+        setMensaje("Solicitud rechazada correctamente.");
+      } else {
+        setMensaje("Revisión guardada correctamente.");
+      }
 
-      if (filtroEstado !== "todos") {
+      if (filtroEstado !== "todos" && updatedEstado !== filtroEstado) {
         setRows((prev) => prev.filter((item) => item.id !== row.id));
       }
+
+      await cargarSolicitudes();
     } catch (error) {
       console.error("ERROR guardarRevision:", error);
       setErrorMsg(error.message || "No se pudo guardar la revisión.");
