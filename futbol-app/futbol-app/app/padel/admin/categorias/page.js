@@ -86,10 +86,7 @@ function normalizeEstado(value) {
 function formatFecha(value) {
   if (!value) return "Sin revisión";
   try {
-    return new Intl.DateTimeFormat("es-VE", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(value));
+    return value.substring(0, 10); // Simplemente devuelve "YYYY-MM-DD"
   } catch {
     return "Sin revisión";
   }
