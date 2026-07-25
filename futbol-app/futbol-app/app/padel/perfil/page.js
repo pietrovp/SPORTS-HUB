@@ -59,10 +59,30 @@ const ONBOARDING_STEPS = [
     titulo: "En la siguiente escala, ¿dónde te colocarías?",
     campo: "q_nivel_escala",
     opciones: [
-      { label: "Iniciación",  value: "iniciacion",  peso: 0   },
-      { label: "Intermedio",  value: "intermedio",  peso: 0.8 },
-      { label: "Avanzado",    value: "avanzado",    peso: 1.6 },
-      { label: "Profesional", value: "profesional", peso: 2.5 },
+      {
+        label: "Iniciación",
+        value: "iniciacion",
+        peso: 0,
+        cats: "Rookies · 7ma",
+      },
+      {
+        label: "Intermedio",
+        value: "intermedio",
+        peso: 0.8,
+        cats: "6ta",
+      },
+      {
+        label: "Avanzado",
+        value: "avanzado",
+        peso: 1.6,
+        cats: "5ta · 4ta",
+      },
+      {
+        label: "Profesional",
+        value: "profesional",
+        peso: 2.5,
+        cats: "3era · 2da · Open",
+      },
     ],
   },
   {
@@ -239,7 +259,7 @@ export default function PadelPerfilPage() {
   const [onboardingGuardando, setOnboardingGuardando] = useState(false);
   const [shakeBtn,            setShakeBtn]            = useState(false);
 
-  const TOTAL_STEPS = ONBOARDING_STEPS.length + 1; // preguntas + pantalla resultado
+  const TOTAL_STEPS = ONBOARDING_STEPS.length + 1;
 
   useEffect(() => { cargarPerfil(); }, []);
 
@@ -312,7 +332,6 @@ export default function PadelPerfilPage() {
         tipo_partido_preferido: tiposN,
       });
 
-      // Abrir onboarding si no se completó
       if (!finalPadel.evaluacion_inicial_completada) {
         setOnboardingStep(0);
         setOnboardingResp({
@@ -419,7 +438,7 @@ export default function PadelPerfilPage() {
       const rating = calcularRatingInicial(onboardingResp);
       setRatingCalculado(rating);
       setRatingAjuste(0);
-      setOnboardingStep(ONBOARDING_STEPS.length); // ir a pantalla resultado
+      setOnboardingStep(ONBOARDING_STEPS.length);
       return;
     }
     setOnboardingStep((s) => s + 1);
@@ -499,17 +518,17 @@ export default function PadelPerfilPage() {
       </div>
     );
 
-  // ── DATOS DE PRESENTACIÓN ───────────────────────────────────────────────────
-  const nombreStr      = baseProfile?.nombre || user?.user_metadata?.nombre || user?.email?.split("@")[0] || "Jugador";
-  const apellidoStr    = baseProfile?.apellido || "";
-  const nombreCompleto = `${nombreStr} ${apellidoStr}`.trim();
-  const inicial        = nombreStr.charAt(0).toUpperCase();
+  // ── DATOS PRESENTACIÓN ──────────────────────────────────────────────────────
+  const nombreStr       = baseProfile?.nombre || user?.user_metadata?.nombre || user?.email?.split("@")[0] || "Jugador";
+  const apellidoStr     = baseProfile?.apellido || "";
+  const nombreCompleto  = `${nombreStr} ${apellidoStr}`.trim();
+  const inicial         = nombreStr.charAt(0).toUpperCase();
   const catOficialLabel = LABELS.categoria[padelProfile?.categoria_oficial] || "Rookies";
-  const ratingActual   = padelProfile?.rating    || 1.50;
-  const fiabilidadVal  = padelProfile?.fiabilidad || 20;
-  const infoRating     = getInfoRating(ratingActual);
-  const progresoPct    = calcProgresoPorcentaje(ratingActual);
-  const fiabilidadInfo = getEtiquetaFiabilidad(fiabilidadVal);
+  const ratingActual    = padelProfile?.rating    || 1.50;
+  const fiabilidadVal   = padelProfile?.fiabilidad || 20;
+  const infoRating      = getInfoRating(ratingActual);
+  const progresoPct     = calcProgresoPorcentaje(ratingActual);
+  const fiabilidadInfo  = getEtiquetaFiabilidad(fiabilidadVal);
   const categoriasDisponibles = CATEGORY_OPTIONS[normalizeNivelBase(form.nivel_base)] || [];
 
   // Onboarding vars
@@ -526,7 +545,6 @@ export default function PadelPerfilPage() {
   return (
     <div className="min-h-screen bg-gray-50/50 px-4 py-6 md:px-8">
 
-      {/* Animación shake */}
       <style>{`
         @keyframes shake {
           0%,100% { transform: translateX(0); }
@@ -554,14 +572,13 @@ export default function PadelPerfilPage() {
           </div>
         )}
 
-        {/* ════════════════════════════════════════════════════════════════════
-            MODAL ONBOARDING
-        ════════════════════════════════════════════════════════════════════ */}
+        {/* ════════════ MODAL ONBOARDING ════════════ */}
         {onboardingOpen && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0B1120]/90 sm:items-center">
-            <div className="w-full max-w-sm rounded-t-[2rem] sm:rounded-[2rem] bg-[#EEF0F5] flex flex-col overflow-hidden"
-                 style={{ maxHeight: "92vh" }}>
-
+            <div
+              className="w-full max-w-sm rounded-t-[2rem] sm:rounded-[2rem] bg-[#EEF0F5] flex flex-col overflow-hidden"
+              style={{ maxHeight: "92vh" }}
+            >
               {/* Header */}
               <div className="flex items-center justify-between px-5 pt-5 pb-2 flex-shrink-0">
                 <button
@@ -575,12 +592,14 @@ export default function PadelPerfilPage() {
                   </svg>
                 </button>
                 <span className="text-xs font-semibold text-gray-400">
-                  {esPantallaRes ? "Tu resultado" : `Pregunta ${onboardingStep + 1} de ${ONBOARDING_STEPS.length}`}
+                  {esPantallaRes
+                    ? "Tu resultado"
+                    : `Pregunta ${onboardingStep + 1} de ${ONBOARDING_STEPS.length}`}
                 </span>
                 <div className="w-9 h-9" />
               </div>
 
-              {/* Barra de progreso */}
+              {/* Barra progreso */}
               <div className="px-5 pb-3 flex-shrink-0">
                 <div className="h-1.5 w-full rounded-full bg-black/10 overflow-hidden">
                   <div
@@ -596,8 +615,6 @@ export default function PadelPerfilPage() {
                 {/* ── PANTALLA RESULTADO ── */}
                 {esPantallaRes ? (
                   <div className="flex flex-col gap-4 pt-2">
-
-                    {/* Rating card */}
                     <div className="rounded-2xl bg-[#0B1120] text-white p-6 text-center">
                       <p className="text-xs text-gray-400 mb-1 uppercase tracking-widest">
                         Tu rating inicial
@@ -613,7 +630,7 @@ export default function PadelPerfilPage() {
                       </p>
                     </div>
 
-                    {/* Ajuste manual ±0.3 */}
+                    {/* Ajuste ±0.3 */}
                     <div className="rounded-2xl bg-white p-4 shadow-sm">
                       <p className="text-xs font-semibold text-gray-500 mb-1">
                         ¿El resultado te parece justo?
@@ -628,9 +645,7 @@ export default function PadelPerfilPage() {
                           }
                           disabled={ratingAjuste <= -0.3}
                           className="w-11 h-11 rounded-full bg-gray-100 hover:bg-gray-200 active:scale-95 disabled:opacity-30 text-xl font-bold transition-all"
-                        >
-                          −
-                        </button>
+                        >−</button>
                         <span className="text-sm font-semibold text-gray-700 min-w-[70px] text-center">
                           {ratingAjuste === 0
                             ? "Sin ajuste"
@@ -644,13 +659,10 @@ export default function PadelPerfilPage() {
                           }
                           disabled={ratingAjuste >= 0.3}
                           className="w-11 h-11 rounded-full bg-gray-100 hover:bg-gray-200 active:scale-95 disabled:opacity-30 text-xl font-bold transition-all"
-                        >
-                          +
-                        </button>
+                        >+</button>
                       </div>
                     </div>
 
-                    {/* Confirmar */}
                     <button
                       onClick={guardarOnboarding}
                       disabled={onboardingGuardando}
@@ -665,19 +677,18 @@ export default function PadelPerfilPage() {
                 ) : (
                   /* ── PANTALLA PREGUNTA ── */
                   <div className="flex flex-col gap-3 pt-2">
-
                     <h2 className="text-base font-bold text-[#0B1120] leading-snug">
                       {stepActual?.titulo}
                     </h2>
 
-                    {/* Opciones */}
+                    {/* ✅ OPCIONES CON SUBTEXTO DE CATEGORÍAS */}
                     <div className="flex flex-col gap-2">
                       {stepActual?.opciones.map((op) => (
                         <button
                           key={op.value}
                           onClick={() => seleccionarRespuesta(stepActual.campo, op.value)}
                           className={`
-                            w-full text-left rounded-2xl border-2 px-4 py-3 text-sm font-medium
+                            w-full text-left rounded-2xl border-2 px-4 py-3
                             transition-all duration-150 active:scale-[0.98]
                             ${respActual === op.value
                               ? "border-[#0B1120] bg-[#0B1120] text-white shadow-md"
@@ -685,7 +696,19 @@ export default function PadelPerfilPage() {
                             }
                           `}
                         >
-                          {op.label}
+                          {/* Label principal */}
+                          <span className="block text-sm font-bold leading-snug">
+                            {op.label}
+                          </span>
+                          {/* Subtexto de categorías — solo si existe */}
+                          {op.cats && (
+                            <span className={`
+                              block text-xs mt-0.5 font-medium tracking-wide
+                              ${respActual === op.value ? "text-white/55" : "text-gray-400"}
+                            `}>
+                              {op.cats}
+                            </span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -697,12 +720,12 @@ export default function PadelPerfilPage() {
                       </p>
                     )}
 
-                    {/* Botón Continuar — THE FIX ✅ */}
+                    {/* Botón Continuar */}
                     <button
                       onClick={avanzarOnboarding}
                       className={`
-                        w-full rounded-2xl py-4 text-sm font-bold
-                        transition-all duration-150 active:scale-[0.98] mt-2
+                        w-full rounded-2xl py-4 text-sm font-bold mt-2
+                        transition-all duration-150 active:scale-[0.98]
                         ${shakeBtn ? "shake" : ""}
                         ${!respActual
                           ? "bg-[#0B1120]/25 text-white/60 cursor-not-allowed"
@@ -718,11 +741,9 @@ export default function PadelPerfilPage() {
             </div>
           </div>
         )}
-        {/* ── FIN MODAL ONBOARDING ── */}
+        {/* ════════════ FIN MODAL ONBOARDING ════════════ */}
 
-        {/* ════════════════════════════════════════════════════════════════════
-            HERO CARD — PERFIL PRINCIPAL
-        ════════════════════════════════════════════════════════════════════ */}
+        {/* ════════════ HERO CARD ════════════ */}
         <div className="relative overflow-hidden rounded-3xl bg-[#0B1120] p-6 text-white shadow-2xl md:p-8">
           <div className="absolute inset-0 opacity-5"
                style={{ backgroundImage: "radial-gradient(circle at 80% 20%, #4f98a3 0%, transparent 60%)" }} />
@@ -743,9 +764,7 @@ export default function PadelPerfilPage() {
                     ● {fiabilidadInfo.texto}
                   </span>
                 </div>
-                <p className="mt-1 text-xs text-gray-400">
-                  {user?.email}
-                </p>
+                <p className="mt-1 text-xs text-gray-400">{user?.email}</p>
               </div>
             </div>
 
@@ -756,8 +775,6 @@ export default function PadelPerfilPage() {
               <p className="text-xs text-gray-400">
                 {infoRating.catActual} → {infoRating.nextCat}
               </p>
-
-              {/* Barra progreso rating */}
               <div className="mt-1 w-48">
                 <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
                   <span>{infoRating.floor.toFixed(1)}</span>
@@ -777,10 +794,10 @@ export default function PadelPerfilPage() {
           {/* Stats rápidas */}
           <div className="relative mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
-              { label: "Partidos",  value: estadisticas.partidos            },
-              { label: "Victorias", value: estadisticas.victorias            },
-              { label: "Derrotas",  value: estadisticas.derrotas             },
-              { label: "% Victoria",value: `${estadisticas.porcentajeVictorias}%` },
+              { label: "Partidos",   value: estadisticas.partidos                   },
+              { label: "Victorias",  value: estadisticas.victorias                  },
+              { label: "Derrotas",   value: estadisticas.derrotas                   },
+              { label: "% Victoria", value: `${estadisticas.porcentajeVictorias}%`  },
             ].map(({ label, value }) => (
               <div key={label} className="rounded-2xl bg-white/5 p-3 text-center">
                 <p className="text-lg font-black">{value}</p>
@@ -790,12 +807,10 @@ export default function PadelPerfilPage() {
           </div>
         </div>
 
-        {/* ════════════════════════════════════════════════════════════════════
-            BODY — EDICIÓN / VISTA
-        ════════════════════════════════════════════════════════════════════ */}
+        {/* ════════════ BODY ════════════ */}
         <div className="grid gap-6 lg:grid-cols-3">
 
-          {/* ── Columna izquierda: datos del perfil ── */}
+          {/* Columna izquierda — datos del perfil */}
           <div className="lg:col-span-2 space-y-4">
             <div className="rounded-3xl bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
@@ -1029,8 +1044,10 @@ export default function PadelPerfilPage() {
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {normalizarTiposPartido(padelProfile?.tipo_partido_preferido).map((t) => (
-                        <span key={t}
-                              className="rounded-full bg-gray-100 px-3 py-0.5 text-xs font-semibold text-gray-700 capitalize">
+                        <span
+                          key={t}
+                          className="rounded-full bg-gray-100 px-3 py-0.5 text-xs font-semibold text-gray-700 capitalize"
+                        >
                           {t}
                         </span>
                       ))}
@@ -1041,7 +1058,7 @@ export default function PadelPerfilPage() {
             </div>
           </div>
 
-          {/* ── Columna derecha: estado categoría + actividad ── */}
+          {/* Columna derecha */}
           <div className="space-y-4">
 
             {/* Estado categoría */}
@@ -1061,11 +1078,13 @@ export default function PadelPerfilPage() {
                 </span>
               </div>
               <p className="text-xs text-gray-400 leading-relaxed">
-                Categoría oficial: <span className="font-semibold text-gray-700">{catOficialLabel}</span>
+                Categoría oficial:{" "}
+                <span className="font-semibold text-gray-700">{catOficialLabel}</span>
               </p>
               {padelProfile?.categoria_solicitada !== padelProfile?.categoria_oficial && (
                 <p className="text-xs text-amber-600 mt-1">
-                  Solicitud pendiente: <span className="font-bold">
+                  Solicitud pendiente:{" "}
+                  <span className="font-bold">
                     {LABELS.categoria[padelProfile?.categoria_solicitada]}
                   </span>
                 </p>
