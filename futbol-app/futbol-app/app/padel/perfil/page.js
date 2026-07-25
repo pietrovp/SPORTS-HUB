@@ -44,13 +44,30 @@ const LABELS = {
     pendiente: "En revisión", aprobada: "Aprobada",
     rechazada: "Rechazada",  ajustada: "Ajustada",
   },
-  posicion:   { drive: "Drive", reves: "Revés", ambos: "Ambos lados" },
-  mano_habil: { derecha: "Derecha", izquierda: "Izquierda", ambidiestro: "Ambidiestro" },
-  genero:     { masculino: "Masculino", femenino: "Femenino", otro: "Otro" },
+  posicion:          { drive: "Drive", reves: "Revés", ambos: "Ambos lados" },
+  mano_habil:        { derecha: "Derecha", izquierda: "Izquierda", ambidiestro: "Ambidiestro" },
+  genero:            { masculino: "Masculino", femenino: "Femenino", otro: "Otro" },
+  // ✅ FIX #5: mapa de labels para horario
+  horario_preferido: { manana: "Mañana", tarde: "Tarde", noche: "Noche" },
+  dia_preferido: {
+    semana: "Entre semana",
+    fin_de_semana: "Fin de semana",
+    cualquiera: "Cualquier día",
+  },
 };
 
 const TIPOS_VALIDOS   = ["amistoso", "competitivo", "mixto"];
 const NIVELES_VALIDOS = ["principiante", "intermedio", "avanzado", "profesional"];
+
+const NIVEL_LABELS = {
+  rookies: { label: "Rookies", desc: "Sin clases. Menos de seis meses jugando. Sin técnica ni táctica." },
+  "7ma":   { label: "7ma",     desc: "Conoces las reglas básicas, golpeas con poca consistencia." },
+  "6ta":   { label: "6ta",     desc: "Juegas con cierta regularidad, golpes básicos consolidados." },
+  "5ta":   { label: "5ta",     desc: "Nivel avanzado, participas en ligas amateur." },
+  "4ta":   { label: "4ta",     desc: "Alto nivel técnico, compites en torneos con regularidad." },
+  "3era":  { label: "3era",    desc: "Nivel semiprofesional, buena táctica y físico." },
+  open:    { label: "Open",    desc: "Nivel profesional o muy cercano." },
+};
 
 // ─── ONBOARDING STEPS ─────────────────────────────────────────────────────────
 const ONBOARDING_STEPS = [
@@ -59,30 +76,10 @@ const ONBOARDING_STEPS = [
     titulo: "En la siguiente escala, ¿dónde te colocarías?",
     campo: "q_nivel_escala",
     opciones: [
-      {
-        label: "Iniciación",
-        value: "iniciacion",
-        peso: 0,
-        cats: "Rookies · 7ma",
-      },
-      {
-        label: "Intermedio",
-        value: "intermedio",
-        peso: 0.8,
-        cats: "6ta",
-      },
-      {
-        label: "Avanzado",
-        value: "avanzado",
-        peso: 1.6,
-        cats: "5ta · 4ta",
-      },
-      {
-        label: "Profesional",
-        value: "profesional",
-        peso: 2.5,
-        cats: "3era · 2da · Open",
-      },
+      { label: "Iniciación",   value: "iniciacion",  peso: 0,   cats: "Rookies · 7ma"    },
+      { label: "Intermedio",   value: "intermedio",  peso: 0.8, cats: "6ta"              },
+      { label: "Avanzado",     value: "avanzado",    peso: 1.6, cats: "5ta · 4ta"        },
+      { label: "Profesional",  value: "profesional", peso: 2.5, cats: "3era · 2da · Open"},
     ],
   },
   {
@@ -176,16 +173,6 @@ function nivelDesdeRating(r) {
   return              { nivel_base: "profesional",  categoria: "open"   };
 }
 
-const NIVEL_LABELS = {
-  rookies: { label: "Rookies", desc: "Sin clases. Menos de seis meses jugando. Sin técnica ni táctica." },
-  "7ma":   { label: "7ma",     desc: "Conoces las reglas básicas, golpeas con poca consistencia." },
-  "6ta":   { label: "6ta",     desc: "Juegas con cierta regularidad, golpes básicos consolidados." },
-  "5ta":   { label: "5ta",     desc: "Nivel avanzado, participas en ligas amateur." },
-  "4ta":   { label: "4ta",     desc: "Alto nivel técnico, compites en torneos con regularidad." },
-  "3era":  { label: "3era",    desc: "Nivel semiprofesional, buena táctica y físico." },
-  open:    { label: "Open",    desc: "Nivel profesional o muy cercano." },
-};
-
 // ─── HELPERS PERFIL ───────────────────────────────────────────────────────────
 function normalizeNivelBase(value) {
   const n = String(value || "").trim().toLowerCase();
@@ -207,9 +194,10 @@ function normalizarTiposPartido(value) {
   const unique = [...new Set(tipos)];
   return unique.length > 0 ? unique : ["amistoso"];
 }
+// ✅ FIX #3: helper de relación — robusto ante objeto o array
 function normalizeMatchRelation(match) {
   if (!match) return null;
-  return Array.isArray(match) ? match[0] : match;
+  return Array.isArray(match) ? match[0] ?? null : match;
 }
 function getInfoRating(ratingVal) {
   const r = Number(ratingVal) || 1.0;
@@ -285,10 +273,11 @@ export default function PadelPerfilPage() {
 
       let finalPadel = padelData;
       if (!finalPadel) {
+        // ✅ FIX #2: no pasar `id` en el payload para evitar conflicto con cuenta_id
         const { data: created, error: createError } = await supabase
           .from("padel_profiles")
           .upsert(
-            { id: authUser.id, cuenta_id: authUser.id, ...DEFAULT_PROFILE },
+            { cuenta_id: authUser.id, ...DEFAULT_PROFILE },
             { onConflict: "cuenta_id" }
           )
           .select()
@@ -342,6 +331,7 @@ export default function PadelPerfilPage() {
         setOnboardingOpen(true);
       }
 
+      // ✅ FIX #1: referencedTable debe ser el nombre real de la tabla, no el alias
       const { data: playedMatches, error: matchesError } = await supabase
         .from("padel_match_players")
         .select(`
@@ -352,7 +342,7 @@ export default function PadelPerfilPage() {
           )
         `)
         .eq("user_id", authUser.id)
-        .order("scheduled_at", { referencedTable: "match", ascending: false });
+        .order("scheduled_at", { referencedTable: "padel_matches", ascending: false });
       if (matchesError) throw matchesError;
 
       setMatchesData(
@@ -472,7 +462,31 @@ export default function PadelPerfilPage() {
         .single();
       if (error) throw error;
 
-      setPadelProfile((prev) => ({ ...prev, ...data, evaluacion_inicial_completada: true }));
+      // ✅ FIX #4: también actualizar form para que la UI refleje los nuevos valores
+      const nivelBaseN    = normalizeNivelBase(data.nivel_base);
+      const catSolicitada = normalizeCategoria(data.categoria_solicitada, nivelBaseN);
+      const catOficial    = normalizeCategoria(data.categoria_oficial, nivelBaseN);
+
+      setPadelProfile((prev) => ({
+        ...prev,
+        ...data,
+        nivel_base:           nivelBaseN,
+        categoria_solicitada: catSolicitada,
+        categoria_oficial:    catOficial,
+        estado_categoria:     normalizeEstadoCategoria(data.estado_categoria),
+        rating:               Number(data.rating) || ratingFinal,
+        fiabilidad:           Number(data.fiabilidad) || 20,
+        evaluacion_inicial_completada: true,
+      }));
+      setForm((prev) => ({
+        ...prev,
+        nivel_base:           nivelBaseN,
+        categoria_solicitada: catSolicitada,
+        rating:               Number(data.rating) || ratingFinal,
+        fiabilidad:           Number(data.fiabilidad) || 20,
+        edad:                 edadNum,
+      }));
+
       setOnboardingOpen(false);
       setMensaje(
         `¡Bienvenido! Tu nivel inicial es ${ratingFinal.toFixed(2)} — ${NIVEL_LABELS[categoria]?.label} 🎾`
@@ -681,7 +695,6 @@ export default function PadelPerfilPage() {
                       {stepActual?.titulo}
                     </h2>
 
-                    {/* ✅ OPCIONES CON SUBTEXTO DE CATEGORÍAS */}
                     <div className="flex flex-col gap-2">
                       {stepActual?.opciones.map((op) => (
                         <button
@@ -696,11 +709,9 @@ export default function PadelPerfilPage() {
                             }
                           `}
                         >
-                          {/* Label principal */}
                           <span className="block text-sm font-bold leading-snug">
                             {op.label}
                           </span>
-                          {/* Subtexto de categorías — solo si existe */}
                           {op.cats && (
                             <span className={`
                               block text-xs mt-0.5 font-medium tracking-wide
@@ -713,14 +724,12 @@ export default function PadelPerfilPage() {
                       ))}
                     </div>
 
-                    {/* Aviso si intenta continuar sin seleccionar */}
                     {shakeBtn && (
                       <p className="text-center text-xs font-semibold text-rose-500 mt-1">
                         👆 Selecciona una opción para continuar
                       </p>
                     )}
 
-                    {/* Botón Continuar */}
                     <button
                       onClick={avanzarOnboarding}
                       className={`
@@ -981,8 +990,9 @@ export default function PadelPerfilPage() {
                       <option value="noche">Noche</option>
                     </select>
                   ) : (
-                    <p className="text-sm font-semibold text-gray-800 capitalize">
-                      {padelProfile?.horario_preferido || "—"}
+                    // ✅ FIX #5: usar mapa de labels en lugar de .capitalize()
+                    <p className="text-sm font-semibold text-gray-800">
+                      {LABELS.horario_preferido[padelProfile?.horario_preferido] || "—"}
                     </p>
                   )}
                 </div>
@@ -1001,12 +1011,9 @@ export default function PadelPerfilPage() {
                       <option value="cualquiera">Cualquier día</option>
                     </select>
                   ) : (
+                    // ✅ FIX #5: usar mapa de labels (más limpio, sin ternarios)
                     <p className="text-sm font-semibold text-gray-800">
-                      {padelProfile?.dia_preferido === "fin_de_semana"
-                        ? "Fin de semana"
-                        : padelProfile?.dia_preferido === "semana"
-                        ? "Entre semana"
-                        : padelProfile?.dia_preferido || "—"}
+                      {LABELS.dia_preferido[padelProfile?.dia_preferido] || "—"}
                     </p>
                   )}
                 </div>
