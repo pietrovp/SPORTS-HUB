@@ -52,7 +52,7 @@ const LABELS = {
 const TIPOS_VALIDOS   = ["amistoso", "competitivo", "mixto"];
 const NIVELES_VALIDOS = ["principiante", "intermedio", "avanzado", "profesional"];
 
-// ─── ONBOARDING STEPS — PESOS RECALIBRADOS ───────────────────────────────────
+// ─── ONBOARDING STEPS ─────────────────────────────────────────────────────────
 const ONBOARDING_STEPS = [
   {
     id: 0,
@@ -237,16 +237,17 @@ export default function PadelPerfilPage() {
   const [ratingCalculado,     setRatingCalculado]     = useState(1.0);
   const [ratingAjuste,        setRatingAjuste]        = useState(0);
   const [onboardingGuardando, setOnboardingGuardando] = useState(false);
-  const [shakeBtn,            setShakeBtn]            = useState(false); // feedback visual
+  const [shakeBtn,            setShakeBtn]            = useState(false);
 
-  const TOTAL_STEPS = ONBOARDING_STEPS.length + 1;
+  const TOTAL_STEPS = ONBOARDING_STEPS.length + 1; // preguntas + pantalla resultado
 
   useEffect(() => { cargarPerfil(); }, []);
 
-  // ── CARGA PERFIL ──────────────────────────────────────────────────────────
+  // ── CARGA PERFIL ────────────────────────────────────────────────────────────
   async function cargarPerfil() {
     try {
       setLoading(true); setErrorMsg(""); setMensaje("");
+
       const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
       if (authError) throw authError;
       if (!authUser) { setErrorMsg("No hay una sesión activa."); setLoading(false); return; }
@@ -311,12 +312,14 @@ export default function PadelPerfilPage() {
         tipo_partido_preferido: tiposN,
       });
 
+      // Abrir onboarding si no se completó
       if (!finalPadel.evaluacion_inicial_completada) {
         setOnboardingStep(0);
         setOnboardingResp({
           q_nivel_escala: null, q_anios: null, q_competicion: null,
           q_formacion: null, q_volea: null, q_rebotes: null, q_edad: null,
         });
+        setRatingAjuste(0);
         setOnboardingOpen(true);
       }
 
@@ -347,7 +350,7 @@ export default function PadelPerfilPage() {
     }
   }
 
-  // ── GUARDAR EDICIÓN NORMAL ────────────────────────────────────────────────
+  // ── GUARDAR EDICIÓN NORMAL ──────────────────────────────────────────────────
   async function guardarCambios() {
     if (!user) return;
     try {
@@ -399,27 +402,24 @@ export default function PadelPerfilPage() {
     }
   }
 
-  // ── ONBOARDING ────────────────────────────────────────────────────────────
+  // ── ONBOARDING HANDLERS ─────────────────────────────────────────────────────
   function seleccionarRespuesta(campo, value) {
     setOnboardingResp((prev) => ({ ...prev, [campo]: value }));
-    setShakeBtn(false); // resetear shake al seleccionar
+    setShakeBtn(false);
   }
 
   function avanzarOnboarding() {
     const stepActual = ONBOARDING_STEPS[onboardingStep];
-    // Validar que haya respuesta seleccionada
     if (stepActual && !onboardingResp[stepActual.campo]) {
-      // Trigger shake animation
       setShakeBtn(true);
       setTimeout(() => setShakeBtn(false), 600);
       return;
     }
-
     if (onboardingStep === ONBOARDING_STEPS.length - 1) {
       const rating = calcularRatingInicial(onboardingResp);
       setRatingCalculado(rating);
       setRatingAjuste(0);
-      setOnboardingStep(ONBOARDING_STEPS.length);
+      setOnboardingStep(ONBOARDING_STEPS.length); // ir a pantalla resultado
       return;
     }
     setOnboardingStep((s) => s + 1);
@@ -455,7 +455,9 @@ export default function PadelPerfilPage() {
 
       setPadelProfile((prev) => ({ ...prev, ...data, evaluacion_inicial_completada: true }));
       setOnboardingOpen(false);
-      setMensaje(`¡Bienvenido! Tu nivel inicial es ${ratingFinal.toFixed(2)} — ${NIVEL_LABELS[categoria]?.label} 🎾`);
+      setMensaje(
+        `¡Bienvenido! Tu nivel inicial es ${ratingFinal.toFixed(2)} — ${NIVEL_LABELS[categoria]?.label} 🎾`
+      );
     } catch (err) {
       setErrorMsg(err.message || "Error al guardar la evaluación.");
     } finally {
@@ -463,7 +465,7 @@ export default function PadelPerfilPage() {
     }
   }
 
-  // ── ESTADÍSTICAS ──────────────────────────────────────────────────────────
+  // ── ESTADÍSTICAS ────────────────────────────────────────────────────────────
   const estadisticas = useMemo(() => {
     const matches = (matchesData || [])
       .map((row) => {
@@ -486,7 +488,7 @@ export default function PadelPerfilPage() {
     return { partidos, victorias, derrotas, porcentajeVictorias: pct, racha: mejorRacha };
   }, [matchesData]);
 
-  // ── LOADING SKELETON ──────────────────────────────────────────────────────
+  // ── LOADING ─────────────────────────────────────────────────────────────────
   if (loading)
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-8">
@@ -497,7 +499,7 @@ export default function PadelPerfilPage() {
       </div>
     );
 
-  // ── DATOS DE PRESENTACIÓN ─────────────────────────────────────────────────
+  // ── DATOS DE PRESENTACIÓN ───────────────────────────────────────────────────
   const nombreStr      = baseProfile?.nombre || user?.user_metadata?.nombre || user?.email?.split("@")[0] || "Jugador";
   const apellidoStr    = baseProfile?.apellido || "";
   const nombreCompleto = `${nombreStr} ${apellidoStr}`.trim();
@@ -510,19 +512,21 @@ export default function PadelPerfilPage() {
   const fiabilidadInfo = getEtiquetaFiabilidad(fiabilidadVal);
   const categoriasDisponibles = CATEGORY_OPTIONS[normalizeNivelBase(form.nivel_base)] || [];
 
-  const stepActual     = ONBOARDING_STEPS[onboardingStep] || null;
-  const esPantallaRes  = onboardingStep === ONBOARDING_STEPS.length;
-  const respActual     = stepActual ? onboardingResp[stepActual.campo] : null;
-  const progresoBarPct = Math.round((onboardingStep / TOTAL_STEPS) * 100);
+  // Onboarding vars
+  const stepActual      = ONBOARDING_STEPS[onboardingStep] || null;
+  const esPantallaRes   = onboardingStep === ONBOARDING_STEPS.length;
+  const respActual      = stepActual ? onboardingResp[stepActual.campo] : null;
+  const progresoBarPct  = Math.round((onboardingStep / TOTAL_STEPS) * 100);
   const ratingConAjuste = parseFloat(
     Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2)
   );
   const { categoria: catResult } = nivelDesdeRating(ratingConAjuste);
 
+  // ── RENDER ──────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-50/50 px-4 py-6 md:px-8">
 
-      {/* Estilos inline para animación shake */}
+      {/* Animación shake */}
       <style>{`
         @keyframes shake {
           0%,100% { transform: translateX(0); }
@@ -550,362 +554,537 @@ export default function PadelPerfilPage() {
           </div>
         )}
 
-        {/* ── MODAL ONBOARDING ─────────────────────────────────────────────── */}
+        {/* ════════════════════════════════════════════════════════════════════
+            MODAL ONBOARDING
+        ════════════════════════════════════════════════════════════════════ */}
         {onboardingOpen && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0B1120]/90 sm:items-center">
-            <div className="w-full max-w-sm rounded-t-[2rem] sm:rounded-[2rem] bg-[#EEF0F5] flex flex-col min-h-[70vh] sm:min-h-0 overflow-hidden">
+            <div className="w-full max-w-sm rounded-t-[2rem] sm:rounded-[2rem] bg-[#EEF0F5] flex flex-col overflow-hidden"
+                 style={{ maxHeight: "92vh" }}>
 
               {/* Header */}
-              <div className="flex items-center justify-between px-5 pt-5 pb-2">
+              <div className="flex items-center justify-between px-5 pt-5 pb-2 flex-shrink-0">
                 <button
                   onClick={() => { if (onboardingStep > 0) setOnboardingStep((s) => s - 1); }}
                   disabled={onboardingStep === 0}
                   className="w-9 h-9 flex items-center justify-center disabled:opacity-0 rounded-full hover:bg-black/5 transition-colors"
                 >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" strokeWidth="2.5">
                     <path d="M19 12H5M12 5l-7 7 7 7"/>
                   </svg>
                 </button>
                 <span className="text-xs font-semibold text-gray-400">
-                  {esPantallaRes ? "Resultado" : `${onboardingStep + 1} de ${ONBOARDING_STEPS.length}`}
+                  {esPantallaRes ? "Tu resultado" : `Pregunta ${onboardingStep + 1} de ${ONBOARDING_STEPS.length}`}
                 </span>
                 <div className="w-9 h-9" />
               </div>
 
-              {/* Barra progreso */}
-              <div className="px-5 pb-4">
-                <div className="h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
+              {/* Barra de progreso */}
+              <div className="px-5 pb-3 flex-shrink-0">
+                <div className="h-1.5 w-full rounded-full bg-black/10 overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-blue-600 transition-all duration-500"
-                    style={{ width: `${esPantallaRes ? 100 : progresoBarPct}%` }}
+                    className="h-full rounded-full bg-[#0B1120] transition-all duration-500"
+                    style={{ width: `${progresoBarPct}%` }}
                   />
                 </div>
               </div>
 
-              {/* ── PANTALLA PREGUNTA ─────────────────────────────────────── */}
-              {!esPantallaRes && stepActual && (
-                <div className="flex-1 flex flex-col px-5 pb-6 gap-4">
-                  <h2 className="text-xl font-black text-gray-900 leading-snug">
-                    {stepActual.titulo}
-                  </h2>
+              {/* Contenido scrollable */}
+              <div className="flex-1 overflow-y-auto px-5 pb-6">
 
-                  <div className="flex flex-col gap-2.5 mt-1">
-                    {stepActual.opciones.map((op) => {
-                      const selected = respActual === op.value;
-                      return (
+                {/* ── PANTALLA RESULTADO ── */}
+                {esPantallaRes ? (
+                  <div className="flex flex-col gap-4 pt-2">
+
+                    {/* Rating card */}
+                    <div className="rounded-2xl bg-[#0B1120] text-white p-6 text-center">
+                      <p className="text-xs text-gray-400 mb-1 uppercase tracking-widest">
+                        Tu rating inicial
+                      </p>
+                      <p className="text-6xl font-black tracking-tight leading-none my-2">
+                        {ratingConAjuste.toFixed(2)}
+                      </p>
+                      <span className="inline-block rounded-full bg-white/10 px-3 py-1 text-sm font-bold text-emerald-400">
+                        {NIVEL_LABELS[catResult]?.label}
+                      </span>
+                      <p className="text-xs text-gray-400 mt-2 leading-relaxed">
+                        {NIVEL_LABELS[catResult]?.desc}
+                      </p>
+                    </div>
+
+                    {/* Ajuste manual ±0.3 */}
+                    <div className="rounded-2xl bg-white p-4 shadow-sm">
+                      <p className="text-xs font-semibold text-gray-500 mb-1">
+                        ¿El resultado te parece justo?
+                      </p>
+                      <p className="text-xs text-gray-400 mb-3">
+                        Puedes ajustarlo ligeramente (máx ±0.3):
+                      </p>
+                      <div className="flex items-center justify-between gap-3">
+                        <button
+                          onClick={() =>
+                            setRatingAjuste((a) => parseFloat(Math.max(a - 0.1, -0.3).toFixed(1)))
+                          }
+                          disabled={ratingAjuste <= -0.3}
+                          className="w-11 h-11 rounded-full bg-gray-100 hover:bg-gray-200 active:scale-95 disabled:opacity-30 text-xl font-bold transition-all"
+                        >
+                          −
+                        </button>
+                        <span className="text-sm font-semibold text-gray-700 min-w-[70px] text-center">
+                          {ratingAjuste === 0
+                            ? "Sin ajuste"
+                            : ratingAjuste > 0
+                            ? `+${ratingAjuste.toFixed(1)}`
+                            : ratingAjuste.toFixed(1)}
+                        </span>
+                        <button
+                          onClick={() =>
+                            setRatingAjuste((a) => parseFloat(Math.min(a + 0.1, 0.3).toFixed(1)))
+                          }
+                          disabled={ratingAjuste >= 0.3}
+                          className="w-11 h-11 rounded-full bg-gray-100 hover:bg-gray-200 active:scale-95 disabled:opacity-30 text-xl font-bold transition-all"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Confirmar */}
+                    <button
+                      onClick={guardarOnboarding}
+                      disabled={onboardingGuardando}
+                      className="w-full rounded-2xl bg-[#0B1120] py-4 text-sm font-bold text-white
+                                 hover:bg-[#1a2740] active:scale-[0.98] disabled:opacity-60
+                                 transition-all duration-150"
+                    >
+                      {onboardingGuardando ? "Guardando…" : "Confirmar y comenzar 🎾"}
+                    </button>
+                  </div>
+
+                ) : (
+                  /* ── PANTALLA PREGUNTA ── */
+                  <div className="flex flex-col gap-3 pt-2">
+
+                    <h2 className="text-base font-bold text-[#0B1120] leading-snug">
+                      {stepActual?.titulo}
+                    </h2>
+
+                    {/* Opciones */}
+                    <div className="flex flex-col gap-2">
+                      {stepActual?.opciones.map((op) => (
                         <button
                           key={op.value}
                           onClick={() => seleccionarRespuesta(stepActual.campo, op.value)}
-                          className={`flex items-center gap-3 w-full rounded-2xl px-4 py-3.5 text-left text-sm font-semibold transition-all duration-150 border-2
-                            ${selected
-                              ? "bg-blue-600 border-blue-600 text-white shadow-md scale-[1.02]"
-                              : "bg-white border-transparent text-gray-800 hover:border-blue-200 hover:bg-blue-50"
-                            }`}
+                          className={`
+                            w-full text-left rounded-2xl border-2 px-4 py-3 text-sm font-medium
+                            transition-all duration-150 active:scale-[0.98]
+                            ${respActual === op.value
+                              ? "border-[#0B1120] bg-[#0B1120] text-white shadow-md"
+                              : "border-transparent bg-white text-[#0B1120] hover:border-[#0B1120]/20 shadow-sm"
+                            }
+                          `}
                         >
-                          <span className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-all
-                            ${selected ? "border-white bg-white" : "border-gray-300"}`}
-                          >
-                            {selected && (
-                              <span className="w-2.5 h-2.5 rounded-full bg-blue-600 block" />
-                            )}
-                          </span>
                           {op.label}
                         </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Mensaje si no seleccionó nada */}
-                  {shakeBtn && (
-                    <p className="text-xs text-rose-500 font-semibold text-center -mt-1">
-                      👆 Selecciona una opción para continuar
-                    </p>
-                  )}
-
-                  <div className="mt-auto pt-2">
-                    <button
-                      onClick={avanzarOnboarding}
-                      className={`w-full rounded-2xl py-4 text-sm font-black transition-all duration-150
-                        ${respActual
-                          ? "bg-blue-600 text-white hover:bg-blue-700 active:scale-95"
-                          : "bg-gray-200 text-gray-400 cursor-not-allowed"
-                        } ${shakeBtn ? "shake" : ""}`}
-                    >
-                      {onboardingStep === ONBOARDING_STEPS.length - 1 ? "Ver mi resultado →" : "Continuar →"}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* ── PANTALLA RESULTADO ────────────────────────────────────── */}
-              {esPantallaRes && (
-                <div className="flex-1 flex flex-col px-5 pb-6 gap-5">
-                  <div className="text-center">
-                    <p className="text-sm font-semibold text-gray-500 mb-1">Tu nivel estimado</p>
-                    <div className="inline-flex items-center gap-2 bg-blue-600 text-white rounded-2xl px-5 py-2.5 mb-2">
-                      <span className="text-2xl font-black">{NIVEL_LABELS[catResult]?.label}</span>
-                      <span className="text-lg font-bold opacity-80">· {ratingConAjuste.toFixed(2)}</span>
+                      ))}
                     </div>
-                    <p className="text-xs text-gray-500 max-w-xs mx-auto leading-relaxed">
-                      {NIVEL_LABELS[catResult]?.desc}
-                    </p>
-                  </div>
 
-                  {/* Ajuste manual */}
-                  <div className="bg-white rounded-2xl p-4 space-y-3">
-                    <p className="text-xs font-bold text-gray-600 text-center">
-                      ¿No te convence? Ajusta tu nivel
-                    </p>
-                    <div className="flex items-center justify-center gap-4">
-                      <button
-                        onClick={() => setRatingAjuste((a) => Math.max(a - 0.25, -1.5))}
-                        className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-lg font-bold active:scale-90 transition-all"
-                      >−</button>
-                      <div className="text-center">
-                        <span className="text-2xl font-black text-blue-600">{ratingConAjuste.toFixed(2)}</span>
-                        <p className="text-xs text-gray-400">{NIVEL_LABELS[catResult]?.label}</p>
-                      </div>
-                      <button
-                        onClick={() => setRatingAjuste((a) => Math.min(a + 0.25, 1.5))}
-                        className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-lg font-bold active:scale-90 transition-all"
-                      >+</button>
-                    </div>
-                    {ratingAjuste !== 0 && (
-                      <p className="text-xs text-center text-blue-500 font-semibold">
-                        Ajuste manual: {ratingAjuste > 0 ? "+" : ""}{ratingAjuste.toFixed(2)}
+                    {/* Aviso si intenta continuar sin seleccionar */}
+                    {shakeBtn && (
+                      <p className="text-center text-xs font-semibold text-rose-500 mt-1">
+                        👆 Selecciona una opción para continuar
                       </p>
                     )}
+
+                    {/* Botón Continuar — THE FIX ✅ */}
+                    <button
+                      onClick={avanzarOnboarding}
+                      className={`
+                        w-full rounded-2xl py-4 text-sm font-bold
+                        transition-all duration-150 active:scale-[0.98] mt-2
+                        ${shakeBtn ? "shake" : ""}
+                        ${!respActual
+                          ? "bg-[#0B1120]/25 text-white/60 cursor-not-allowed"
+                          : "bg-[#0B1120] text-white hover:bg-[#1a2740] shadow-md"
+                        }
+                      `}
+                    >
+                      Continuar
+                    </button>
                   </div>
-
-                  <p className="text-xs text-gray-400 text-center leading-relaxed px-2">
-                    Tu categoría será revisada por un administrador antes de confirmarse. Puedes jugar mientras tanto.
-                  </p>
-
-                  <button
-                    onClick={guardarOnboarding}
-                    disabled={onboardingGuardando}
-                    className="w-full rounded-2xl py-4 bg-blue-600 text-white text-sm font-black hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-60"
-                  >
-                    {onboardingGuardando ? "Guardando..." : "Confirmar y empezar 🎾"}
-                  </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
         )}
+        {/* ── FIN MODAL ONBOARDING ── */}
 
-        {/* ── HEADER PERFIL ────────────────────────────────────────────────── */}
-        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 p-6 text-white shadow-xl">
-          <div className="absolute inset-0 opacity-10"
-            style={{ backgroundImage: "radial-gradient(circle at 70% 50%, #3b82f6 0%, transparent 60%)" }} />
-          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-500/20 text-2xl font-black ring-2 ring-blue-400/30">
+        {/* ════════════════════════════════════════════════════════════════════
+            HERO CARD — PERFIL PRINCIPAL
+        ════════════════════════════════════════════════════════════════════ */}
+        <div className="relative overflow-hidden rounded-3xl bg-[#0B1120] p-6 text-white shadow-2xl md:p-8">
+          <div className="absolute inset-0 opacity-5"
+               style={{ backgroundImage: "radial-gradient(circle at 80% 20%, #4f98a3 0%, transparent 60%)" }} />
+
+          <div className="relative flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
+            {/* Izquierda */}
+            <div className="flex items-start gap-4">
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10 text-2xl font-black ring-2 ring-white/20">
                 {inicial}
               </div>
               <div>
-                <h1 className="text-xl font-black">{nombreCompleto}</h1>
-                <div className="mt-1 flex items-center gap-2 flex-wrap">
-                  <span className="rounded-full bg-blue-500/20 px-3 py-0.5 text-xs font-bold text-blue-300 ring-1 ring-blue-400/30">
+                <h1 className="text-xl font-black tracking-tight">{nombreCompleto}</h1>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-white/10 px-3 py-0.5 text-xs font-semibold">
                     {catOficialLabel}
                   </span>
                   <span className={`text-xs font-semibold ${fiabilidadInfo.color}`}>
-                    {fiabilidadInfo.texto}
+                    ● {fiabilidadInfo.texto}
                   </span>
+                </div>
+                <p className="mt-1 text-xs text-gray-400">
+                  {user?.email}
+                </p>
+              </div>
+            </div>
+
+            {/* Rating */}
+            <div className="flex flex-col items-start gap-1 md:items-end">
+              <p className="text-xs text-gray-400 uppercase tracking-widest">Rating</p>
+              <p className="text-5xl font-black leading-none">{ratingActual.toFixed(2)}</p>
+              <p className="text-xs text-gray-400">
+                {infoRating.catActual} → {infoRating.nextCat}
+              </p>
+
+              {/* Barra progreso rating */}
+              <div className="mt-1 w-48">
+                <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
+                  <span>{infoRating.floor.toFixed(1)}</span>
+                  <span>{progresoPct}%</span>
+                  <span>{infoRating.ceiling.toFixed(1)}</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-emerald-400 transition-all duration-700"
+                    style={{ width: `${progresoPct}%` }}
+                  />
                 </div>
               </div>
             </div>
-            {!editando && (
-              <button
-                onClick={() => setEditando(true)}
-                className="self-start sm:self-auto rounded-xl bg-white/10 px-4 py-2 text-xs font-bold hover:bg-white/20 transition-colors"
-              >
-                ✏️ Editar perfil
-              </button>
-            )}
           </div>
 
-          {/* Rating + progreso */}
-          <div className="relative mt-5 space-y-2">
-            <div className="flex items-end justify-between">
-              <div>
-                <p className="text-xs text-slate-400">Rating actual</p>
-                <p className="text-3xl font-black tabular-nums">{ratingActual.toFixed(2)}</p>
+          {/* Stats rápidas */}
+          <div className="relative mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              { label: "Partidos",  value: estadisticas.partidos            },
+              { label: "Victorias", value: estadisticas.victorias            },
+              { label: "Derrotas",  value: estadisticas.derrotas             },
+              { label: "% Victoria",value: `${estadisticas.porcentajeVictorias}%` },
+            ].map(({ label, value }) => (
+              <div key={label} className="rounded-2xl bg-white/5 p-3 text-center">
+                <p className="text-lg font-black">{value}</p>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wider">{label}</p>
               </div>
-              <div className="text-right">
-                <p className="text-xs text-slate-400">Próxima categoría</p>
-                <p className="text-sm font-bold text-blue-300">{infoRating.nextCat}</p>
-              </div>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-700">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-700"
-                style={{ width: `${progresoPct}%` }}
-              />
-            </div>
-            <p className="text-right text-xs text-slate-500">{progresoPct}% hacia {infoRating.nextCat}</p>
+            ))}
           </div>
         </div>
 
-        {/* ── ESTADÍSTICAS ─────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            { label: "Partidos",   value: estadisticas.partidos,           color: "text-slate-700" },
-            { label: "Victorias",  value: estadisticas.victorias,          color: "text-emerald-600" },
-            { label: "Derrotas",   value: estadisticas.derrotas,           color: "text-rose-500" },
-            { label: "% Victoria", value: `${estadisticas.porcentajeVictorias}%`, color: "text-blue-600" },
-          ].map((s) => (
-            <div key={s.label} className="rounded-2xl bg-white p-4 shadow-sm border border-gray-100 text-center">
-              <p className={`text-2xl font-black tabular-nums ${s.color}`}>{s.value}</p>
-              <p className="text-xs text-gray-400 mt-0.5">{s.label}</p>
-            </div>
-          ))}
-        </div>
+        {/* ════════════════════════════════════════════════════════════════════
+            BODY — EDICIÓN / VISTA
+        ════════════════════════════════════════════════════════════════════ */}
+        <div className="grid gap-6 lg:grid-cols-3">
 
-        {/* ── FORMULARIO EDICIÓN ───────────────────────────────────────────── */}
-        {editando && (
-          <div className="rounded-3xl bg-white p-6 shadow-sm border border-gray-100 space-y-5">
-            <h2 className="text-base font-black text-gray-900">Editar preferencias</h2>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {/* Nivel base */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-gray-500">Nivel base</label>
-                <select
-                  value={form.nivel_base}
-                  onChange={(e) => {
-                    const nv = e.target.value;
-                    const cats = CATEGORY_OPTIONS[nv] || [];
-                    setForm((f) => ({ ...f, nivel_base: nv, categoria_solicitada: cats[0] || "" }));
-                  }}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {NIVELES_VALIDOS.map((n) => (
-                    <option key={n} value={n}>{LABELS.nivel_base[n]}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Categoría solicitada */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-gray-500">Categoría solicitada</label>
-                <select
-                  value={form.categoria_solicitada}
-                  onChange={(e) => setForm((f) => ({ ...f, categoria_solicitada: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {categoriasDisponibles.map((c) => (
-                    <option key={c} value={c}>{LABELS.categoria[c]}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Posición */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-gray-500">Posición</label>
-                <select
-                  value={form.posicion}
-                  onChange={(e) => setForm((f) => ({ ...f, posicion: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {Object.entries(LABELS.posicion).map(([v, l]) => (
-                    <option key={v} value={v}>{l}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Mano hábil */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-gray-500">Mano hábil</label>
-                <select
-                  value={form.mano_habil}
-                  onChange={(e) => setForm((f) => ({ ...f, mano_habil: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {Object.entries(LABELS.mano_habil).map(([v, l]) => (
-                    <option key={v} value={v}>{l}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Horario preferido */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-gray-500">Horario preferido</label>
-                <select
-                  value={form.horario_preferido}
-                  onChange={(e) => setForm((f) => ({ ...f, horario_preferido: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="manana">Mañana</option>
-                  <option value="tarde">Tarde</option>
-                  <option value="noche">Noche</option>
-                </select>
-              </div>
-
-              {/* Día preferido */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-gray-500">Día preferido</label>
-                <select
-                  value={form.dia_preferido}
-                  onChange={(e) => setForm((f) => ({ ...f, dia_preferido: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="semana">Entre semana</option>
-                  <option value="fin_de_semana">Fin de semana</option>
-                  <option value="cualquiera">Cualquiera</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Tipo de partido */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-gray-500">Tipo de partido preferido</label>
-              <div className="flex gap-2 flex-wrap">
-                {TIPOS_VALIDOS.map((t) => {
-                  const active = form.tipo_partido_preferido.includes(t);
-                  return (
+          {/* ── Columna izquierda: datos del perfil ── */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="rounded-3xl bg-white p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-bold text-gray-800">Datos del perfil</h2>
+                {!editando ? (
+                  <button
+                    onClick={() => setEditando(true)}
+                    className="rounded-xl bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-200 transition-colors"
+                  >
+                    Editar
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
                     <button
-                      key={t}
-                      onClick={() => {
-                        setForm((f) => {
-                          const tipos = active
-                            ? f.tipo_partido_preferido.filter((x) => x !== t)
-                            : [...f.tipo_partido_preferido, t];
-                          return { ...f, tipo_partido_preferido: tipos.length ? tipos : [t] };
-                        });
-                      }}
-                      className={`rounded-full px-4 py-1.5 text-xs font-bold border-2 transition-all
-                        ${active ? "bg-blue-600 border-blue-600 text-white" : "bg-white border-gray-200 text-gray-600 hover:border-blue-300"}`}
+                      onClick={() => setEditando(false)}
+                      className="rounded-xl bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-500 hover:bg-gray-200 transition-colors"
                     >
-                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                      Cancelar
                     </button>
-                  );
-                })}
+                    <button
+                      onClick={guardarCambios}
+                      disabled={saving}
+                      className="rounded-xl bg-[#0B1120] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-60 hover:bg-[#1a2740] transition-colors"
+                    >
+                      {saving ? "Guardando…" : "Guardar"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                {/* Nivel base */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Nivel base</label>
+                  {editando ? (
+                    <select
+                      value={form.nivel_base}
+                      onChange={(e) => {
+                        const nivel = e.target.value;
+                        const cats  = CATEGORY_OPTIONS[nivel] || [];
+                        setForm((f) => ({
+                          ...f,
+                          nivel_base:           nivel,
+                          categoria_solicitada: cats[0] || f.categoria_solicitada,
+                        }));
+                      }}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0B1120]/20"
+                    >
+                      {NIVELES_VALIDOS.map((n) => (
+                        <option key={n} value={n}>{LABELS.nivel_base[n]}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-sm font-semibold text-gray-800">
+                      {LABELS.nivel_base[padelProfile?.nivel_base] || "—"}
+                    </p>
+                  )}
+                </div>
+
+                {/* Categoría solicitada */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Categoría solicitada</label>
+                  {editando ? (
+                    <select
+                      value={form.categoria_solicitada}
+                      onChange={(e) => setForm((f) => ({ ...f, categoria_solicitada: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0B1120]/20"
+                    >
+                      {categoriasDisponibles.map((c) => (
+                        <option key={c} value={c}>{LABELS.categoria[c]}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-sm font-semibold text-gray-800">
+                      {LABELS.categoria[padelProfile?.categoria_solicitada] || "—"}
+                    </p>
+                  )}
+                </div>
+
+                {/* Posición */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Posición</label>
+                  {editando ? (
+                    <select
+                      value={form.posicion}
+                      onChange={(e) => setForm((f) => ({ ...f, posicion: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0B1120]/20"
+                    >
+                      {Object.entries(LABELS.posicion).map(([v, l]) => (
+                        <option key={v} value={v}>{l}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-sm font-semibold text-gray-800">
+                      {LABELS.posicion[padelProfile?.posicion] || "—"}
+                    </p>
+                  )}
+                </div>
+
+                {/* Mano hábil */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Mano hábil</label>
+                  {editando ? (
+                    <select
+                      value={form.mano_habil}
+                      onChange={(e) => setForm((f) => ({ ...f, mano_habil: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0B1120]/20"
+                    >
+                      {Object.entries(LABELS.mano_habil).map(([v, l]) => (
+                        <option key={v} value={v}>{l}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-sm font-semibold text-gray-800">
+                      {LABELS.mano_habil[padelProfile?.mano_habil] || "—"}
+                    </p>
+                  )}
+                </div>
+
+                {/* Género */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Género</label>
+                  {editando ? (
+                    <select
+                      value={form.genero}
+                      onChange={(e) => setForm((f) => ({ ...f, genero: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0B1120]/20"
+                    >
+                      {Object.entries(LABELS.genero).map(([v, l]) => (
+                        <option key={v} value={v}>{l}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-sm font-semibold text-gray-800">
+                      {LABELS.genero[padelProfile?.genero] || "—"}
+                    </p>
+                  )}
+                </div>
+
+                {/* Edad */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Edad</label>
+                  {editando ? (
+                    <input
+                      type="number" min="10" max="99"
+                      value={form.edad}
+                      onChange={(e) => setForm((f) => ({ ...f, edad: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0B1120]/20"
+                    />
+                  ) : (
+                    <p className="text-sm font-semibold text-gray-800">
+                      {padelProfile?.edad || "—"} años
+                    </p>
+                  )}
+                </div>
+
+                {/* Horario preferido */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Horario preferido</label>
+                  {editando ? (
+                    <select
+                      value={form.horario_preferido}
+                      onChange={(e) => setForm((f) => ({ ...f, horario_preferido: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0B1120]/20"
+                    >
+                      <option value="manana">Mañana</option>
+                      <option value="tarde">Tarde</option>
+                      <option value="noche">Noche</option>
+                    </select>
+                  ) : (
+                    <p className="text-sm font-semibold text-gray-800 capitalize">
+                      {padelProfile?.horario_preferido || "—"}
+                    </p>
+                  )}
+                </div>
+
+                {/* Día preferido */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">Día preferido</label>
+                  {editando ? (
+                    <select
+                      value={form.dia_preferido}
+                      onChange={(e) => setForm((f) => ({ ...f, dia_preferido: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0B1120]/20"
+                    >
+                      <option value="semana">Entre semana</option>
+                      <option value="fin_de_semana">Fin de semana</option>
+                      <option value="cualquiera">Cualquier día</option>
+                    </select>
+                  ) : (
+                    <p className="text-sm font-semibold text-gray-800">
+                      {padelProfile?.dia_preferido === "fin_de_semana"
+                        ? "Fin de semana"
+                        : padelProfile?.dia_preferido === "semana"
+                        ? "Entre semana"
+                        : padelProfile?.dia_preferido || "—"}
+                    </p>
+                  )}
+                </div>
+
+                {/* Tipo de partido */}
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">
+                    Tipo de partido preferido
+                  </label>
+                  {editando ? (
+                    <div className="flex flex-wrap gap-2">
+                      {TIPOS_VALIDOS.map((t) => (
+                        <button
+                          key={t}
+                          onClick={() => {
+                            const actual  = normalizarTiposPartido(form.tipo_partido_preferido);
+                            const updated = actual.includes(t)
+                              ? actual.filter((x) => x !== t)
+                              : [...actual, t];
+                            setForm((f) => ({
+                              ...f,
+                              tipo_partido_preferido: updated.length > 0 ? updated : ["amistoso"],
+                            }));
+                          }}
+                          className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors capitalize
+                            ${normalizarTiposPartido(form.tipo_partido_preferido).includes(t)
+                              ? "border-[#0B1120] bg-[#0B1120] text-white"
+                              : "border-gray-200 bg-gray-50 text-gray-600 hover:border-[#0B1120]/40"
+                            }`}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {normalizarTiposPartido(padelProfile?.tipo_partido_preferido).map((t) => (
+                        <span key={t}
+                              className="rounded-full bg-gray-100 px-3 py-0.5 text-xs font-semibold text-gray-700 capitalize">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-
-            {/* Botones */}
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={guardarCambios}
-                disabled={saving}
-                className="flex-1 rounded-xl bg-blue-600 py-3 text-sm font-black text-white hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-60"
-              >
-                {saving ? "Guardando..." : "Guardar cambios"}
-              </button>
-              <button
-                onClick={() => setEditando(false)}
-                className="rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-bold text-gray-600 hover:bg-gray-50 transition-colors"
-              >
-                Cancelar
-              </button>
-            </div>
           </div>
-        )}
 
-        {/* ── ACTIVIDAD RECIENTE ───────────────────────────────────────────── */}
-        <PadelRecentActivity userId={user?.id} />
+          {/* ── Columna derecha: estado categoría + actividad ── */}
+          <div className="space-y-4">
 
+            {/* Estado categoría */}
+            <div className="rounded-3xl bg-white p-5 shadow-sm">
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">
+                Estado de categoría
+              </h3>
+              <div className="flex items-center gap-2 mb-2">
+                <span className={`inline-block h-2.5 w-2.5 rounded-full ${
+                  padelProfile?.estado_categoria === "aprobada"  ? "bg-emerald-400" :
+                  padelProfile?.estado_categoria === "rechazada" ? "bg-rose-400"    :
+                  padelProfile?.estado_categoria === "ajustada"  ? "bg-blue-400"    :
+                                                                    "bg-amber-400"
+                }`} />
+                <span className="text-sm font-bold text-gray-800">
+                  {LABELS.estado_categoria[padelProfile?.estado_categoria] || "En revisión"}
+                </span>
+              </div>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Categoría oficial: <span className="font-semibold text-gray-700">{catOficialLabel}</span>
+              </p>
+              {padelProfile?.categoria_solicitada !== padelProfile?.categoria_oficial && (
+                <p className="text-xs text-amber-600 mt-1">
+                  Solicitud pendiente: <span className="font-bold">
+                    {LABELS.categoria[padelProfile?.categoria_solicitada]}
+                  </span>
+                </p>
+              )}
+            </div>
+
+            {/* Mejor racha */}
+            {estadisticas.racha > 0 && (
+              <div className="rounded-3xl bg-[#0B1120] p-5 text-white shadow-sm">
+                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Mejor racha</p>
+                <p className="text-4xl font-black">{estadisticas.racha}</p>
+                <p className="text-xs text-gray-400">victorias consecutivas</p>
+              </div>
+            )}
+
+            {/* Actividad reciente */}
+            <PadelRecentActivity userId={user?.id} />
+          </div>
+        </div>
       </div>
     </div>
   );
