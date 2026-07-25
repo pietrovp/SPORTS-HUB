@@ -304,44 +304,72 @@ export default function AdminCategoriasPage() {
       } = await supabase.auth.getSession();
 
       if (sessionError || !session) {
-        setErrorMsg("No se pudo obtener la sesión.");
-        setSavingId(null);
-        return;
+        throw new Error("No se pudo obtener la sesión.");
       }
 
-      const body = {
-        padelProfileId: row.id,
-        categoria_oficial: overrides.categoria_oficial ?? row.draft_categoria_oficial,
-        estado_categoria: overrides.estado_categoria ?? row.draft_estado_categoria,
+      const {
+        data: adminProfile,
+        error: adminError,
+      } = await supabase
+        .from("profiles")
+        .select("id, is_admin")
+        .eq("id", session.user.id)
+        .maybeSingle();
+
+      if (adminError) {
+        throw new Error(adminError.message || "No se pudo validar el admin.");
+      }
+
+      if (!adminProfile?.is_admin) {
+        throw new Error("No tienes permisos de administrador.");
+      }
+
+      const categoriaFinal =
+        overrides.categoria_oficial ?? row.draft_categoria_oficial;
+
+      let estadoFinal =
+        overrides.estado_categoria ?? row.draft_estado_categoria;
+
+      if (
+        estadoFinal === "aprobada" &&
+        categoriaFinal !== row.categoria_solicitada
+      ) {
+        estadoFinal = "ajustada";
+      }
+
+      const payload = {
+        categoria_oficial: categoriaFinal,
+        estado_categoria: estadoFinal,
         categoria_comentario_admin:
-          overrides.categoria_comentario_admin ?? row.draft_comentario?.trim() ?? "",
+          overrides.categoria_comentario_admin ??
+          row.draft_comentario?.trim() ??
+          null,
+        categoria_revision_admin: true,
+        categoria_revisada_por: session.user.id,
+        categoria_revisada_at: new Date().toISOString(),
       };
 
-      console.log("BODY ENVIADO:", body);
+      console.log("UPDATE DIRECTO:", { id: row.id, payload });
 
-      const res = await fetch("/api/admin/padel/categorias/revisar", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify(body),
-      });
+      const { data: updated, error: updateError } = await supabase
+        .from("padel_profiles")
+        .update(payload)
+        .eq("id", row.id)
+        .select(`
+          id,
+          cuenta_id,
+          categoria_oficial,
+          estado_categoria,
+          categoria_comentario_admin,
+          categoria_revision_admin,
+          categoria_revisada_por,
+          categoria_revisada_at
+        `)
+        .single();
 
-      const result = await res.json().catch(() => null);
-
-      console.log("STATUS:", res.status);
-      console.log("RESPUESTA API:", result);
-
-      if (!res.ok) {
-        throw new Error(
-          result?.error ||
-            (result?.debug ? JSON.stringify(result.debug) : "") ||
-            "No se pudo guardar la revisión."
-        );
+      if (updateError) {
+        throw new Error(updateError.message || "No se pudo guardar la revisión.");
       }
-
-      const updated = result.data;
 
       patchRow(row.id, {
         categoria_oficial: updated.categoria_oficial,
