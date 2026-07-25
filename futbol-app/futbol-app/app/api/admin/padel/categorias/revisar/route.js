@@ -52,7 +52,14 @@ export async function POST(request) {
   try {
     if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
       return NextResponse.json(
-        { error: "Faltan variables de entorno de Supabase." },
+        {
+          error: "Faltan variables de entorno de Supabase.",
+          debug: {
+            hasUrl: !!supabaseUrl,
+            hasAnonKey: !!supabaseAnonKey,
+            hasServiceKey: !!supabaseServiceKey,
+          },
+        },
         { status: 500 }
       );
     }
