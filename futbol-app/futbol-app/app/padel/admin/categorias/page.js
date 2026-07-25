@@ -317,6 +317,8 @@ export default function AdminCategoriasPage() {
           overrides.categoria_comentario_admin ?? row.draft_comentario?.trim() ?? "",
       };
 
+      console.log("BODY ENVIADO:", body);
+
       const res = await fetch("/api/admin/padel/categorias/revisar", {
         method: "POST",
         headers: {
@@ -326,10 +328,17 @@ export default function AdminCategoriasPage() {
         body: JSON.stringify(body),
       });
 
-      const result = await res.json();
+      const result = await res.json().catch(() => null);
+
+      console.log("STATUS:", res.status);
+      console.log("RESPUESTA API:", result);
 
       if (!res.ok) {
-        throw new Error(result.error || "No se pudo guardar la revisión.");
+        throw new Error(
+          result?.error ||
+            (result?.debug ? JSON.stringify(result.debug) : "") ||
+            "No se pudo guardar la revisión."
+        );
       }
 
       const updated = result.data;
@@ -347,8 +356,12 @@ export default function AdminCategoriasPage() {
       });
 
       setMensaje("Revisión guardada correctamente.");
+
+      if (filtroEstado !== "todos") {
+        setRows((prev) => prev.filter((item) => item.id !== row.id));
+      }
     } catch (error) {
-      console.error(error);
+      console.error("ERROR guardarRevision:", error);
       setErrorMsg(error.message || "No se pudo guardar la revisión.");
     } finally {
       setSavingId(null);
@@ -455,7 +468,7 @@ export default function AdminCategoriasPage() {
         ) : null}
 
         {errorMsg ? (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 whitespace-pre-wrap">
             {errorMsg}
           </div>
         ) : null}
