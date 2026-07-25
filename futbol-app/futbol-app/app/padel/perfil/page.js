@@ -259,7 +259,7 @@ export default function PadelPerfilPage() {
         supabase
           .from("padel_profiles")
           .select("*")
-          .eq("cuenta_id", authUser.id)   // ✅ cuenta_id
+          .eq("cuenta_id", authUser.id)
           .maybeSingle(),
       ]);
       if (padelError) throw padelError;
@@ -270,8 +270,8 @@ export default function PadelPerfilPage() {
         const { data: created, error: createError } = await supabase
           .from("padel_profiles")
           .upsert(
-            { cuenta_id: authUser.id, ...DEFAULT_PROFILE },  // ✅ cuenta_id
-            { onConflict: "cuenta_id" }                       // ✅ cuenta_id
+            { cuenta_id: authUser.id, ...DEFAULT_PROFILE },
+            { onConflict: "cuenta_id" }
           )
           .select()
           .single();
@@ -314,7 +314,6 @@ export default function PadelPerfilPage() {
         tipo_partido_preferido: tiposN,
       });
 
-      // Abrir onboarding solo si nunca completó la evaluación
       if (!finalPadel.evaluacion_inicial_completada) {
         setOnboardingStep(0);
         setOnboardingResp({
@@ -324,7 +323,6 @@ export default function PadelPerfilPage() {
         setOnboardingOpen(true);
       }
 
-      // Cargar partidos
       const { data: playedMatches, error: matchesError } = await supabase
         .from("padel_match_players")
         .select(`
@@ -334,7 +332,7 @@ export default function PadelPerfilPage() {
             team_a_score, team_b_score, scheduled_at
           )
         `)
-        .eq("user_id", authUser.id)   // ✅ padel_match_players sí usa user_id
+        .eq("user_id", authUser.id)
         .order("scheduled_at", { referencedTable: "match", ascending: false });
       if (matchesError) throw matchesError;
 
@@ -379,7 +377,7 @@ export default function PadelPerfilPage() {
           dia_preferido:          form.dia_preferido,
           tipo_partido_preferido: tiposN,
         })
-        .eq("cuenta_id", user.id)   // ✅ cuenta_id
+        .eq("cuenta_id", user.id)
         .select()
         .single();
       if (error) throw error;
@@ -443,7 +441,7 @@ export default function PadelPerfilPage() {
           edad:                          edadNum,
           evaluacion_inicial_completada: true,
         })
-        .eq("cuenta_id", user.id)   // ✅ cuenta_id
+        .eq("cuenta_id", user.id)
         .select()
         .single();
       if (error) throw error;
@@ -532,9 +530,7 @@ export default function PadelPerfilPage() {
           </div>
         )}
 
-        {/* ══════════════════════════════════════════════════════════════════
-            MODAL ONBOARDING
-        ══════════════════════════════════════════════════════════════════ */}
+        {/* MODAL ONBOARDING */}
         {onboardingOpen && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0B1120]/90 sm:items-center">
             <div className="w-full max-w-sm rounded-t-[2rem] sm:rounded-[2rem] bg-[#EEF0F5] flex flex-col min-h-[70vh] sm:min-h-0 overflow-hidden">
@@ -553,7 +549,7 @@ export default function PadelPerfilPage() {
                 <div className="w-9 h-9" />
               </div>
 
-              {/* Barra de progreso */}
+              {/* Barra progreso */}
               <div className="px-5 pb-4">
                 <div className="h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
                   <div
@@ -665,9 +661,7 @@ export default function PadelPerfilPage() {
           </div>
         )}
 
-        {/* ══════════════════════════════════════════════════════════════════
-            PERFIL PRINCIPAL
-        ══════════════════════════════════════════════════════════════════ */}
+        {/* PERFIL PRINCIPAL */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
           {/* CARTA JUGADOR */}
@@ -733,7 +727,7 @@ export default function PadelPerfilPage() {
               {/* Stats rápidas */}
               <div className="relative z-10 w-full mt-3 grid grid-cols-3 gap-2">
                 {[
-                  { label: "Partidos", value: estadisticas.partidos },
+                  { label: "Partidos",  value: estadisticas.partidos },
                   { label: "Victorias", value: estadisticas.victorias },
                   { label: "% Ganados", value: `${estadisticas.porcentajeVictorias}%` },
                 ].map((s) => (
@@ -777,7 +771,6 @@ export default function PadelPerfilPage() {
           {/* PANEL DERECHO */}
           <div className="lg:col-span-7 flex flex-col gap-6">
 
-            {/* Formulario edición */}
             {editando && (
               <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 space-y-5">
                 <h3 className="text-base font-black text-gray-900">Editar perfil de juego</h3>
@@ -898,7 +891,7 @@ export default function PadelPerfilPage() {
                   />
                 </div>
 
-                {/* Tipo de partido */}
+                {/* Tipo partido */}
                 <div>
                   <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Tipo de partido preferido</label>
                   <div className="flex gap-2">
