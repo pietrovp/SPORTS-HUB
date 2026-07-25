@@ -324,16 +324,10 @@ export default function AdminCategoriasPage() {
         throw new Error("No tienes permisos de administrador.");
       }
 
-      const categoriaFinal =
-        overrides.categoria_oficial ?? row.draft_categoria_oficial;
+      const categoriaFinal = overrides.categoria_oficial ?? row.draft_categoria_oficial;
+      let estadoFinal = overrides.estado_categoria ?? row.draft_estado_categoria;
 
-      let estadoFinal =
-        overrides.estado_categoria ?? row.draft_estado_categoria;
-
-      if (
-        estadoFinal === "aprobada" &&
-        categoriaFinal !== row.categoria_solicitada
-      ) {
+      if (estadoFinal === "aprobada" && categoriaFinal !== row.categoria_solicitada) {
         estadoFinal = "ajustada";
       }
 
@@ -348,8 +342,6 @@ export default function AdminCategoriasPage() {
         categoria_revisada_por: session.user.id,
         categoria_revisada_at: new Date().toISOString(),
       };
-
-      console.log("UPDATE DIRECTO:", { id: row.id, payload });
 
       const { data: updated, error: updateError } = await supabase
         .from("padel_profiles")
