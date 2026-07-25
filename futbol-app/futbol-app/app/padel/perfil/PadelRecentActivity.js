@@ -24,6 +24,11 @@ function getOutcome(match, myTeam) {
   return match.winner_team === myTeam ? "victoria" : "derrota";
 }
 
+function normalizeMatch(match) {
+  if (!match) return null;
+  return Array.isArray(match) ? match[0] ?? null : match;
+}
+
 function ActivityItem({ item }) {
   const statusLabel = {
     programado: "Próximo",
@@ -59,27 +64,25 @@ function ActivityItem({ item }) {
   );
 }
 
-export default function PadelRecentActivity() {
+export default function PadelRecentActivity({ userId }) {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    loadActivity();
-  }, []);
+    if (!userId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
 
-  async function loadActivity() {
+    loadActivity(userId);
+  }, [userId]);
+
+  async function loadActivity(currentUserId) {
     try {
       setLoading(true);
       setErrorMsg("");
-
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
-
-      if (authError) throw authError;
-      if (!user) throw new Error("No hay sesión activa.");
 
       const { data, error } = await supabase
         .from("padel_match_players")
@@ -99,7 +102,7 @@ export default function PadelRecentActivity() {
             winner_team
           )
         `)
-        .eq("user_id", user.id)
+        .eq("user_id", currentUserId)
         .order("joined_at", { ascending: false });
 
       if (error) throw error;
@@ -108,17 +111,17 @@ export default function PadelRecentActivity() {
 
       const normalized = (data || [])
         .map((row) => {
-          const match = Array.isArray(row.match) ? row.match[0] : row.match;
+          const match = normalizeMatch(row.match);
           if (!match) return null;
 
           const score = formatScore(match.team_a_score, match.team_b_score);
           const outcome = getOutcome(match, row.team);
 
-          if (match.status === "programado" && new Date(match.scheduled_at) >= now) {
+          if (match.status === "programado" && match.scheduled_at && new Date(match.scheduled_at) >= now) {
             return {
               id: `upcoming-${match.id}`,
               kind: "upcoming",
-              title: `Partido ${match.match_type}`,
+              title: `Partido ${match.match_type || "amistoso"}`,
               subtitle: match.location_name
                 ? `Reservado en ${match.location_name}`
                 : "Próximo partido programado",
@@ -146,7 +149,7 @@ export default function PadelRecentActivity() {
           return {
             id: `other-${match.id}`,
             kind: "other",
-            title: `Partido ${match.match_type}`,
+            title: `Partido ${match.match_type || "amistoso"}`,
             subtitle: match.location_name || match.notes || "Actividad registrada",
             date: match.scheduled_at,
             status: match.status,
