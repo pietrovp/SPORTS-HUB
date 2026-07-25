@@ -103,11 +103,11 @@ const ONBOARDING_STEPS = [
     titulo: "En la volea...",
     campo: "q_volea",
     opciones: [
-      { label: "Casi no subo a la red",                                       value: "v1", peso: 0   },
-      { label: "No me siento seguro/a en la red, cometo demasiados errores",  value: "v2", peso: 0.3 },
-      { label: "Logro volear de derecha y de revés con alguna dificultad",    value: "v3", peso: 0.6 },
-      { label: "Tengo buena colocación en la red y voleo con seguridad",      value: "v4", peso: 1.0 },
-      { label: "Voleo con profundidad y potencia",                            value: "v5", peso: 1.5 },
+      { label: "Casi no subo a la red",                                      value: "v1", peso: 0   },
+      { label: "No me siento seguro/a en la red, cometo demasiados errores", value: "v2", peso: 0.3 },
+      { label: "Logro volear de derecha y de revés con alguna dificultad",   value: "v3", peso: 0.6 },
+      { label: "Tengo buena colocación en la red y voleo con seguridad",     value: "v4", peso: 1.0 },
+      { label: "Voleo con profundidad y potencia",                           value: "v5", peso: 1.5 },
     ],
   },
   {
@@ -172,9 +172,9 @@ function normalizeNivelBase(value) {
   return NIVELES_VALIDOS.includes(n) ? n : "principiante";
 }
 function normalizeCategoria(value, nivelBase) {
-  const nivel     = normalizeNivelBase(nivelBase);
+  const nivel      = normalizeNivelBase(nivelBase);
   const permitidas = CATEGORY_OPTIONS[nivel] || CATEGORY_OPTIONS.principiante;
-  const cat       = String(value || "").trim().toLowerCase();
+  const cat        = String(value || "").trim().toLowerCase();
   return permitidas.includes(cat) ? cat : permitidas[0];
 }
 function normalizeEstadoCategoria(value) {
@@ -182,10 +182,8 @@ function normalizeEstadoCategoria(value) {
   return ["pendiente","aprobada","rechazada","ajustada"].includes(e) ? e : "pendiente";
 }
 function normalizarTiposPartido(value) {
-  const arr  = Array.isArray(value) ? value : [value];
-  const tipos = arr
-    .map((t) => String(t || "").trim().toLowerCase())
-    .filter((t) => TIPOS_VALIDOS.includes(t));
+  const arr    = Array.isArray(value) ? value : [value];
+  const tipos  = arr.map((t) => String(t || "").trim().toLowerCase()).filter((t) => TIPOS_VALIDOS.includes(t));
   const unique = [...new Set(tipos)];
   return unique.length > 0 ? unique : ["amistoso"];
 }
@@ -225,7 +223,6 @@ export default function PadelPerfilPage() {
   const [padelProfile,  setPadelProfile]  = useState(null);
   const [matchesData,   setMatchesData]   = useState([]);
   const [editando,      setEditando]      = useState(false);
-  const [modalInfoOpen, setModalInfoOpen] = useState(false);
   const [mensaje,       setMensaje]       = useState("");
   const [errorMsg,      setErrorMsg]      = useState("");
   const [form,          setForm]          = useState(DEFAULT_PROFILE);
@@ -241,7 +238,7 @@ export default function PadelPerfilPage() {
   const [ratingAjuste,        setRatingAjuste]        = useState(0);
   const [onboardingGuardando, setOnboardingGuardando] = useState(false);
 
-  const TOTAL_STEPS = ONBOARDING_STEPS.length + 1; // 7 preguntas + 1 resultado
+  const TOTAL_STEPS = ONBOARDING_STEPS.length + 1;
 
   useEffect(() => { cargarPerfil(); }, []);
 
@@ -259,7 +256,7 @@ export default function PadelPerfilPage() {
         { data: padelData, error: padelError },
       ] = await Promise.all([
         supabase.from("profiles").select("*").eq("id", authUser.id).maybeSingle(),
-        supabase.from("padel_profiles").select("*").eq("id", authUser.id).maybeSingle(),
+        supabase.from("padel_profiles").select("*").eq("user_id", authUser.id).maybeSingle(),
       ]);
       if (padelError) throw padelError;
       setBaseProfile(profileData || null);
@@ -268,7 +265,7 @@ export default function PadelPerfilPage() {
       if (!finalPadel) {
         const { data: created, error: createError } = await supabase
           .from("padel_profiles")
-          .upsert({ id: authUser.id, ...DEFAULT_PROFILE }, { onConflict: "id" })
+          .upsert({ user_id: authUser.id, ...DEFAULT_PROFILE }, { onConflict: "user_id" })
           .select()
           .single();
         if (createError) throw createError;
@@ -310,7 +307,7 @@ export default function PadelPerfilPage() {
         tipo_partido_preferido: tiposN,
       });
 
-      // ★ Abrir onboarding solo si nunca completó la evaluación inicial
+      // ★ Abrir onboarding solo si nunca completó la evaluación
       if (!finalPadel.evaluacion_inicial_completada) {
         setOnboardingStep(0);
         setOnboardingResp({
@@ -375,7 +372,7 @@ export default function PadelPerfilPage() {
           dia_preferido:          form.dia_preferido,
           tipo_partido_preferido: tiposN,
         })
-        .eq("id", user.id)
+        .eq("user_id", user.id)
         .select()
         .single();
       if (error) throw error;
@@ -400,24 +397,22 @@ export default function PadelPerfilPage() {
     }
   }
 
-  // ── ONBOARDING: seleccionar opción ───────────────────────────────────────
+  // ── ONBOARDING ────────────────────────────────────────────────────────────
   function seleccionarRespuesta(campo, value) {
     setOnboardingResp((prev) => ({ ...prev, [campo]: value }));
   }
 
-  // ── ONBOARDING: avanzar paso ──────────────────────────────────────────────
   function avanzarOnboarding() {
     if (onboardingStep === ONBOARDING_STEPS.length - 1) {
       const rating = calcularRatingInicial(onboardingResp);
       setRatingCalculado(rating);
       setRatingAjuste(0);
-      setOnboardingStep(ONBOARDING_STEPS.length); // pantalla resultado
+      setOnboardingStep(ONBOARDING_STEPS.length);
       return;
     }
     setOnboardingStep((s) => s + 1);
   }
 
-  // ── ONBOARDING: guardar resultado ─────────────────────────────────────────
   async function guardarOnboarding() {
     if (!user) return;
     try {
@@ -433,28 +428,22 @@ export default function PadelPerfilPage() {
         .from("padel_profiles")
         .update({
           nivel_base,
-          categoria_solicitada:           categoria,
-          categoria_oficial:              categoria,
-          estado_categoria:               "pendiente",
-          rating:                         ratingFinal,
-          fiabilidad:                     20,
-          edad:                           edadNum,
-          evaluacion_inicial_completada:  true,
+          categoria_solicitada:          categoria,
+          categoria_oficial:             categoria,
+          estado_categoria:              "pendiente",
+          rating:                        ratingFinal,
+          fiabilidad:                    20,
+          edad:                          edadNum,
+          evaluacion_inicial_completada: true,
         })
-        .eq("id", user.id)
+        .eq("user_id", user.id)
         .select()
         .single();
       if (error) throw error;
 
-      setPadelProfile((prev) => ({
-        ...prev,
-        ...data,
-        evaluacion_inicial_completada: true,
-      }));
+      setPadelProfile((prev) => ({ ...prev, ...data, evaluacion_inicial_completada: true }));
       setOnboardingOpen(false);
-      setMensaje(
-        `¡Bienvenido! Tu nivel inicial es ${ratingFinal.toFixed(2)} — ${NIVEL_LABELS[categoria]?.label} 🎾`
-      );
+      setMensaje(`¡Bienvenido! Tu nivel inicial es ${ratingFinal.toFixed(2)} — ${NIVEL_LABELS[categoria]?.label} 🎾`);
     } catch (err) {
       setErrorMsg(err.message || "Error al guardar la evaluación.");
     } finally {
@@ -509,18 +498,15 @@ export default function PadelPerfilPage() {
   const fiabilidadInfo  = getEtiquetaFiabilidad(fiabilidadVal);
   const categoriasDisponibles = CATEGORY_OPTIONS[normalizeNivelBase(form.nivel_base)] || [];
 
-  // ─── PASO ACTUAL DEL ONBOARDING ───────────────────────────────────────────
-  const stepActual     = ONBOARDING_STEPS[onboardingStep] || null;
-  const esUltimaPreg   = onboardingStep === ONBOARDING_STEPS.length - 1;
-  const esPantallaRes  = onboardingStep === ONBOARDING_STEPS.length;
-  const respActual     = stepActual ? onboardingResp[stepActual.campo] : null;
-  const progresoBarPct = Math.round(((onboardingStep) / TOTAL_STEPS) * 100);
-  const ratingConAjuste= parseFloat(
+  const stepActual      = ONBOARDING_STEPS[onboardingStep] || null;
+  const esPantallaRes   = onboardingStep === ONBOARDING_STEPS.length;
+  const respActual      = stepActual ? onboardingResp[stepActual.campo] : null;
+  const progresoBarPct  = Math.round((onboardingStep / TOTAL_STEPS) * 100);
+  const ratingConAjuste = parseFloat(
     Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2)
   );
   const { categoria: catResult } = nivelDesdeRating(ratingConAjuste);
 
-  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-50/50 px-4 py-6 md:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -540,7 +526,7 @@ export default function PadelPerfilPage() {
         )}
 
         {/* ══════════════════════════════════════════════════════════════════
-            MODAL ONBOARDING — solo aparece la primera vez
+            MODAL ONBOARDING
         ══════════════════════════════════════════════════════════════════ */}
         {onboardingOpen && (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0B1120]/90 sm:items-center">
@@ -549,20 +535,15 @@ export default function PadelPerfilPage() {
               {/* Header */}
               <div className="flex items-center justify-between px-5 pt-5 pb-2">
                 <button
-                  onClick={() => {
-                    if (onboardingStep > 0) setOnboardingStep((s) => s - 1);
-                  }}
+                  onClick={() => { if (onboardingStep > 0) setOnboardingStep((s) => s - 1); }}
                   disabled={onboardingStep === 0}
                   className="w-9 h-9 flex items-center justify-center disabled:opacity-0"
                 >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M19 12H5M12 5l-7 7 7 7"/>
+                  </svg>
                 </button>
-                {!esPantallaRes && (
-                  <button
-                    onClick={() => {/* No cerrable hasta que termine */}}
-                    className="text-gray-400 text-lg opacity-50 cursor-default"
-                  >✕</button>
-                )}
+                <div className="w-9 h-9" />
               </div>
 
               {/* Barra de progreso */}
@@ -575,7 +556,7 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* ── PANTALLA DE PREGUNTA ── */}
+              {/* ── PANTALLA PREGUNTA ── */}
               {!esPantallaRes && stepActual && (
                 <div className="flex-1 flex flex-col px-5 pb-6 gap-4">
                   <h2 className="text-xl font-black text-gray-900 leading-snug">
@@ -597,9 +578,7 @@ export default function PadelPerfilPage() {
                           <span className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all ${
                             selected ? "border-blue-600 bg-blue-600" : "border-gray-300 bg-white"
                           }`}>
-                            {selected && (
-                              <span className="w-2.5 h-2.5 rounded-full bg-white block" />
-                            )}
+                            {selected && <span className="w-2.5 h-2.5 rounded-full bg-white block" />}
                           </span>
                           <span className="text-sm font-medium text-gray-800 leading-snug">
                             {op.label}
@@ -609,14 +588,15 @@ export default function PadelPerfilPage() {
                     })}
                   </div>
 
-                  {/* Botón avanzar — solo si hay respuesta seleccionada */}
                   {respActual && (
                     <div className="mt-auto flex justify-end pt-2">
                       <button
                         onClick={avanzarOnboarding}
                         className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center shadow-lg hover:bg-blue-700 active:scale-95 transition-all"
                       >
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                          <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
                       </button>
                     </div>
                   )}
@@ -628,26 +608,17 @@ export default function PadelPerfilPage() {
                 <div className="flex-1 flex flex-col px-5 pb-6 gap-5 bg-[#0B1120] text-white">
                   <h2 className="text-base font-bold text-center text-white/80 pt-2">Tu Nivel Inicial</h2>
 
-                  {/* Gauge / Medidor */}
                   <div className="bg-[#141C30] rounded-2xl p-5 flex flex-col items-center gap-2">
-                    {/* SVG semicírculo */}
                     <svg width="200" height="110" viewBox="0 0 200 110">
-                      {/* Track gris */}
-                      <path
-                        d="M 20 100 A 80 80 0 0 1 180 100"
-                        fill="none" stroke="#374151" strokeWidth="10" strokeLinecap="round"
-                      />
-                      {/* Arco coloreado */}
+                      <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#374151" strokeWidth="10" strokeLinecap="round"/>
                       <path
                         d="M 20 100 A 80 80 0 0 1 180 100"
                         fill="none" stroke="#AFEC3B" strokeWidth="10" strokeLinecap="round"
                         strokeDasharray={`${Math.round(((ratingConAjuste - 1) / 6) * 251.3)} 251.3`}
                       />
-                      {/* Marcadores 0 y 7 */}
-                      <text x="14" y="112" fontSize="11" fill="#6B7280" textAnchor="middle">0</text>
+                      <text x="14"  y="112" fontSize="11" fill="#6B7280" textAnchor="middle">0</text>
                       <text x="186" y="112" fontSize="11" fill="#6B7280" textAnchor="middle">7</text>
                     </svg>
-
                     <div className="text-6xl font-black text-[#AFEC3B] -mt-8">
                       {ratingConAjuste.toFixed(1).replace(".", ",")}
                     </div>
@@ -659,20 +630,14 @@ export default function PadelPerfilPage() {
                     </p>
                   </div>
 
-                  {/* Ajuste slider */}
                   <div className="bg-[#141C30] rounded-2xl p-4 flex flex-col gap-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-white/80 font-medium">¿Crees que tu Nivel es diferente?</span>
-                    </div>
+                    <span className="text-sm text-white/80 font-medium">¿Crees que tu Nivel es diferente?</span>
                     <div className="flex items-center justify-between text-xs text-gray-400">
                       <span>- 0,5</span>
                       <span>+ 0,5</span>
                     </div>
                     <input
-                      type="range"
-                      min={-0.5}
-                      max={0.5}
-                      step={0.1}
+                      type="range" min={-0.5} max={0.5} step={0.1}
                       value={ratingAjuste}
                       onChange={(e) => setRatingAjuste(parseFloat(e.target.value))}
                       className="w-full accent-blue-500"
@@ -680,7 +645,6 @@ export default function PadelPerfilPage() {
                     <p className="text-xs text-gray-500 text-center">Desliza para ajustar tu nivel</p>
                   </div>
 
-                  {/* Botón confirmar */}
                   <button
                     onClick={guardarOnboarding}
                     disabled={onboardingGuardando}
@@ -704,7 +668,6 @@ export default function PadelPerfilPage() {
             <div className="w-full bg-gradient-to-b from-[#0B0C2A] via-[#161848] to-[#0B0C2A] rounded-[2.5rem] p-6 md:p-8 text-white text-center shadow-xl border border-blue-500/20 relative overflow-hidden flex flex-col items-center justify-between min-h-[460px]">
               <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-blue-500/20 rounded-full blur-3xl pointer-events-none" />
 
-              {/* Avatar */}
               <div className="relative z-10 flex flex-col items-center gap-3 pt-2">
                 <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-400 to-blue-700 flex items-center justify-center text-3xl font-black shadow-lg border-4 border-white/10">
                   {inicial}
@@ -717,7 +680,6 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* Rating central */}
               <div className="relative z-10 flex flex-col items-center gap-1 py-4">
                 <span className="text-6xl font-black text-white tracking-tight">
                   {ratingActual.toFixed(2)}
@@ -733,7 +695,6 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* Barra progreso */}
               <div className="relative z-10 w-full px-2">
                 <div className="flex justify-between text-[10px] text-blue-300/60 mb-1 font-medium">
                   <span>{infoRating.catActual}</span>
@@ -745,14 +706,15 @@ export default function PadelPerfilPage() {
                     style={{ width: `${progresoPct}%` }}
                   />
                 </div>
-                <p className="text-[10px] text-blue-300/40 mt-1 text-right">{progresoPct}% hacia {infoRating.nextCat}</p>
+                <p className="text-[10px] text-blue-300/40 mt-1 text-right">
+                  {progresoPct}% hacia {infoRating.nextCat}
+                </p>
               </div>
 
-              {/* Stats mini */}
               <div className="relative z-10 grid grid-cols-3 gap-3 w-full pt-2">
                 {[
-                  { label: "Partidos", value: estadisticas.partidos },
-                  { label: "Victorias", value: estadisticas.victorias },
+                  { label: "Partidos",   value: estadisticas.partidos },
+                  { label: "Victorias",  value: estadisticas.victorias },
                   { label: "% Victoria", value: `${estadisticas.porcentajeVictorias}%` },
                 ].map(({ label, value }) => (
                   <div key={label} className="flex flex-col items-center gap-0.5 bg-white/5 rounded-2xl py-3 px-1">
@@ -767,7 +729,6 @@ export default function PadelPerfilPage() {
           {/* ── PANEL DERECHO ── */}
           <div className="lg:col-span-7 flex flex-col gap-5">
 
-            {/* Estado categoría */}
             <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-black text-gray-800">Estado de Categoría</h3>
@@ -795,7 +756,6 @@ export default function PadelPerfilPage() {
               </div>
             </div>
 
-            {/* Info personal */}
             <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-black text-gray-800">Información del Jugador</h3>
@@ -828,12 +788,12 @@ export default function PadelPerfilPage() {
               {!editando ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
                   {[
-                    { label: "Posición",   value: LABELS.posicion[padelProfile?.posicion]       || "—" },
-                    { label: "Mano Hábil", value: LABELS.mano_habil[padelProfile?.mano_habil]   || "—" },
-                    { label: "Género",     value: LABELS.genero[padelProfile?.genero]            || "—" },
+                    { label: "Posición",   value: LABELS.posicion[padelProfile?.posicion]     || "—" },
+                    { label: "Mano Hábil", value: LABELS.mano_habil[padelProfile?.mano_habil] || "—" },
+                    { label: "Género",     value: LABELS.genero[padelProfile?.genero]          || "—" },
                     { label: "Edad",       value: padelProfile?.edad ? `${padelProfile.edad} años` : "—" },
-                    { label: "Horario",    value: padelProfile?.horario_preferido                || "—" },
-                    { label: "Día pref.",  value: padelProfile?.dia_preferido                   || "—" },
+                    { label: "Horario",    value: padelProfile?.horario_preferido              || "—" },
+                    { label: "Día pref.",  value: padelProfile?.dia_preferido                 || "—" },
                   ].map(({ label, value }) => (
                     <div key={label} className="rounded-xl bg-gray-50 p-3">
                       <p className="text-xs text-gray-500 font-medium mb-0.5">{label}</p>
@@ -843,19 +803,14 @@ export default function PadelPerfilPage() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {/* Nivel base */}
                   <div>
                     <label className="text-xs font-bold text-gray-600 mb-1 block">Nivel</label>
                     <select
                       value={form.nivel_base}
                       onChange={(e) => {
-                        const nv = normalizeNivelBase(e.target.value);
+                        const nv   = normalizeNivelBase(e.target.value);
                         const cats = CATEGORY_OPTIONS[nv];
-                        setForm((f) => ({
-                          ...f,
-                          nivel_base:           nv,
-                          categoria_solicitada: cats[0],
-                        }));
+                        setForm((f) => ({ ...f, nivel_base: nv, categoria_solicitada: cats[0] }));
                       }}
                       className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
@@ -864,7 +819,6 @@ export default function PadelPerfilPage() {
                       ))}
                     </select>
                   </div>
-                  {/* Categoría solicitada */}
                   <div>
                     <label className="text-xs font-bold text-gray-600 mb-1 block">Categoría</label>
                     <select
@@ -877,7 +831,6 @@ export default function PadelPerfilPage() {
                       ))}
                     </select>
                   </div>
-                  {/* Posición */}
                   <div>
                     <label className="text-xs font-bold text-gray-600 mb-1 block">Posición</label>
                     <select
@@ -888,7 +841,6 @@ export default function PadelPerfilPage() {
                       {Object.entries(LABELS.posicion).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
                   </div>
-                  {/* Mano hábil */}
                   <div>
                     <label className="text-xs font-bold text-gray-600 mb-1 block">Mano Hábil</label>
                     <select
@@ -899,7 +851,6 @@ export default function PadelPerfilPage() {
                       {Object.entries(LABELS.mano_habil).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
                   </div>
-                  {/* Género */}
                   <div>
                     <label className="text-xs font-bold text-gray-600 mb-1 block">Género</label>
                     <select
@@ -910,7 +861,6 @@ export default function PadelPerfilPage() {
                       {Object.entries(LABELS.genero).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
                   </div>
-                  {/* Edad */}
                   <div>
                     <label className="text-xs font-bold text-gray-600 mb-1 block">Edad</label>
                     <input
@@ -924,7 +874,6 @@ export default function PadelPerfilPage() {
               )}
             </div>
 
-            {/* Actividad reciente */}
             <PadelRecentActivity userId={user?.id} />
           </div>
         </div>
