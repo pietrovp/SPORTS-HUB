@@ -25,7 +25,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
   const yaInscrito = currentUser ? players.some((p) => p.user_id === currentUser.id) : false;
   const lleno = inscritosCount >= 4;
 
-  // Organizar jugadores por slots (4 cupos en total)
   const slots = [0, 1, 2, 3].map((index) => players[index] || null);
 
   async function unirse() {
@@ -51,11 +50,9 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
       setProcesando(true);
       setErrorMsg("");
 
-      // 1. Asignar equipo disponible ('A' o 'B')
       const equipoA = players.filter((p) => p.team === "A").length;
       const teamAsignado = equipoA < 2 ? "A" : "B";
 
-      // 2. Inscribir jugador
       const { error: playerErr } = await supabase.from("padel_match_players").insert({
         match_id: match.id,
         user_id: currentUser.id,
@@ -64,7 +61,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
 
       if (playerErr) throw playerErr;
 
-      // 3. Descontar saldo
       const nuevoSaldo = userCreditos - costo;
       await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", currentUser.id);
 
@@ -113,11 +109,9 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
         </div>
       </div>
 
-      {/* 2. GRILLA DE 4 JUGADORES (PLAYTOMIC STYLE) */}
+      {/* 2. GRILLA DE 4 JUGADORES */}
       <div className="bg-slate-50/80 border border-slate-100 rounded-2xl p-3.5">
         <div className="grid grid-cols-4 gap-2 items-center text-center relative">
-          
-          {/* LÍNEA DIVISORIA DE PAREJAS ENTRE SLOT 2 Y 3 */}
           <div className="absolute left-1/2 top-2 bottom-2 w-[1px] bg-slate-200 -translate-x-1/2 hidden sm:block" />
 
           {slots.map((player, idx) => {
@@ -144,7 +138,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
                     {nombrePila}
                   </span>
 
-                  {/* Badge de Rating */}
                   <span className="bg-[#00FF9D] text-slate-950 text-[9px] font-black px-2 py-0.2 rounded-full shadow-xs">
                     {rating}
                   </span>
@@ -152,7 +145,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
               );
             }
 
-            // CUPOS LIBRES
             return (
               <button
                 key={idx}
@@ -173,7 +165,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
         </div>
       </div>
 
-      {/* 3. FOOTER CLUB + BOTÓN */}
+      {/* 3. FOOTER CLUB + BOTONES */}
       <div className="space-y-3 pt-1">
         <div className="flex justify-between items-end">
           <div>
@@ -198,26 +190,41 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
           </p>
         )}
 
-        {/* BOTÓN DE UNIRSE O ESTADO */}
-        {yaInscrito ? (
-          <div className="w-full py-2.5 bg-emerald-50 text-emerald-800 border border-emerald-200 font-black text-xs uppercase tracking-wider rounded-2xl text-center flex items-center justify-center gap-1.5">
-            <span>✓</span>
-            <span>Ya estás en este partido</span>
-          </div>
-        ) : lleno ? (
-          <div className="w-full py-2.5 bg-slate-100 text-slate-400 font-black text-xs uppercase tracking-wider rounded-2xl text-center">
-            Partido Lleno (4/4)
-          </div>
-        ) : (
-          <button
-            onClick={unirse}
-            disabled={procesando}
-            className="w-full py-3 bg-[#0B1120] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl transition-all shadow-md active:scale-[0.98] flex items-center justify-center gap-2"
+        <div className="flex gap-2">
+          {yaInscrito ? (
+            <Link
+              href={`/padel/partidos/${match.id}`}
+              className="flex-1 py-2.5 bg-emerald-50 text-emerald-800 border border-emerald-200 font-black text-xs uppercase tracking-wider rounded-2xl text-center block"
+            >
+              ✓ Ver Partido / Resultado
+            </Link>
+          ) : lleno ? (
+            <Link
+              href={`/padel/partidos/${match.id}`}
+              className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase tracking-wider rounded-2xl text-center block"
+            >
+              Ver Partido Lleno (4/4)
+            </Link>
+          ) : (
+            <button
+              onClick={unirse}
+              disabled={procesando}
+              className="flex-1 py-3 bg-[#0B1120] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl transition-all shadow-md active:scale-[0.98] flex items-center justify-center gap-2"
+            >
+              <span>{procesando ? "PROCESANDO..." : `UNIRME (+${match.price_per_player || 4} CR)`}</span>
+              {!procesando && <span>→</span>}
+            </button>
+          )}
+
+          <Link
+            href={`/padel/partidos/${match.id}`}
+            className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-2xl flex items-center justify-center"
+            title="Ver Detalle"
           >
-            <span>{procesando ? "PROCESANDO..." : `UNIRME AL PARTIDO (+${match.price_per_player || 4} CR)`}</span>
-            {!procesando && <span>→</span>}
-          </button>
-        )}
+            👁️
+          </Link>
+        </div>
+
       </div>
 
     </div>
