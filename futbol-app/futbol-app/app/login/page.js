@@ -4,6 +4,29 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
+// Catálogo estandarizado de Ciudades para garantizar Rankings sin typos
+const CIUDADES_POR_PAIS = {
+  VE: ["Barquisimeto", "Caracas", "Valencia", "Maracaibo", "Maracay", "Puerto La Cruz", "San Cristóbal", "Mérida", "Ciudad Guayana", "Barinas", "Otra"],
+  AR: ["Buenos Aires", "Córdoba", "Rosario", "Mendoza", "La Plata", "Mar del Plata", "San Miguel de Tucumán", "Otra"],
+  CO: ["Bogotá", "Medellín", "Cali", "Barranquilla", "Cartagena", "Bucaramanga", "Pereira", "Otra"],
+  CL: ["Santiago", "Valparaíso", "Concepción", "Antofagasta", "Temuco", "Otra"],
+  ES: ["Madrid", "Barcelona", "Valencia", "Sevilla", "Málaga", "Alicante", "Bilbao", "Otra"],
+  MX: ["Ciudad de México", "Guadalajara", "Monterrey", "Puebla", "Querétaro", "Cancún", "Otra"],
+  US: ["Miami", "Orlando", "New York", "Houston", "Los Angeles", "Otra"],
+  OTRO: ["Otra Ciudad"],
+};
+
+const CODIGOS_TELEFONO = {
+  VE: "+58",
+  AR: "+54",
+  CO: "+57",
+  CL: "+56",
+  ES: "+34",
+  MX: "+52",
+  US: "+1",
+  OTRO: "+1",
+};
+
 export default function LoginPage() {
   return (
     <Suspense fallback={null}>
@@ -16,24 +39,42 @@ function Login() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [modo, setModo] = useState(searchParams.get("modo") === "registro" ? "registro" : "ingreso");
+  
   const [form, setForm] = useState({
     nombre: "",
     apellido: "",
-    nacionalidad: "VE", // Predeterminado
+    nacionalidad: "VE",
+    ciudad: "Barquisimeto",
+    ciudadPersonalizada: "",
     fecha_nacimiento: "",
-    genero: "",
-    codigoArea: "+58", // Predeterminado
+    genero: "Masculino",
+    codigoArea: "+58",
     telefono: "",
     correo: "",
     clave: "",
     claveConfirm: "",
   });
+
   const [mensaje, setMensaje] = useState("");
   const [mensajeTipo, setMensajeTipo] = useState("neutral");
   const [cargando, setCargando] = useState(false);
 
   function actualizar(campo, valor) {
     setForm((f) => ({ ...f, [campo]: valor }));
+  }
+
+  // Cambio de país con auto-sincronización de Ciudad y Código de Área
+  function cambiarPais(nuevoPais) {
+    const ciudades = CIUDADES_POR_PAIS[nuevoPais] || ["Otra"];
+    const nuevoCodigo = CODIGOS_TELEFONO[nuevoPais] || "+58";
+    
+    setForm((f) => ({
+      ...f,
+      nacionalidad: nuevoPais,
+      ciudad: ciudades[0],
+      ciudadPersonalizada: "",
+      codigoArea: nuevoCodigo,
+    }));
   }
 
   function mostrarMensaje(texto, tipo = "neutral") {
@@ -74,10 +115,13 @@ function Login() {
     }
 
     if (modo === "registro") {
+      const ciudadFinal = form.ciudad === "Otra" ? form.ciudadPersonalizada.trim() : form.ciudad;
+
       if (
         !form.nombre ||
         !form.apellido ||
         !form.nacionalidad ||
+        !ciudadFinal ||
         !form.fecha_nacimiento ||
         !form.genero ||
         !form.telefono ||
@@ -101,16 +145,17 @@ function Login() {
       setCargando(true);
       mostrarMensaje("");
 
-      const telefonoCompleto = `${form.codigoArea} ${form.telefono}`;
+      const telefonoCompleto = `${form.codigoArea} ${form.telefono.trim()}`;
 
       const { data, error } = await supabase.auth.signUp({
-        email: form.correo,
+        email: form.correo.trim(),
         password: form.clave,
         options: {
           data: {
-            nombre: form.nombre,
-            apellido: form.apellido,
+            nombre: form.nombre.trim(),
+            apellido: form.apellido.trim(),
             pais: form.nacionalidad,
+            ciudad: ciudadFinal,
             fecha_nacimiento: form.fecha_nacimiento,
             genero: form.genero,
             telefono: telefonoCompleto,
@@ -118,12 +163,25 @@ function Login() {
         },
       });
 
-      setCargando(false);
-
       if (error) {
+        setCargando(false);
         mostrarMensaje(error.message, "error");
-      } else if (data.user) {
-        mostrarMensaje("Cuenta creada con éxito.", "ok");
+        return;
+      }
+
+      if (data.user) {
+        await supabase.from("profiles").upsert({
+          id: data.user.id,
+          nombre: form.nombre.trim(),
+          apellido: form.apellido.trim(),
+          email: form.correo.trim(),
+          pais: form.nacionalidad,
+          ciudad: ciudadFinal,
+          telefono: telefonoCompleto,
+        });
+
+        setCargando(false);
+        mostrarMensaje("¡Cuenta creada con éxito!", "ok");
         router.push("/");
         router.refresh();
       }
@@ -131,11 +189,12 @@ function Login() {
       return;
     }
 
+    // INGRESO
     setCargando(true);
     mostrarMensaje("");
 
     const { error } = await supabase.auth.signInWithPassword({
-      email: form.correo,
+      email: form.correo.trim(),
       password: form.clave,
     });
 
@@ -158,11 +217,15 @@ function Login() {
       : "text-gray-600 bg-gray-50 border-gray-100";
 
   const inputClass =
-    "w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-white text-gray-800 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00FF9D]/30 focus:border-[#00FF9D] transition-colors";
+    "w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs font-semibold bg-white text-gray-800 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00FF9D]/40 focus:border-[#00FF9D] transition-colors";
+
+  const ciudadesDisponibles = CIUDADES_POR_PAIS[form.nacionalidad] || ["Otra"];
 
   return (
-    <div className="min-h-[80vh] flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-xl border border-gray-100 p-8 flex flex-col gap-6">
+    <div className="min-h-[85vh] flex items-center justify-center px-4 py-8">
+      <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-xl border border-gray-100 p-6 md:p-8 flex flex-col gap-6">
+        
+        {/* ENCABEZADO */}
         <div className="text-center">
           <div className="w-14 h-14 mx-auto rounded-2xl bg-[#00FF9D]/10 flex items-center justify-center text-3xl mb-3">
             🏟️
@@ -174,15 +237,16 @@ function Login() {
               ? "Bienvenido de vuelta"
               : "Recupera tu contraseña"}
           </h1>
-          <p className="text-sm text-gray-500 mt-1.5">
+          <p className="text-xs text-gray-500 font-medium mt-1">
             {modo === "registro"
-              ? "Una sola cuenta para fútbol, pádel y lo que venga después."
+              ? "Una sola cuenta para fútbol, pádel y tus estadísticas."
               : modo === "ingreso"
               ? "Ingresa con tu correo y contraseña."
               : "Te enviaremos un enlace para restablecerla."}
           </p>
         </div>
 
+        {/* SELECTOR MODO */}
         {modo !== "recuperar" && (
           <div className="grid grid-cols-2 gap-1 bg-gray-100 rounded-full p-1">
             <button
@@ -191,7 +255,7 @@ function Login() {
                 setModo("ingreso");
                 mostrarMensaje("");
               }}
-              className={`py-2 rounded-full text-sm font-bold transition-all ${
+              className={`py-2 rounded-full text-xs font-extrabold transition-all ${
                 modo === "ingreso"
                   ? "bg-white text-gray-900 shadow-sm"
                   : "text-gray-500 hover:text-gray-700"
@@ -205,7 +269,7 @@ function Login() {
                 setModo("registro");
                 mostrarMensaje("");
               }}
-              className={`py-2 rounded-full text-sm font-bold transition-all ${
+              className={`py-2 rounded-full text-xs font-extrabold transition-all ${
                 modo === "registro"
                   ? "bg-white text-gray-900 shadow-sm"
                   : "text-gray-500 hover:text-gray-700"
@@ -216,13 +280,14 @@ function Login() {
           </div>
         )}
 
-        <div className="flex flex-col gap-4">
+        {/* FORMULARIO */}
+        <div className="flex flex-col gap-3.5">
           {modo === "registro" && (
             <>
               {/* NOMBRES Y APELLIDOS */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
                     Nombre
                   </label>
                   <input
@@ -232,8 +297,8 @@ function Login() {
                     onChange={(e) => actualizar("nombre", e.target.value)}
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
                     Apellido
                   </label>
                   <input
@@ -245,16 +310,16 @@ function Login() {
                 </div>
               </div>
 
-              {/* NACIONALIDAD Y FECHA DE NACIMIENTO */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                    Nacionalidad
+              {/* PAÍS Y CIUDAD (DROPDOWN INTEGRADO) */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
+                    País
                   </label>
                   <select
                     className={inputClass}
                     value={form.nacionalidad}
-                    onChange={(e) => actualizar("nacionalidad", e.target.value)}
+                    onChange={(e) => cambiarPais(e.target.value)}
                   >
                     <option value="VE">🇻🇪 Venezuela</option>
                     <option value="AR">🇦🇷 Argentina</option>
@@ -266,8 +331,44 @@ function Login() {
                     <option value="OTRO">🌍 Otro</option>
                   </select>
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
+                    Ciudad (Ranking)
+                  </label>
+                  <select
+                    className={inputClass}
+                    value={form.ciudad}
+                    onChange={(e) => actualizar("ciudad", e.target.value)}
+                  >
+                    {ciudadesDisponibles.map((ciudad) => (
+                      <option key={ciudad} value={ciudad}>
+                        {ciudad}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* CAMPO DE TEXTO SI ELIGE "OTRA" CIUDAD */}
+              {form.ciudad === "Otra" && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
+                    Escribe tu ciudad
+                  </label>
+                  <input
+                    className={inputClass}
+                    placeholder="Ej. Barinas, San Cristóbal..."
+                    value={form.ciudadPersonalizada}
+                    onChange={(e) => actualizar("ciudadPersonalizada", e.target.value)}
+                  />
+                </div>
+              )}
+
+              {/* NACIMIENTO Y GÉNERO */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
                     Nacimiento
                   </label>
                   <input
@@ -277,12 +378,8 @@ function Login() {
                     onChange={(e) => actualizar("fecha_nacimiento", e.target.value)}
                   />
                 </div>
-              </div>
-
-              {/* GÉNERO Y TELÉFONO (Con más espacio para el teléfono) */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="md:col-span-1 flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
                     Género
                   </label>
                   <select
@@ -290,47 +387,49 @@ function Login() {
                     value={form.genero}
                     onChange={(e) => actualizar("genero", e.target.value)}
                   >
-                    <option value="" disabled>Elige...</option>
                     <option value="Masculino">Masculino</option>
                     <option value="Femenino">Femenino</option>
                     <option value="No binario">No binario</option>
                     <option value="Otro">Otro</option>
                   </select>
                 </div>
+              </div>
 
-                <div className="md:col-span-2 flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                    Teléfono
-                  </label>
-                  <div className="flex gap-2">
-                    <select
-                      className={`${inputClass} w-[105px] px-2 text-center shrink-0`}
-                      value={form.codigoArea}
-                      onChange={(e) => actualizar("codigoArea", e.target.value)}
-                    >
-                      <option value="+58">🇻🇪 +58</option>
-                      <option value="+54">🇦🇷 +54</option>
-                      <option value="+57">🇨🇴 +57</option>
-                      <option value="+56">🇨🇱 +56</option>
-                      <option value="+34">🇪🇸 +34</option>
-                      <option value="+52">🇲🇽 +52</option>
-                      <option value="+1">🇺🇸 +1</option>
-                    </select>
-                    <input
-                      className={`${inputClass} flex-1 min-w-0`}
-                      placeholder="0414 1234567"
-                      type="tel"
-                      value={form.telefono}
-                      onChange={(e) => actualizar("telefono", e.target.value)}
-                    />
-                  </div>
+              {/* TELÉFONO (UNIFICADO Y CORREGIDO SIN DESBORDAMIENTO) */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
+                  Teléfono
+                </label>
+                <div className="flex w-full items-center border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden focus-within:ring-2 focus-within:ring-[#00FF9D]/40 focus-within:border-[#00FF9D] transition-all">
+                  <select
+                    className="bg-transparent border-none text-xs font-extrabold text-gray-800 px-3 py-2.5 outline-none shrink-0 cursor-pointer"
+                    value={form.codigoArea}
+                    onChange={(e) => actualizar("codigoArea", e.target.value)}
+                  >
+                    <option value="+58">🇻🇪 +58</option>
+                    <option value="+54">🇦🇷 +54</option>
+                    <option value="+57">🇨🇴 +57</option>
+                    <option value="+56">🇨🇱 +56</option>
+                    <option value="+34">🇪🇸 +34</option>
+                    <option value="+52">🇲🇽 +52</option>
+                    <option value="+1">🇺🇸 +1</option>
+                  </select>
+                  <div className="h-5 w-[1px] bg-gray-200 shrink-0" />
+                  <input
+                    className="w-full bg-transparent border-none px-3 py-2.5 text-xs font-semibold text-gray-800 placeholder-gray-400 outline-none min-w-0"
+                    placeholder="0414 1234567"
+                    type="tel"
+                    value={form.telefono}
+                    onChange={(e) => actualizar("telefono", e.target.value)}
+                  />
                 </div>
               </div>
             </>
           )}
 
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+          {/* CORREO */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
               Correo Electrónico
             </label>
             <input
@@ -342,9 +441,10 @@ function Login() {
             />
           </div>
 
+          {/* CONTRASEÑA */}
           {modo !== "recuperar" && (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
                 Contraseña
               </label>
               <input
@@ -357,15 +457,16 @@ function Login() {
             </div>
           )}
 
+          {/* CONFIRMAR CONTRASEÑA */}
           {modo === "registro" && (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
                 Confirmar contraseña
               </label>
               <input
                 className={`${inputClass} ${
                   form.claveConfirm && form.clave !== form.claveConfirm
-                    ? "border-red-300 focus:ring-red-200 focus:border-red-400"
+                    ? "border-rose-300 focus:ring-rose-200 focus:border-rose-400"
                     : ""
                 }`}
                 placeholder="Repite tu contraseña"
@@ -374,7 +475,9 @@ function Login() {
                 onChange={(e) => actualizar("claveConfirm", e.target.value)}
               />
               {form.claveConfirm && form.clave !== form.claveConfirm && (
-                <p className="text-xs text-red-500 font-medium">Las contraseñas no coinciden.</p>
+                <p className="text-[10px] text-rose-500 font-bold mt-0.5">
+                  Las contraseñas no coinciden.
+                </p>
               )}
             </div>
           )}
@@ -382,7 +485,7 @@ function Login() {
           <button
             disabled={cargando}
             onClick={enviar}
-            className="mt-2 bg-[#0B0C15] text-[#00FF9D] rounded-xl py-3.5 text-sm font-black uppercase tracking-widest hover:bg-gray-900 active:scale-[0.98] transition-all disabled:opacity-60 shadow-lg"
+            className="mt-3 bg-[#0B0C15] text-[#00FF9D] rounded-2xl py-3.5 text-xs font-black uppercase tracking-widest hover:bg-slate-900 active:scale-[0.98] transition-all disabled:opacity-60 shadow-md"
           >
             {cargando
               ? "Un momento..."
@@ -399,7 +502,7 @@ function Login() {
                 setModo("recuperar");
                 mostrarMensaje("");
               }}
-              className="text-xs text-gray-500 font-semibold hover:text-[#0B0C15] hover:underline text-center transition-colors"
+              className="text-xs text-gray-500 font-bold hover:text-gray-900 text-center transition-colors mt-1"
             >
               ¿Olvidaste tu contraseña?
             </button>
@@ -411,7 +514,7 @@ function Login() {
                 setModo("ingreso");
                 mostrarMensaje("");
               }}
-              className="text-xs text-gray-500 font-semibold hover:text-[#0B0C15] hover:underline text-center transition-colors"
+              className="text-xs text-gray-500 font-bold hover:text-gray-900 text-center transition-colors mt-1"
             >
               Volver al inicio de sesión
             </button>
@@ -419,7 +522,7 @@ function Login() {
         </div>
 
         {mensaje && (
-          <p className={`text-xs font-bold text-center rounded-xl border px-3 py-3 ${mensajeColor}`}>
+          <p className={`text-xs font-bold text-center rounded-2xl border px-3 py-3 ${mensajeColor}`}>
             {mensaje}
           </p>
         )}

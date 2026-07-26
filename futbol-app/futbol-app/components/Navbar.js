@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 
@@ -32,12 +32,11 @@ const NAV_POR_DEPORTE = {
       { href: "/padel", label: "Inicio" },
       { href: "/padel/partidos", label: "Partidos" },
       { href: "/padel/clubes", label: "Clubes" },
-      { href: "/padel/perfil", label: "Mis estadísticas" },
+      { href: "/padel/perfil", label: "Estadísticas" }, // 🔥 SOLO 4 PASTILLAS LIMPIAS
     ],
   },
 };
 
-// 2. DETECTOR DE SECCIÓN
 function seccionActual(pathname) {
   if (!pathname || pathname === "/") return "home";
   if (pathname.startsWith("/futbol")) return "futbol";
@@ -50,7 +49,6 @@ export default function Navbar() {
   const pathname = usePathname();
   const seccion = seccionActual(pathname);
   
-  // Garantizamos que siempre haya un menú asignado
   const config = NAV_POR_DEPORTE[seccion] || NAV_POR_DEPORTE.home;
   const mainNav = config.items;
 
@@ -67,6 +65,8 @@ export default function Navbar() {
   
   const [confirmandoSalir, setConfirmandoSalir] = useState(false);
   const [cerrandoSesion, setCerrandoSesion] = useState(false);
+
+  const mobileNavRef = useRef(null);
 
   useEffect(() => {
     if (!supabase) return;
@@ -133,11 +133,18 @@ export default function Navbar() {
     };
   }, [seccion]);
 
-  // Cierra los menús al cambiar de ruta
+  // Auto-scroll al cambiar de pestaña
   useEffect(() => {
     setMenuOpen(false);
     setAdminMenuOpen(false);
     setDuenoMenuOpen(false);
+
+    if (mobileNavRef.current) {
+      const elActivo = mobileNavRef.current.querySelector('[data-active="true"]');
+      if (elActivo) {
+        elActivo.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+      }
+    }
   }, [pathname]);
 
   async function salir() {
@@ -221,10 +228,26 @@ export default function Navbar() {
             </div>
           )}
 
-          {/* Iconos a la derecha y Menú Hamburguesa */}
-          <div className="flex items-center gap-2 lg:gap-2 shrink-0">
+          {/* Iconos a la derecha: RANKING 🏆 + CRÉDITOS + PERFIL */}
+          <div className="flex items-center gap-2 shrink-0">
             
-            {/* Mi Cancha solo aparece en Fútbol */}
+            {/* 🔥 BOTÓN DE RANKING DESTACADO EN CABECERA SUPERIOR */}
+            {seccion === "padel" && (
+              <Link
+                href="/padel/ranking"
+                title="Ver Ranking Oficial"
+                className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-black transition-all border whitespace-nowrap shrink-0 shadow-sm ${
+                  pathname === "/padel/ranking"
+                    ? "bg-amber-400 text-slate-950 border-amber-400 shadow-amber-200"
+                    : "bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100"
+                }`}
+              >
+                <span className="text-sm">🏆</span>
+                <span className="hidden sm:inline">Ranking</span>
+              </Link>
+            )}
+
+            {/* Mi Cancha solo en Fútbol */}
             {usuario && seccion === "futbol" && esGerente && (
               <div className="relative hidden md:block">
                 <button
@@ -261,7 +284,7 @@ export default function Navbar() {
               </div>
             )}
 
-            {/* Admin global para Pádel y Fútbol */}
+            {/* Admin global */}
             {esAdmin && (
               <div className="relative hidden md:block">
                 <button
@@ -298,7 +321,6 @@ export default function Navbar() {
                   href={seccion === "padel" ? "/padel" : "/futbol/creditos"}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-xs font-black hover:bg-amber-100 transition-colors whitespace-nowrap shrink-0 shadow-sm"
                 >
-                  {/* ICONO SVG DE TOKENS */}
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 shrink-0 text-amber-500 drop-shadow-sm">
                     <path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2m0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8" />
                     <path d="m16.6 11.39-2.77-1.23-1.23-2.77a.68.68 0 0 0-.6-.4c-.27-.02-.5.15-.61.39l-1.23 2.67-2.78 1.34c-.23.11-.38.35-.38.61s.16.49.4.6l2.77 1.23 1.23 2.77a.663.663 0 0 0 1.22 0l1.23-2.77 2.77-1.23c.24-.11.4-.35.4-.61s-.16-.5-.4-.61Z" />
@@ -306,7 +328,6 @@ export default function Navbar() {
                   <span>{creditos}</span>
                 </Link>
 
-                {/* Avatar Desktop / Mobile Dropdown (Único menú móvil para usuarios logueados) */}
                 <div className="relative">
                   <button
                     onClick={() => setMenuOpen(!menuOpen)}
@@ -327,7 +348,6 @@ export default function Navbar() {
                     <svg className="w-4 h-4 md:hidden text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16m-7 6h7" /></svg>
                   </button>
 
-                  {/* Dropdown de la cuenta */}
                   {menuOpen && (
                     <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded-2xl shadow-xl z-[110] overflow-hidden">
                       <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 md:hidden">
@@ -338,7 +358,6 @@ export default function Navbar() {
                         </div>
                       </div>
 
-                      {/* Mi Cancha solo aparece en Fútbol (Móvil) */}
                       {seccion === "futbol" && esGerente && (
                         <div className="md:hidden border-b border-gray-100">
                           <Link 
@@ -394,7 +413,6 @@ export default function Navbar() {
               </Link>
             )}
 
-            {/* BOTÓN HAMBURGUESA EXTRA (SOLO PARA USUARIOS NO LOGUEADOS EN MÓVIL) */}
             {!usuario && (
               <button
                 className="md:hidden p-2 text-gray-500 hover:text-gray-900 focus:outline-none shrink-0"
@@ -410,19 +428,21 @@ export default function Navbar() {
           </div>
         </div>
 
-        {/* ==================================================== */}
-        {/* SUB-MENÚ MÓVIL (PASTILLAS DE NAVEGACIÓN RÁPIDA)      */}
-        {/* ==================================================== */}
+        {/* SUB-MENÚ MÓVIL (PASTILLAS DESPEJADAS Y SIN OVERFLOW) */}
         {mainNav.length > 0 && (
-          <div className="md:hidden w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-            <div className="flex items-center gap-2 px-4 pb-3 pt-1 w-max">
+          <div
+            ref={mobileNavRef}
+            className="md:hidden w-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+          >
+            <div className="flex items-center justify-around gap-1 px-3 pb-3 pt-1 w-full">
               {mainNav.map(({ href, label }) => {
                 const exactlyActive = pathname === href;
                 return (
                   <Link
                     key={href}
                     href={href}
-                    className={`shrink-0 snap-start whitespace-nowrap px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wider transition-all duration-300 ${
+                    data-active={exactlyActive}
+                    className={`shrink-0 text-center px-3.5 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wider transition-all duration-300 ${
                       exactlyActive
                         ? "bg-[#0B0C15] text-[#00FF9D] shadow-md border border-[#0B0C15]"
                         : "bg-gray-100 text-gray-600 border border-gray-200/80 hover:bg-gray-200"
