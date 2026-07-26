@@ -330,14 +330,14 @@ export default function PadelPerfilPage() {
         const miCiudad = profileData?.ciudad || "";
         if (miCiudad) {
           const rankingCiudad = rankingOrdenado.filter(
-            (p) => p.ciudad.toLowerCase() === miCiudad.toLowerCase()
+            (p) => p.ciudad?.toLowerCase() === miCiudad.toLowerCase()
           );
           const pCiudad = rankingCiudad.findIndex((p) => p.cuenta_id === authUser.id) + 1;
           setPosicionCiudad(pCiudad > 0 ? pCiudad : null);
         }
       }
 
-      // CARGAR PARTIDOS (PRÓXIMOS Y HISTORIAL DE ACTIVIDAD)
+      // 🔥 CARGAR PARTIDOS EN 2 PASOS SEGUROS SIN ERRORES DE JOIN
       const { data: myMatches } = await supabase
         .from("padel_match_players")
         .select("match_id, team")
@@ -350,21 +350,63 @@ export default function PadelPerfilPage() {
       });
 
       if (matchIds.length > 0) {
-        const { data: allMatches } = await supabase
+        // 1. Cargar datos básicos de los partidos
+        const { data: allMatches, error: matchesErr } = await supabase
           .from("padel_matches")
           .select(`
             id, match_type, scheduled_at, status, category_restriction,
             gender_restriction, is_competitive, price_per_player, winner_team, score_text,
             club:padel_clubs ( name, city, address ),
-            court:padel_courts ( name ),
-            players:padel_match_players ( 
-              id, user_id, team,
-              profile:profiles ( id, nombre, avatar_url ),
-              padel_profile:padel_profiles!padel_match_players_user_id_fkey ( rating )
-            )
+            court:padel_courts ( name )
           `)
           .in("id", matchIds)
           .order("scheduled_at", { ascending: false });
+
+        if (matchesErr) {
+          console.error("Error al consultar partidos:", matchesErr);
+        }
+
+        // 2. Cargar todos los jugadores participantes para las tarjetas
+        const { data: allPlayersData } = await supabase
+          .from("padel_match_players")
+          .select("id, match_id, user_id, team")
+          .in("match_id", matchIds);
+
+        const allUserIds = Array.from(new Set((allPlayersData || []).map((p) => p.user_id).filter(Boolean)));
+
+        let profilesMap = {};
+        let padelProfilesMap = {};
+
+        if (allUserIds.length > 0) {
+          const { data: profs } = await supabase
+            .from("profiles")
+            .select("id, nombre, avatar_url")
+            .in("id", allUserIds);
+
+          (profs || []).forEach((p) => {
+            profilesMap[p.id] = p;
+          });
+
+          const { data: padelProfs } = await supabase
+            .from("padel_profiles")
+            .select("cuenta_id, rating")
+            .in("cuenta_id", allUserIds);
+
+          (padelProfs || []).forEach((pp) => {
+            padelProfilesMap[pp.cuenta_id] = pp;
+          });
+        }
+
+        // Mapear jugadores a cada partido
+        const playersByMatch = {};
+        (allPlayersData || []).forEach((p) => {
+          if (!playersByMatch[p.match_id]) playersByMatch[p.match_id] = [];
+          playersByMatch[p.match_id].push({
+            ...p,
+            profile: profilesMap[p.user_id] || null,
+            padel_profile: padelProfilesMap[p.user_id] || null,
+          });
+        });
 
         const proximos = [];
         const jugados = [];
@@ -377,6 +419,7 @@ export default function PadelPerfilPage() {
             ...m,
             miEquipo,
             esGanador,
+            players: playersByMatch[m.id] || [],
           };
 
           if (m.status === "programado") {
@@ -388,6 +431,9 @@ export default function PadelPerfilPage() {
 
         setProximosPartidos(proximos);
         setPartidosJugados(jugados);
+      } else {
+        setProximosPartidos([]);
+        setPartidosJugados([]);
       }
     } catch (err) {
       console.error(err);
@@ -551,6 +597,7 @@ export default function PadelPerfilPage() {
     }
   }
 
+  // CÁLCULO DE ESTADÍSTICAS REALES DESDE LOS PARTIDOS JUGADOS
   const estadisticas = useMemo(() => {
     const partidos = partidosJugados.length;
     const victorias = partidosJugados.filter((m) => m.esGanador).length;
@@ -696,7 +743,7 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* FOOTER CARTA */}
+              {/* FOOTER CARTA (VICTORIAS REALES CALCULADAS) */}
               <div className="w-full grid grid-cols-3 gap-2 pt-4 border-t border-white/10 text-center z-10">
                 <div>
                   <p className="text-[10px] md:text-xs font-bold text-gray-400 uppercase tracking-widest">VICTORIAS</p>
@@ -863,7 +910,7 @@ export default function PadelPerfilPage() {
                   )}
                 </div>
 
-                {/* GRILLA ESTADÍSTICA */}
+                {/* GRILLA ESTADÍSTICA CALCULADA */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                   <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 truncate">
@@ -949,7 +996,7 @@ export default function PadelPerfilPage() {
                     href="/padel/clubes"
                     className="inline-flex items-center gap-2 px-5 py-3 bg-[#0B1120] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-md active:scale-95"
                   >
-                    <span>🔍 Buscar Pistas y Clubes</span>
+                    <span>🔍 BUSCAR PISTAS Y CLUBES</span>
                     <span>→</span>
                   </Link>
                 </div>
