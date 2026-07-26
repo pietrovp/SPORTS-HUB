@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../../lib/supabaseClient";
 import PartidoPadelCard from "../../../components/padel/PartidoPadelCard";
@@ -167,7 +167,6 @@ function calcularRatingInicial(respuestas) {
   return parseFloat(Math.min(Math.max(suma, 1.0), 7.0).toFixed(2));
 }
 
-// 🎯 DETERMINAR CATEGORÍA SEGÚN RATING NUMÉRICO CORREGIDO
 function categoriaDesdeRating(r) {
   const num = Number(r) || 1.0;
   if (num < 2.0) return "rookies";
@@ -180,7 +179,6 @@ function categoriaDesdeRating(r) {
   return "open";
 }
 
-// 🎯 INFORMACIÓN COMPLETA DE PROGRESIÓN (INCLUYE 3ERA Y 2DA)
 function getInfoRating(ratingVal) {
   const r = Number(ratingVal) || 1.0;
   if (r < 2.0) return { catActual: "Rookies", nextCat: "7ma", floor: 1.0, ceiling: 2.0 };
@@ -219,18 +217,23 @@ function formatFechaCorta(fechaStr) {
   });
 }
 
+// 📈 TRACKER GRÁFICO (CON ZOOM, SCROLL CUSTOM Y COLORES)
 function RatingTrackerChart({ partidosJugados, currentRating }) {
-  const historialPuntos = useMemo(() => {
+  const [filtro, setFiltro] = useState("10"); // "5" | "10" | "todos"
+  const [pointSpacing, setPointSpacing] = useState(65); // Zoom dinámico (px entre puntos)
+  const scrollRef = useRef(null);
+
+  // 1. Reconstrucción total de historial
+  const historialCompleto = useMemo(() => {
     if (!partidosJugados || partidosJugados.length === 0) {
       return [{ matchNum: 0, rating: currentRating, change: 0, label: "Inicio" }];
     }
 
     const cronologicos = [...partidosJugados].reverse();
-    
     const deltas = cronologicos.map((m) => {
       const val = Number(m.rating_change);
       if (!isNaN(val) && val !== 0) return val;
-      return m.esGanador ? 0.12 : -0.12;
+      return m.esGanador ? 0.08 : -0.05;
     });
 
     const totalDeltas = deltas.reduce((sum, d) => sum + d, 0);
@@ -247,13 +250,32 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
         rating: parseFloat(corriendo.toFixed(2)),
         change: delta,
         label: `Partido ${idx + 1}`,
+        esGanador: m.esGanador,
       });
     });
 
     return puntos;
   }, [partidosJugados, currentRating]);
 
-  if (historialPuntos.length <= 1) {
+  // 2. Filtro visual
+  const puntosFiltrados = useMemo(() => {
+    if (filtro === "5") {
+      return historialCompleto.length <= 6 ? historialCompleto : historialCompleto.slice(-6);
+    }
+    if (filtro === "10") {
+      return historialCompleto.length <= 11 ? historialCompleto : historialCompleto.slice(-11);
+    }
+    return historialCompleto;
+  }, [historialCompleto, filtro]);
+
+  // Auto-scroll a la derecha cuando se dibuja, cambia el filtro o el usuario hace zoom
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+    }
+  }, [puntosFiltrados, filtro, pointSpacing]);
+
+  if (historialCompleto.length <= 1) {
     return (
       <div className="bg-[#0B1120] text-white p-5 rounded-3xl border border-slate-800 text-center space-y-2">
         <span className="text-xl block">📊</span>
@@ -265,17 +287,23 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
     );
   }
 
-  const width = 500;
-  const height = 130;
-  const padding = 25;
+  // Dimensiones del lienzo y límites
+  const height = 150;
+  const paddingY = 35;
+  const paddingX = 35;
+  const minWidth = 500;
 
-  const ratingsVals = historialPuntos.map((p) => p.rating);
-  const minR = Math.min(...ratingsVals) - 0.2;
-  const maxR = Math.max(...ratingsVals) + 0.2;
+  // Ancho dinámico basado en la cantidad de puntos y el espaciado (Zoom)
+  const calculatedWidth = Math.max(minWidth, (puntosFiltrados.length - 1) * pointSpacing + paddingX * 2);
+  const width = filtro === "todos" ? calculatedWidth : minWidth;
 
-  const pointsFormatted = historialPuntos.map((pt, i) => {
-    const x = padding + (i / (historialPuntos.length - 1)) * (width - padding * 2);
-    const y = height - padding - ((pt.rating - minR) / (maxR - minR || 1)) * (height - padding * 2);
+  const ratingsVals = puntosFiltrados.map((p) => p.rating);
+  const minR = Math.min(...ratingsVals) - 0.15;
+  const maxR = Math.max(...ratingsVals) + 0.15;
+
+  const pointsFormatted = puntosFiltrados.map((pt, i) => {
+    const x = paddingX + (i / (puntosFiltrados.length - 1 || 1)) * (width - paddingX * 2);
+    const y = height - paddingY - ((pt.rating - minR) / (maxR - minR || 1)) * (height - paddingY * 2);
     return { ...pt, x, y };
   });
 
@@ -284,50 +312,166 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
   }, "");
 
   const areaD = `${pathD} L ${pointsFormatted[pointsFormatted.length - 1].x},${height - 10} L ${pointsFormatted[0].x},${height - 10} Z`;
-  const ultimoDelta = historialPuntos[historialPuntos.length - 1]?.change || 0;
+  const ultimoDelta = historialCompleto[historialCompleto.length - 1]?.change || 0;
 
   return (
-    <div className="bg-[#0B1120] text-white p-5 rounded-[2rem] shadow-xl border border-slate-800 space-y-3">
-      <div className="flex justify-between items-center border-b border-slate-800 pb-2.5">
+    <div className="bg-[#0B1120] text-white p-5 sm:p-6 rounded-[2rem] shadow-xl border border-slate-800 space-y-4">
+      
+      {/* HEADER + CONTROLES */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>
           <span className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] block">
             Tracker de Rendimiento
           </span>
-          <h3 className="text-sm font-black text-white flex items-center gap-2">
+          <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2 mt-0.5">
             <span>Evolución de Rating</span>
-            <span className="text-[11px] font-bold text-slate-400">({historialPuntos.length - 1} partidos)</span>
+            <span className="text-xs font-bold text-slate-400">({historialCompleto.length - 1} partidos)</span>
           </h3>
         </div>
 
-        <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-full border ${
-          ultimoDelta >= 0 ? "bg-[#00FF9D]/20 text-[#00FF9D] border-[#00FF9D]/40" : "bg-rose-500/20 text-rose-300 border-rose-500/40"
-        }`}>
-          {ultimoDelta >= 0 ? `+${ultimoDelta.toFixed(2)} pts` : `${ultimoDelta.toFixed(2)} pts`}
-        </span>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          
+          {/* BOTONES DE FILTRO */}
+          <div className="bg-slate-900 border border-slate-800 p-1 rounded-xl flex items-center gap-1 text-[10px] font-bold shrink-0">
+            <button
+              onClick={() => setFiltro("5")}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                filtro === "5" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              5 Últimos
+            </button>
+            <button
+              onClick={() => setFiltro("10")}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                filtro === "10" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              10 Últimos
+            </button>
+            <button
+              onClick={() => setFiltro("todos")}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                filtro === "todos" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Todos
+            </button>
+          </div>
+
+          {/* CONTROLES DE ZOOM (Solo visibles en "Todos") */}
+          {filtro === "todos" && (
+            <div className="bg-slate-900 border border-slate-800 p-1 rounded-xl flex items-center text-[10px] font-bold shrink-0">
+              <button 
+                onClick={() => setPointSpacing(p => Math.max(p - 15, 45))} 
+                disabled={pointSpacing <= 45} 
+                className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent transition-all"
+                title="Alejar (Zoom Out)"
+              >
+                ➖
+              </button>
+              <span className="text-slate-500 font-black uppercase px-1 cursor-default">Zoom</span>
+              <button 
+                onClick={() => setPointSpacing(p => Math.min(p + 15, 120))} 
+                disabled={pointSpacing >= 120} 
+                className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent transition-all"
+                title="Acercar (Zoom In)"
+              >
+                ➕
+              </button>
+            </div>
+          )}
+
+          {/* PASTILLA DEL ÚLTIMO RESULTADO */}
+          <span className={`text-[10px] font-black px-3 py-1.5 rounded-full border shrink-0 ${
+            ultimoDelta >= 0 ? "bg-[#00FF9D]/20 text-[#00FF9D] border-[#00FF9D]/40" : "bg-rose-500/20 text-rose-300 border-rose-500/40"
+          }`}>
+            {ultimoDelta >= 0 ? `+${ultimoDelta.toFixed(2)} pts` : `${ultimoDelta.toFixed(2)} pts`}
+          </span>
+        </div>
       </div>
 
-      <div className="relative w-full overflow-x-auto pt-1">
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto overflow-visible">
-          <defs>
-            <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#00FF9D" stopOpacity="0.3" />
-              <stop offset="100%" stopColor="#00FF9D" stopOpacity="0.0" />
-            </linearGradient>
-          </defs>
+      {/* CANVAS SVG CON SCROLL CUSTOMIZADO */}
+      <div 
+        ref={scrollRef} 
+        className="relative w-full overflow-x-auto pb-4 pt-1 
+                   [&::-webkit-scrollbar]:h-2 
+                   [&::-webkit-scrollbar-track]:bg-[#0B1120] 
+                   [&::-webkit-scrollbar-track]:rounded-full 
+                   [&::-webkit-scrollbar-thumb]:bg-slate-700 
+                   [&::-webkit-scrollbar-thumb]:rounded-full 
+                   hover:[&::-webkit-scrollbar-thumb]:bg-slate-500 transition-colors"
+      >
+        <div style={{ width: `${width}px`, minWidth: "100%" }}>
+          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto overflow-visible">
+            <defs>
+              <linearGradient id="chartGradientGris" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#64748B" stopOpacity="0.2" />
+                <stop offset="100%" stopColor="#64748B" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
 
-          <path d={areaD} fill="url(#chartGradient)" />
-          <path d={pathD} fill="none" stroke="#00FF9D" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            {/* Area de fondo en gris translúcido */}
+            <path d={areaD} fill="url(#chartGradientGris)" />
 
-          {pointsFormatted.map((pt, idx) => (
-            <g key={idx}>
-              <circle cx={pt.x} cy={pt.y} r="4.5" className="fill-[#0B1120] stroke-[#00FF9D] stroke-[2.5]" />
-              <text x={pt.x} y={pt.y - 10} textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="900">
-                {pt.rating.toFixed(2)}
-              </text>
-            </g>
-          ))}
-        </svg>
+            {/* Línea Principal Neutra en Gris Slate */}
+            <path d={pathD} fill="none" stroke="#64748B" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+
+            {/* Nodos interactivos */}
+            {pointsFormatted.map((pt, idx) => {
+              const esInicio = pt.matchNum === 0;
+              const esVictoria = pt.change >= 0;
+
+              // Asignación de colores: Azul (Inicio), Verde (+), Rojo (-)
+              const nodeColor = esInicio ? "#38BDF8" : esVictoria ? "#00FF9D" : "#FF4655";
+              const strokeColor = esInicio ? "#0284C7" : esVictoria ? "#00CC7D" : "#E11D48";
+
+              return (
+                <g key={idx} className="group cursor-pointer">
+                  {/* Punto */}
+                  <circle
+                    cx={pt.x}
+                    cy={pt.y}
+                    r="5"
+                    fill={nodeColor}
+                    stroke={strokeColor}
+                    strokeWidth="2.5"
+                    className="transition-all group-hover:r-7"
+                  />
+
+                  {/* Rating principal (Arriba del punto) */}
+                  <text
+                    x={pt.x}
+                    y={pt.y - 12}
+                    textAnchor="middle"
+                    fill="#FFFFFF"
+                    fontSize="10"
+                    fontWeight="900"
+                    className="drop-shadow-sm"
+                  >
+                    {pt.rating.toFixed(2)}
+                  </text>
+
+                  {/* Delta / Cambio numérico (Debajo del punto, visible si no es inicio) */}
+                  {!esInicio && (
+                    <text
+                      x={pt.x}
+                      y={pt.y + 18}
+                      textAnchor="middle"
+                      fill={nodeColor}
+                      fontSize="8"
+                      fontWeight="900"
+                    >
+                      {pt.change >= 0 ? `+${pt.change.toFixed(2)}` : pt.change.toFixed(2)}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+        </div>
       </div>
+
     </div>
   );
 }
@@ -402,7 +546,6 @@ export default function PadelPerfilPage() {
         finalPadel = created;
       }
 
-      // 🔥 AUTO-CORRECCIÓN DE CATEGORÍA SEGÚN LA NUEVA ESCALA REVISADA
       const catReal = categoriaDesdeRating(finalPadel.rating);
       if (finalPadel.categoria_oficial !== catReal) {
         await supabase
@@ -921,7 +1064,7 @@ export default function PadelPerfilPage() {
             ) : (
               <div className="space-y-6">
 
-                {/* 📈 TRACKER DE GRÁFICA DE LEVEL */}
+                {/* 📈 COMPONENTE REORGANIZADO: TRACKER DE GRÁFICA DE LEVEL */}
                 <RatingTrackerChart
                   partidosJugados={partidosJugados}
                   currentRating={ratingActual}
