@@ -26,28 +26,21 @@ function validarSet(gA, gB, tbA = 0, tbB = 0) {
 
   if (isNaN(a) || isNaN(b)) return { valido: false, msg: "Ingresa los juegos de ambos equipos" };
 
-  // 1. Ganador Normal (6-0, 6-1, 6-2, 6-3, 6-4)
   if ((a === 6 && b <= 4) || (b === 6 && a <= 4)) {
     return { valido: true, ganador: a > b ? "A" : "B" };
   }
 
-  // 2. Ventaja tras 5-5 (7-5 o 5-7)
   if ((a === 7 && b === 5) || (b === 7 && a === 5)) {
     return { valido: true, ganador: a > b ? "A" : "B" };
   }
 
-  // 3. Tie-Break (7-6 o 6-7)
   if ((a === 7 && b === 6) || (b === 7 && a === 6)) {
     const ganadorEsperado = a === 7 ? "A" : "B";
     const maxTb = Math.max(tA, tB);
     const diffTb = Math.abs(tA - tB);
 
-    if (maxTb < 7) {
-      return { valido: false, msg: "El Tie-break requiere al menos 7 puntos" };
-    }
-    if (diffTb < 2) {
-      return { valido: false, msg: "El Tie-break requiere diferencia mínima de 2 puntos" };
-    }
+    if (maxTb < 7) return { valido: false, msg: "El Tie-break requiere al menos 7 puntos" };
+    if (diffTb < 2) return { valido: false, msg: "El Tie-break requiere diferencia mínima de 2 puntos" };
     if ((ganadorEsperado === "A" && tA <= tB) || (ganadorEsperado === "B" && tB <= tA)) {
       return { valido: false, msg: `El ganador de 7 juegos (${ganadorEsperado}) debe ganar el Tie-break` };
     }
@@ -55,7 +48,48 @@ function validarSet(gA, gB, tbA = 0, tbB = 0) {
     return { valido: true, ganador: ganadorEsperado, esTiebreak: true };
   }
 
-  return { valido: false, msg: "Set inválido. Ejemplos válidos: 6-4, 7-5 o 7-6 (con Tie-break)" };
+  return { valido: false, msg: "Set inválido. Ejemplos válidos: 6-4, 7-5 o 7-6" };
+}
+
+// 🧠 ALGORITMO INTELIGENTE DE NIVELACIÓN (ELO + DOMINANCIA + FIABILIDAD)
+function calcularAjusteRatingDinámico({
+  ratingJugador,
+  ratingCompanero,
+  ratingRival1,
+  ratingRival2,
+  esGanador,
+  diffGamesTotal,
+  fiabilidadActual
+}) {
+  const miParejaRating = (ratingJugador + ratingCompanero) / 2;
+  const rivalesRating = (ratingRival1 + ratingRival2) / 2;
+
+  // 1. Expectativa de victoria según nivel del rival
+  const diffNivel = rivalesRating - miParejaRating;
+  const expectativa = 1 / (1 + Math.pow(10, diffNivel / 2.0));
+
+  // 2. Factor de Dominancia de la paliza
+  let factorDominancia = 1.0;
+  if (diffGamesTotal >= 8) factorDominancia = 1.45;      // Paliza contundente
+  else if (diffGamesTotal >= 5) factorDominancia = 1.2;  // Victoria/Derrota clara
+  else if (diffGamesTotal <= 2) factorDominancia = 0.85; // Partido apretado
+
+  // 3. Volatilidad / Sensibilidad por Fiabilidad (Calibración)
+  let kFactor = 0.22;
+  if (fiabilidadActual < 35) {
+    kFactor = 0.45; // Calibración súper rápida para corregir autoevaluación falsa
+  } else if (fiabilidadActual < 70) {
+    kFactor = 0.30;
+  }
+
+  // 4. Cálculo de cambio
+  const resultadoReal = esGanador ? 1 : 0;
+  let cambio = kFactor * (resultadoReal - expectativa) * factorDominancia;
+
+  if (esGanador) cambio = Math.max(0.04, cambio);
+  else cambio = Math.min(-0.04, cambio);
+
+  return parseFloat(cambio.toFixed(2));
 }
 
 export default function PartidoDetallePage() {
@@ -67,10 +101,10 @@ export default function PartidoDetallePage() {
   const [match, setMatch] = useState(null);
   const [user, setUser] = useState(null);
 
-  // POP-UP NOTIFICACIÓN CUSTOMIZADO (REEMPLAZO DE ALERTS)
-  const [notificacion, setNotificacion] = useState(null); // { tipo: 'exito' | 'error' | 'advertencia' | 'info', titulo, mensaje }
+  // NOTIFICACIÓN POP-UP
+  const [notificacion, setNotificacion] = useState(null);
 
-  // ESTADOS DEL MODAL DE RESULTADO
+  // MODAL RESULTADOS
   const [modalResultadoOpen, setModalResultadoOpen] = useState(false);
   const [set1A, setSet1A] = useState(6);
   const [set1B, setSet1B] = useState(4);
@@ -91,9 +125,7 @@ export default function PartidoDetallePage() {
   const [procesandoScore, setProcesandoScore] = useState(false);
 
   useEffect(() => {
-    if (matchId) {
-      cargarDetallePartido();
-    }
+    if (matchId) cargarDetallePartido();
   }, [matchId]);
 
   function mostrarNotificacion(tipo, titulo, mensaje) {
@@ -146,7 +178,7 @@ export default function PartidoDetallePage() {
 
         const { data: padelProfilesData } = await supabase
           .from("padel_profiles")
-          .select("cuenta_id, rating, categoria_oficial")
+          .select("cuenta_id, rating, fiabilidad, victorias, derrotas, categoria_oficial")
           .in("cuenta_id", userIds);
 
         (padelProfilesData || []).forEach((pp) => {
@@ -177,11 +209,9 @@ export default function PartidoDetallePage() {
     e.preventDefault();
     if (!match || !user) return;
 
-    // Validación de Set 1
     const val1 = validarSet(set1A, set1B, tb1A, tb1B);
     if (!val1.valido) return mostrarNotificacion("error", "Error en Set 1", val1.msg);
 
-    // Validación de Set 2
     const val2 = validarSet(set2A, set2B, tb2A, tb2B);
     if (!val2.valido) return mostrarNotificacion("error", "Error en Set 2", val2.msg);
 
@@ -191,7 +221,7 @@ export default function PartidoDetallePage() {
     let val3 = null;
     if (setsGanadosA === 1 && setsGanadosB === 1) {
       if (!usarSet3) {
-        return mostrarNotificacion("advertencia", "Tercer Set Requerido", "El partido está empatado 1-1 en sets. Debes activar y registrar el 3er Set para desempatar.");
+        return mostrarNotificacion("advertencia", "Tercer Set Requerido", "El partido está empatado 1-1 en sets. Debes activar el 3er Set.");
       }
       val3 = validarSet(set3A, set3B, tb3A, tb3B);
       if (!val3.valido) return mostrarNotificacion("error", "Error en Set 3", val3.msg);
@@ -200,7 +230,11 @@ export default function PartidoDetallePage() {
 
     const ganadorFinal = setsGanadosA > setsGanadosB ? "A" : "B";
 
-    // Formatear Texto del Marcador
+    // Calcular suma total de juegos para medir paliza
+    const totalJuegosA = Number(set1A) + Number(set2A) + (val3 ? Number(set3A) : 0);
+    const totalJuegosB = Number(set1B) + Number(set2B) + (val3 ? Number(set3B) : 0);
+    const diffGamesTotal = Math.abs(totalJuegosA - totalJuegosB);
+
     const str1 = `${set1A}-${set1B}${val1.esTiebreak ? `(${Math.min(tb1A, tb1B)})` : ""}`;
     const str2 = `${set2A}-${set2B}${val2.esTiebreak ? `(${Math.min(tb2A, tb2B)})` : ""}`;
     const str3 = val3 ? `, ${set3A}-${set3B}${val3.esTiebreak ? `(${Math.min(tb3A, tb3B)})` : ""}` : "";
@@ -209,6 +243,7 @@ export default function PartidoDetallePage() {
     const propuestaData = {
       winner: ganadorFinal,
       scoreText: marcadorTexto,
+      diffGamesTotal,
       sets: [
         { a: set1A, b: set1B, tbA: tb1A, tbB: tb1B },
         { a: set2A, b: set2B, tbA: tb2A, tbB: tb2B },
@@ -234,10 +269,10 @@ export default function PartidoDetallePage() {
 
       setModalResultadoOpen(false);
       await cargarDetallePartido();
-      mostrarNotificacion("exito", "Marcador Propuesto", "El resultado fue enviado correctamente. Ahora la pareja rival debe confirmarlo.");
+      mostrarNotificacion("exito", "Marcador Propuesto", "Resultado enviado. Esperando la confirmación de la pareja rival.");
     } catch (err) {
       console.error(err);
-      mostrarNotificacion("error", "Error de Envío", "No se pudo proponer el marcador. Inténtalo de nuevo.");
+      mostrarNotificacion("error", "Error de Envío", "No se pudo proponer el marcador.");
     } finally {
       setProcesandoScore(false);
     }
@@ -251,7 +286,6 @@ export default function PartidoDetallePage() {
       setProcesandoScore(true);
 
       if (!aprobar) {
-        // Impugnar / Rechazar
         await supabase
           .from("padel_matches")
           .update({
@@ -263,15 +297,15 @@ export default function PartidoDetallePage() {
           .eq("id", match.id);
 
         await cargarDetallePartido();
-        mostrarNotificacion("info", "Marcador Rechazado", "Has rechazado el marcador propuesto. Se habilitó nuevamente la carga para ingresar el resultado correcto.");
+        mostrarNotificacion("info", "Marcador Rechazado", "Has rechazado el marcador propuesto. Se habilitó nuevamente la carga.");
         return;
       }
 
-      // APROBAR Y FINALIZAR
+      // APROBAR Y EJECUTAR CÁLCULO DINÁMICO
       const propuesta = match.score_proposed;
       const ganador = propuesta.winner;
+      const diffGamesTotal = propuesta.diffGamesTotal || 4;
 
-      // Actualizar estado del partido
       const { error: matchErr } = await supabase
         .from("padel_matches")
         .update({
@@ -284,23 +318,57 @@ export default function PartidoDetallePage() {
 
       if (matchErr) throw matchErr;
 
-      // Ajustar Ratings
+      // 🔥 CÁLCULO DINÁMICO DE RATING Y FIABILIDAD PARA LOS 4 JUGADORES
       if (match.is_competitive) {
+        const parejaA = match.players?.filter((p) => p.team === "A") || [];
+        const parejaB = match.players?.filter((p) => p.team === "B") || [];
+
+        const rA1 = Number(parejaA[0]?.padel_profile?.rating) || 1.50;
+        const rA2 = Number(parejaA[1]?.padel_profile?.rating) || 1.50;
+        const rB1 = Number(parejaB[0]?.padel_profile?.rating) || 1.50;
+        const rB2 = Number(parejaB[1]?.padel_profile?.rating) || 1.50;
+
         for (const player of match.players || []) {
+          const esParejaA = player.team === "A";
           const esGanador = player.team === ganador;
-          const ratingActual = Number(player.padel_profile?.rating) || 1.50;
-          const delta = esGanador ? 0.15 : -0.10;
-          const nuevoRating = Math.max(1.0, parseFloat((ratingActual + delta).toFixed(2)));
+
+          const ratingSelf = Number(player.padel_profile?.rating) || 1.50;
+          const ratingPartner = esParejaA ? (player.id === parejaA[0]?.id ? rA2 : rA1) : (player.id === parejaB[0]?.id ? rB2 : rB1);
+          const ratingRiv1 = esParejaA ? rB1 : rA1;
+          const ratingRiv2 = esParejaA ? rB2 : rA2;
+
+          const fiabilidadActual = Number(player.padel_profile?.fiabilidad) || 20;
+
+          // Cálculo del cambio dinámico
+          const delta = calcularAjusteRatingDinámico({
+            ratingJugador: ratingSelf,
+            ratingCompanero: ratingPartner,
+            ratingRival1: ratingRiv1,
+            ratingRival2: ratingRiv2,
+            esGanador,
+            diffGamesTotal,
+            fiabilidadActual,
+          });
+
+          const nuevoRating = Math.max(1.0, parseFloat((ratingSelf + delta).toFixed(2)));
+          const nuevaFiabilidad = Math.min(100, fiabilidadActual + 5); // +5% por partido
+          const nVics = (player.padel_profile?.victorias || 0) + (esGanador ? 1 : 0);
+          const nDerr = (player.padel_profile?.derrotas || 0) + (esGanador ? 0 : 1);
 
           await supabase
             .from("padel_profiles")
-            .update({ rating: nuevoRating })
+            .update({
+              rating: nuevoRating,
+              fiabilidad: nuevaFiabilidad,
+              victorias: nVics,
+              derrotas: nDerr,
+            })
             .eq("cuenta_id", player.user_id);
         }
       }
 
       await cargarDetallePartido();
-      mostrarNotificacion("exito", "¡Partido Finalizado!", `El resultado ha sido aprobado oficialmente. Victoria para la Pareja ${ganador} y ratings actualizados.`);
+      mostrarNotificacion("exito", "¡Partido Finalizado!", `El resultado fue aprobado. Se han recalculado los niveles según dominancia y fiabilidad.`);
     } catch (err) {
       console.error(err);
       mostrarNotificacion("error", "Error de Procesamiento", "No se pudo procesar la respuesta.");
@@ -342,7 +410,6 @@ export default function PartidoDetallePage() {
     (soyDeParejaA && match.players?.find((p) => p.user_id === match.score_submitted_by)?.team === "A") ||
     (soyDeParejaB && match.players?.find((p) => p.user_id === match.score_submitted_by)?.team === "B");
 
-  // Controladores de validación visual del Modal
   const v1 = validarSet(set1A, set1B, tb1A, tb1B);
   const v2 = validarSet(set2A, set2B, tb2A, tb2B);
   const v3 = usarSet3 ? validarSet(set3A, set3B, tb3A, tb3B) : { valido: true };
@@ -379,7 +446,6 @@ export default function PartidoDetallePage() {
             </div>
           </div>
 
-          {/* BANNER ESTADO FINALIZADO */}
           {match.status === "jugado" && (
             <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center space-y-1">
               <span className="text-xs font-black text-emerald-800 uppercase tracking-widest block">
@@ -392,7 +458,7 @@ export default function PartidoDetallePage() {
           )}
         </div>
 
-        {/* ALERTA DE APROBACIÓN PENDIENTE (PEER VALIDATION) */}
+        {/* ALERTA DE APROBACIÓN PENDIENTE */}
         {match.status !== "jugado" && match.score_status === "propuesto" && (
           <div className="bg-amber-50 border-2 border-amber-300 p-5 rounded-3xl shadow-sm space-y-3">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-amber-200/80 pb-3">
@@ -416,7 +482,7 @@ export default function PartidoDetallePage() {
             ) : (
               <div className="space-y-3 pt-1">
                 <p className="text-xs font-bold text-amber-900">
-                  La pareja rival ha cargado el resultado superior. ¿Estás de acuerdo con el marcador?
+                  La pareja rival ha cargado el resultado. ¿Estás de acuerdo con el marcador?
                 </p>
                 <div className="flex gap-3">
                   <button
@@ -439,7 +505,7 @@ export default function PartidoDetallePage() {
           </div>
         )}
 
-        {/* GRILLA DE ALINEACIÓN (PAREJA A VS PAREJA B) */}
+        {/* ALINEACIÓN DE PISTA */}
         <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
           <h2 className="text-center text-xs font-black uppercase tracking-widest text-slate-400">
             Alineación de Pista
@@ -529,7 +595,7 @@ export default function PartidoDetallePage() {
             </div>
           </div>
 
-          {/* BOTÓN CARGAR RESULTADO (HABILITADO SOLO SI ESTÁ LLENO Y NO TIENE PROPUESTA PENDIENTE) */}
+          {/* BOTÓN CARGAR RESULTADO */}
           {match.status !== "jugado" && match.score_status !== "propuesto" && (
             <div className="pt-4 border-t border-slate-100 text-center">
               <button
@@ -551,9 +617,7 @@ export default function PartidoDetallePage() {
 
       </div>
 
-      {/* ==================================================== */}
-      {/* 🔥 MODAL AVANZADO DE CARGA CON REGLAMENTO DE PÁDEL   */}
-      {/* ==================================================== */}
+      {/* MODAL CARGA MARCADOR */}
       {modalResultadoOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
           <div className="bg-white rounded-[2.5rem] max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-slate-100 space-y-5 my-6">
@@ -594,7 +658,6 @@ export default function PartidoDetallePage() {
                   </div>
                 </div>
 
-                {/* Si es Tie-Break 7-6 */}
                 {((set1A === 7 && set1B === 6) || (set1A === 6 && set1B === 7)) && (
                   <div className="pt-2 border-t border-slate-200/60 grid grid-cols-2 gap-3 bg-amber-50/60 p-2.5 rounded-xl">
                     <div>
@@ -647,7 +710,7 @@ export default function PartidoDetallePage() {
                 )}
               </div>
 
-              {/* ACTIVAR SET 3 SI EMPATAN 1-1 */}
+              {/* SET 3 (DESEMPATE) */}
               <div className="flex items-center justify-between bg-blue-50/60 p-3 rounded-2xl border border-blue-100">
                 <span className="text-xs font-bold text-blue-900">¿Jugaron 3er Set (Desempate)?</span>
                 <button
@@ -659,7 +722,6 @@ export default function PartidoDetallePage() {
                 </button>
               </div>
 
-              {/* SET 3 (OPCIONAL) */}
               {usarSet3 && (
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-2">
                   <div className="flex justify-between items-center">
@@ -711,34 +773,20 @@ export default function PartidoDetallePage() {
         </div>
       )}
 
-      {/* ==================================================== */}
-      {/* 🔔 MODAL NOTIFICACIÓN POP-UP PERSONALIZADO (NO ALERTS) */}
-      {/* ==================================================== */}
+      {/* POP-UP NOTIFICACIÓN */}
       {notificacion && (
-        <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-[2.5rem] max-w-sm w-full p-6 sm:p-7 shadow-2xl border border-slate-100 text-center space-y-4">
-            <div className={`w-14 h-14 rounded-full mx-auto flex items-center justify-center text-2xl ${
-              notificacion.tipo === "exito" ? "bg-emerald-100 text-emerald-600" :
-              notificacion.tipo === "error" ? "bg-rose-100 text-rose-600" :
-              notificacion.tipo === "advertencia" ? "bg-amber-100 text-amber-600" :
-              "bg-blue-100 text-blue-600"
-            }`}>
-              {notificacion.tipo === "exito" && "🎉"}
-              {notificacion.tipo === "error" && "⚠️"}
-              {notificacion.tipo === "advertencia" && "📊"}
-              {notificacion.tipo === "info" && "ℹ️"}
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-[2.5rem] max-w-sm w-full p-6 text-center space-y-4 shadow-2xl">
+            <div className="w-14 h-14 rounded-full mx-auto flex items-center justify-center text-2xl bg-blue-100 text-blue-600">
+              {notificacion.tipo === "exito" ? "🎉" : notificacion.tipo === "error" ? "⚠️" : "ℹ️"}
             </div>
-
-            <div className="space-y-1">
+            <div>
               <h3 className="text-lg font-black text-slate-900">{notificacion.titulo}</h3>
-              <p className="text-xs font-semibold text-slate-500 leading-relaxed">
-                {notificacion.mensaje}
-              </p>
+              <p className="text-xs font-semibold text-slate-500 mt-1">{notificacion.mensaje}</p>
             </div>
-
             <button
               onClick={() => setNotificacion(null)}
-              className="w-full py-3.5 bg-[#0B1120] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl hover:bg-slate-900 transition-all shadow-md active:scale-95"
+              className="w-full py-3.5 bg-[#0B1120] text-[#00FF9D] font-black text-xs uppercase rounded-2xl"
             >
               Entendido
             </button>
