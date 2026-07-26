@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../../lib/supabaseClient";
-import PadelRecentActivity from "./PadelRecentActivity";
+import PartidoPadelCard from "../../../components/padel/PartidoPadelCard";
 
 const TODAS_CATEGORIAS = [
   { value: "rookies", label: "Rookies" },
@@ -202,14 +202,31 @@ function getEtiquetaFiabilidad(f) {
   return { texto: "Alta (Estable)", color: "text-emerald-400" };
 }
 
+function formatFechaCorta(fechaStr) {
+  if (!fechaStr) return "";
+  const d = new Date(fechaStr);
+  return d.toLocaleDateString("es-ES", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function PadelPerfilPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [user, setUser] = useState(null);
   const [baseProfile, setBaseProfile] = useState(null);
   const [padelProfile, setPadelProfile] = useState(null);
-  const [matchesData, setMatchesData] = useState([]);
-  
+  const [userCreditos, setUserCreditos] = useState(0);
+
+  // LISTAS DE PARTIDOS (PRÓXIMOS Y JUGADOS)
+  const [proximosPartidos, setProximosPartidos] = useState([]);
+  const [partidosJugados, setPartidosJugados] = useState([]);
+  const [limiteHistorial, setLimiteHistorial] = useState(3); // Paginación de 3 en 3
+
   // Posiciones de Ranking
   const [posicionGlobal, setPosicionGlobal] = useState(null);
   const [posicionCiudad, setPosicionCiudad] = useState(null);
@@ -229,7 +246,7 @@ export default function PadelPerfilPage() {
 
   const [mensaje, setMensaje] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-  
+
   // Formularios
   const [formPerfil, setFormPerfil] = useState(DEFAULT_PROFILE);
   const [catSolicitada, setCatSolicitada] = useState("rookies");
@@ -258,6 +275,7 @@ export default function PadelPerfilPage() {
       ]);
 
       setBaseProfile(profileData || null);
+      setUserCreditos(profileData?.creditos ?? 0);
 
       let finalPadel = padelData;
 
@@ -319,13 +337,58 @@ export default function PadelPerfilPage() {
         }
       }
 
-      // Cargar partidos
-      const { data: playedMatches } = await supabase
+      // CARGAR PARTIDOS (PRÓXIMOS Y HISTORIAL DE ACTIVIDAD)
+      const { data: myMatches } = await supabase
         .from("padel_match_players")
-        .select(`id, team, match:padel_matches!inner(id, status, winner_team, scheduled_at)`)
+        .select("match_id, team")
         .eq("user_id", authUser.id);
 
-      setMatchesData(playedMatches || []);
+      const matchIds = (myMatches || []).map((m) => m.match_id).filter(Boolean);
+      const userTeamMap = {};
+      (myMatches || []).forEach((m) => {
+        userTeamMap[m.match_id] = m.team;
+      });
+
+      if (matchIds.length > 0) {
+        const { data: allMatches } = await supabase
+          .from("padel_matches")
+          .select(`
+            id, match_type, scheduled_at, status, category_restriction,
+            gender_restriction, is_competitive, price_per_player, winner_team, score_text,
+            club:padel_clubs ( name, city, address ),
+            court:padel_courts ( name ),
+            players:padel_match_players ( 
+              id, user_id, team,
+              profile:profiles ( id, nombre, avatar_url ),
+              padel_profile:padel_profiles!padel_match_players_user_id_fkey ( rating )
+            )
+          `)
+          .in("id", matchIds)
+          .order("scheduled_at", { ascending: false });
+
+        const proximos = [];
+        const jugados = [];
+
+        (allMatches || []).forEach((m) => {
+          const miEquipo = userTeamMap[m.id];
+          const esGanador = m.status === "jugado" && m.winner_team === miEquipo;
+
+          const matchFormatted = {
+            ...m,
+            miEquipo,
+            esGanador,
+          };
+
+          if (m.status === "programado") {
+            proximos.push(matchFormatted);
+          } else if (m.status === "jugado") {
+            jugados.push(matchFormatted);
+          }
+        });
+
+        setProximosPartidos(proximos);
+        setPartidosJugados(jugados);
+      }
     } catch (err) {
       console.error(err);
       setErrorMsg("Error cargando el perfil.");
@@ -489,13 +552,12 @@ export default function PadelPerfilPage() {
   }
 
   const estadisticas = useMemo(() => {
-    const list = (matchesData || []).filter((r) => r.match?.status === "jugado");
-    const partidos = list.length;
-    const victorias = list.filter((r) => r.match?.winner_team === r.team).length;
+    const partidos = partidosJugados.length;
+    const victorias = partidosJugados.filter((m) => m.esGanador).length;
     const derrotas = Math.max(partidos - victorias, 0);
     const pct = partidos > 0 ? Math.round((victorias / partidos) * 100) : 0;
     return { partidos, victorias, derrotas, porcentajeVictorias: pct };
-  }, [matchesData]);
+  }, [partidosJugados]);
 
   if (loading) {
     return (
@@ -528,6 +590,10 @@ export default function PadelPerfilPage() {
     Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2)
   );
   const catResult = categoriaDesdeRating(ratingConAjuste);
+
+  // Historial Visible (Paginado de 3 en 3)
+  const jugadosVisibles = partidosJugados.slice(0, limiteHistorial);
+  const hayMasHistorial = partidosJugados.length > limiteHistorial;
 
   return (
     <div className="min-h-screen bg-gray-50/50 px-4 py-6 md:px-8">
@@ -587,7 +653,7 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* NOMBRE + CATEGORÍA + 🏆 INSIGNIA DE RANKING EN LA CARTA */}
+              {/* NOMBRE + CATEGORÍA + INSIGNIA DE RANKING */}
               <div className="z-10 w-full flex flex-col items-center">
                 <h2 className="text-2xl md:text-3xl font-black tracking-tight text-white">{nombreCompleto}</h2>
                 
@@ -596,7 +662,6 @@ export default function PadelPerfilPage() {
                     🎾 {catOficialLabel}
                   </span>
 
-                  {/* 🔥 INSIGNIA DE RANKING EMBEBIDA DE FORMA SUPER LIMPIA */}
                   {(posicionCiudad || posicionGlobal) && (
                     <div className="flex items-center gap-2 mt-1 bg-white/10 backdrop-blur-md border border-white/10 px-3.5 py-1 rounded-full text-[11px] font-black shadow-sm">
                       {posicionCiudad && <span className="text-cyan-300">📍 #{posicionCiudad} {baseProfile?.ciudad || "Local"}</span>}
@@ -607,7 +672,7 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* BARRA DE RATING Y NIVEL PLAYTOMIC */}
+              {/* BARRA DE RATING Y NIVEL */}
               <div className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 md:p-5 my-4 z-10 text-left">
                 <div className="flex justify-between items-center mb-2 font-bold">
                   <span className="text-gray-300 text-xs md:text-sm">
@@ -745,10 +810,10 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
             ) : (
-              /* MODO VISUALIZACIÓN PRINCIPAL */
+              /* MODO VISUALIZACIÓN PRINCIPAL DE TABLEROS */
               <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
                 
-                {/* ENCABEZADO CON BOTÓN DE RANKING SUTIL */}
+                {/* ENCABEZADO CON BOTÓN DE RANKING */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <h1 className="text-2xl font-black text-slate-900">{nombreCompleto}</h1>
@@ -798,10 +863,8 @@ export default function PadelPerfilPage() {
                   )}
                 </div>
 
-                {/* GRILLA ESTADÍSTICA LIMPIA (CON TARJETAS DE RANKING INTEGRADAS) */}
+                {/* GRILLA ESTADÍSTICA */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                  
-                  {/* Puesto Ciudad */}
                   <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 truncate">
                       PUESTO EN {baseProfile?.ciudad?.toUpperCase() || "CIUDAD"}
@@ -811,7 +874,6 @@ export default function PadelPerfilPage() {
                     </p>
                   </div>
 
-                  {/* Puesto Global */}
                   <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PUESTO GLOBAL</p>
                     <p className="text-2xl font-black text-emerald-600 mt-2">
@@ -819,19 +881,16 @@ export default function PadelPerfilPage() {
                     </p>
                   </div>
 
-                  {/* Rating */}
                   <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">RATING</p>
                     <p className="text-2xl font-black text-cyan-600 mt-2">{ratingActual.toFixed(2)}</p>
                   </div>
 
-                  {/* Partidos Jugados */}
                   <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PARTIDOS JUGADOS</p>
                     <p className="text-2xl font-black text-slate-900 mt-2">{estadisticas.partidos}</p>
                   </div>
 
-                  {/* Victorias */}
                   <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">VICTORIAS TOTALES</p>
                     <p className="text-2xl font-black text-slate-900 mt-2 flex items-center gap-1">
@@ -839,12 +898,10 @@ export default function PadelPerfilPage() {
                     </p>
                   </div>
 
-                  {/* % Victorias */}
                   <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">% VICTORIAS</p>
                     <p className="text-2xl font-black text-emerald-600 mt-2">{estadisticas.porcentajeVictorias}%</p>
                   </div>
-
                 </div>
 
                 {/* RÉCORD DE CARRERA */}
@@ -866,7 +923,134 @@ export default function PadelPerfilPage() {
               </div>
             )}
 
-            <PadelRecentActivity userId={user?.id} />
+            {/* ==================================================== */}
+            {/* 🎾 1. SECCIÓN: PRÓXIMOS PARTIDOS                      */}
+            {/* ==================================================== */}
+            <div className="space-y-4 pt-2">
+              <div className="flex items-center justify-between px-1">
+                <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                  <span>📅</span>
+                  <span>Próximos Partidos</span>
+                </h2>
+                <span className="text-xs font-bold text-slate-400 bg-slate-200/60 px-3 py-1 rounded-full">
+                  {proximosPartidos.length} agendados
+                </span>
+              </div>
+
+              {proximosPartidos.length === 0 ? (
+                /* ESTADO VACÍO CON BOTÓN DE BÚSQUEDA A CLUBES */
+                <div className="bg-white rounded-3xl p-8 sm:p-10 text-center border border-dashed border-slate-200 shadow-xs space-y-3">
+                  <span className="text-4xl block">🎾</span>
+                  <h3 className="text-base font-black text-slate-800">No tienes próximos partidos programados</h3>
+                  <p className="text-xs font-semibold text-slate-400 max-w-sm mx-auto">
+                    Reserva una pista en tu club favorito o únete a un partido abierto de la comunidad.
+                  </p>
+                  <Link
+                    href="/padel/clubes"
+                    className="inline-flex items-center gap-2 px-5 py-3 bg-[#0B1120] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-md active:scale-95"
+                  >
+                    <span>🔍 Buscar Pistas y Clubes</span>
+                    <span>→</span>
+                  </Link>
+                </div>
+              ) : (
+                /* GRILLA DE TARJETAS DE PRÓXIMOS PARTIDOS */
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {proximosPartidos.map((match) => (
+                    <PartidoPadelCard
+                      key={match.id}
+                      match={match}
+                      currentUser={user}
+                      userCreditos={userCreditos}
+                      onUpdate={cargarPerfil}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ==================================================== */}
+            {/* 🏆 2. SECCIÓN: ACTIVIDAD RECIENTE (PASTILLAS OSCURAS) */}
+            {/* ==================================================== */}
+            <div className="space-y-4 pt-4">
+              <div className="flex items-center justify-between px-1">
+                <div>
+                  <h2 className="text-xl font-black text-slate-900">Actividad Reciente</h2>
+                  <p className="text-xs text-slate-400 font-bold">Tus últimos partidos jugados y resultados oficiales</p>
+                </div>
+              </div>
+
+              {partidosJugados.length === 0 ? (
+                <div className="bg-white rounded-3xl p-8 text-center border border-dashed border-slate-200">
+                  <p className="text-xs font-bold text-slate-500">Aún no has jugado tu primer partido oficial de pádel.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {jugadosVisibles.map((match) => {
+                    const esVictoria = match.esGanador;
+
+                    return (
+                      <div
+                        key={match.id}
+                        className={`bg-[#0B1120] text-white rounded-3xl p-4 sm:p-5 shadow-lg border border-slate-800 transition-all flex items-center justify-between gap-4 border-l-[6px] ${
+                          esVictoria ? "border-l-[#00FF9D]" : "border-l-rose-500"
+                        }`}
+                      >
+                        {/* DETALLES IZQUIERDA */}
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                              FINALIZADO
+                            </span>
+                            <span
+                              className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                esVictoria
+                                  ? "bg-[#00FF9D]/20 text-[#00FF9D] border border-[#00FF9D]/30"
+                                  : "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                              }`}
+                            >
+                              {esVictoria ? "VICTORIA 🏆" : "DERROTA"}
+                            </span>
+                          </div>
+
+                          <h3 className="text-base sm:text-lg font-black tracking-tight text-white truncate">
+                            {match.club?.name || "Club de Pádel"}
+                          </h3>
+
+                          <p className="text-xs font-semibold text-slate-400 flex items-center gap-1.5 truncate">
+                            <span>📍 {match.court?.name || "Pista Central"}</span>
+                            <span>•</span>
+                            <span>{formatFechaCorta(match.scheduled_at)}</span>
+                          </p>
+                        </div>
+
+                        {/* BARRITA DE MARCADOR DERECHA */}
+                        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl px-4 py-2.5 text-center shrink-0 shadow-inner">
+                          <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">
+                            Marcador
+                          </span>
+                          <span className="text-base sm:text-lg font-black text-white tracking-wider block">
+                            {match.score_text || "6-4, 6-3"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* BOTÓN CARGAR ANTERIORES (DE 3 EN 3) */}
+                  {hayMasHistorial && (
+                    <div className="pt-2 text-center">
+                      <button
+                        onClick={() => setLimiteHistorial((prev) => prev + 3)}
+                        className="px-6 py-3 bg-white border border-slate-200 hover:bg-slate-100 text-slate-800 font-black text-xs uppercase tracking-wider rounded-2xl shadow-sm transition-all active:scale-95"
+                      >
+                        👇 Cargar anteriores ({partidosJugados.length - limiteHistorial} restantes)
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
           </div>
 
