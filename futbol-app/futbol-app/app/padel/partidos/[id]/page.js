@@ -17,19 +17,18 @@ function formatFechaLarga(fechaStr) {
   });
 }
 
-// DETERMINAR CATEGORÍA OFICIAL SEGÚN EL RATING NUMÉRICO
 function categoriaDesdeRating(r) {
   const num = Number(r) || 1.0;
   if (num < 2.0) return "rookies";
   if (num < 3.0) return "7ma";
   if (num < 4.0) return "6ta";
-  if (num < 4.5) return "5ta";
-  if (num < 5.0) return "4ta";
-  if (num < 6.0) return "3era";
+  if (num < 4.8) return "5ta";
+  if (num < 5.5) return "4ta";
+  if (num < 6.2) return "3era";
+  if (num < 7.0) return "2da";
   return "open";
 }
 
-// VALIDACIÓN REGLAMENTO OFICIAL DE PÁDEL
 function validarSet(gA, gB, tbA = 0, tbB = 0) {
   const a = parseInt(gA, 10);
   const b = parseInt(gB, 10);
@@ -63,7 +62,7 @@ function validarSet(gA, gB, tbA = 0, tbB = 0) {
   return { valido: false, msg: "Set inválido. Ejemplos válidos: 6-4, 7-5 o 7-6" };
 }
 
-// 🧠 ALGORITMO POTENCIADO DE NIVELACIÓN
+// 🧠 ALGORITMO MODO "MARATÓN": CONSTANCIA A LARGO PLAZO
 function calcularAjusteRatingDinámico({
   ratingJugador,
   ratingCompanero,
@@ -76,29 +75,48 @@ function calcularAjusteRatingDinámico({
   const miParejaRating = (ratingJugador + ratingCompanero) / 2;
   const rivalesRating = (ratingRival1 + ratingRival2) / 2;
 
+  // 1. Ampliamos el divisor para que las probabilidades no sean extremas
   const diffNivel = rivalesRating - miParejaRating;
-  const expectativa = 1 / (1 + Math.pow(10, diffNivel / 2.0));
+  const probGanarMiPareja = 1 / (1 + Math.pow(10, diffNivel / 1.5)); 
 
-  let factorDominancia = 1.0;
-  if (diffGamesTotal >= 10) factorDominancia = 1.85;
-  else if (diffGamesTotal >= 7) factorDominancia = 1.45;
-  else if (diffGamesTotal >= 4) factorDominancia = 1.15;
-  else if (diffGamesTotal <= 2) factorDominancia = 0.80;
-
-  let kFactor = 0.35;
-  if (fiabilidadActual < 35) {
-    kFactor = 0.70;
-  } else if (fiabilidadActual < 70) {
-    kFactor = 0.45;
+  // 2. K-Factor Base (REDUCIDO DRÁSTICAMENTE PARA EXIGIR CONSTANCIA)
+  let kFactor = 0.08; // Ganancia promedio normal de apenas ~0.04
+  
+  if (fiabilidadActual < 30) {
+    kFactor = 0.25; // Calibración inicial (reducida del antiguo 0.70)
+  } else if (fiabilidadActual < 60) {
+    kFactor = 0.15; // Calibración media (reducida del antiguo 0.45)
   }
 
+  // 3. Modificador de Palizas (Nerfeado para no regalar puntos)
+  let factorDominancia = 1.0;
+  if (diffGamesTotal >= 10) {
+    factorDominancia = 1.25; // Bono máximo del 25% por victoria aplastante
+  } else if (diffGamesTotal >= 6) {
+    factorDominancia = 1.10; // Bono leve del 10%
+  } else if (diffGamesTotal <= 2) {
+    factorDominancia = 0.85; // Descuento del 15% por partido sufrido
+  }
+
+  // Evitar "farmear" puntos ganando por paliza a novatos
+  if (esGanador && probGanarMiPareja > 0.75) {
+    factorDominancia = 1.0; 
+  }
+
+  // 4. Cálculo del cambio neto de rating
   const resultadoReal = esGanador ? 1 : 0;
-  let cambio = kFactor * (resultadoReal - expectativa) * factorDominancia;
+  let cambioNeto = kFactor * (resultadoReal - probGanarMiPareja) * factorDominancia;
 
-  if (esGanador) cambio = Math.max(0.05, cambio);
-  else cambio = Math.min(-0.05, cambio);
+  // 5. LÍMITES ESTRICTOS (HARD-CAPS)
+  if (esGanador) {
+    cambioNeto = Math.max(0.01, cambioNeto); // Nunca menos de +0.01
+    cambioNeto = Math.min(0.18, cambioNeto); // NUNCA subir más de +0.18 en un solo partido
+  } else {
+    cambioNeto = Math.min(-0.01, cambioNeto); // Nunca menos de -0.01
+    cambioNeto = Math.max(-0.18, cambioNeto); // NUNCA bajar más de -0.18 en un partido
+  }
 
-  return parseFloat(cambio.toFixed(2));
+  return parseFloat(cambioNeto.toFixed(2));
 }
 
 export default function PartidoDetallePage() {
@@ -361,8 +379,10 @@ export default function PartidoDetallePage() {
           });
 
           const nuevoRating = Math.max(1.0, parseFloat((ratingSelf + delta).toFixed(2)));
-          const nuevaCat = categoriaDesdeRating(nuevoRating); // 🔥 RECALCULA CATEGORÍA OFICIAL (ASCENSO/DESCENSO)
-          const nuevaFiabilidad = Math.min(100, fiabilidadActual + 5);
+          const nuevaCat = categoriaDesdeRating(nuevoRating);
+          
+          // 🔥 Fiabilidad crece solo +3% (Tarda más en calibrarse totalmente)
+          const nuevaFiabilidad = Math.min(100, fiabilidadActual + 3); 
           const nVics = (player.padel_profile?.victorias || 0) + (esGanador ? 1 : 0);
           const nDerr = (player.padel_profile?.derrotas || 0) + (esGanador ? 0 : 1);
 
@@ -370,7 +390,7 @@ export default function PartidoDetallePage() {
             .from("padel_profiles")
             .update({
               rating: nuevoRating,
-              categoria_oficial: nuevaCat, // 💾 GUARDA LA NUEVA CATEGORÍA EN BASE DE DATOS
+              categoria_oficial: nuevaCat,
               fiabilidad: nuevaFiabilidad,
               victorias: nVics,
               derrotas: nDerr,
@@ -386,7 +406,7 @@ export default function PartidoDetallePage() {
       }
 
       await cargarDetallePartido();
-      mostrarNotificacion("exito", "¡Partido Finalizado!", `Marcador aprobado. Los niveles y categorías han sido actualizados.`);
+      mostrarNotificacion("exito", "¡Partido Finalizado!", `Marcador aprobado. Los niveles han sido ajustados según la escala exigente de constancia.`);
     } catch (err) {
       console.error(err);
       mostrarNotificacion("error", "Error de Procesamiento", "No se pudo procesar la respuesta.");
