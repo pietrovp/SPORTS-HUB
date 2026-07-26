@@ -17,7 +17,6 @@ function formatFechaLarga(fechaStr) {
   });
 }
 
-// VALIDACIÓN REGLAMENTO OFICIAL DE PÁDEL
 function validarSet(gA, gB, tbA = 0, tbB = 0) {
   const a = parseInt(gA, 10);
   const b = parseInt(gB, 10);
@@ -51,7 +50,6 @@ function validarSet(gA, gB, tbA = 0, tbB = 0) {
   return { valido: false, msg: "Set inválido. Ejemplos válidos: 6-4, 7-5 o 7-6" };
 }
 
-// 🧠 ALGORITMO INTELIGENTE DE NIVELACIÓN (ELO + DOMINANCIA + FIABILIDAD)
 function calcularAjusteRatingDinámico({
   ratingJugador,
   ratingCompanero,
@@ -64,30 +62,27 @@ function calcularAjusteRatingDinámico({
   const miParejaRating = (ratingJugador + ratingCompanero) / 2;
   const rivalesRating = (ratingRival1 + ratingRival2) / 2;
 
-  // 1. Expectativa de victoria según nivel del rival
   const diffNivel = rivalesRating - miParejaRating;
   const expectativa = 1 / (1 + Math.pow(10, diffNivel / 2.0));
 
-  // 2. Factor de Dominancia de la paliza
   let factorDominancia = 1.0;
-  if (diffGamesTotal >= 8) factorDominancia = 1.45;      // Paliza contundente
-  else if (diffGamesTotal >= 5) factorDominancia = 1.2;  // Victoria/Derrota clara
-  else if (diffGamesTotal <= 2) factorDominancia = 0.85; // Partido apretado
+  if (diffGamesTotal >= 10) factorDominancia = 1.85;
+  else if (diffGamesTotal >= 7) factorDominancia = 1.45;
+  else if (diffGamesTotal >= 4) factorDominancia = 1.15;
+  else if (diffGamesTotal <= 2) factorDominancia = 0.80;
 
-  // 3. Volatilidad / Sensibilidad por Fiabilidad (Calibración)
-  let kFactor = 0.22;
+  let kFactor = 0.35;
   if (fiabilidadActual < 35) {
-    kFactor = 0.45; // Calibración súper rápida para corregir autoevaluación falsa
+    kFactor = 0.70;
   } else if (fiabilidadActual < 70) {
-    kFactor = 0.30;
+    kFactor = 0.45;
   }
 
-  // 4. Cálculo de cambio
   const resultadoReal = esGanador ? 1 : 0;
   let cambio = kFactor * (resultadoReal - expectativa) * factorDominancia;
 
-  if (esGanador) cambio = Math.max(0.04, cambio);
-  else cambio = Math.min(-0.04, cambio);
+  if (esGanador) cambio = Math.max(0.05, cambio);
+  else cambio = Math.min(-0.05, cambio);
 
   return parseFloat(cambio.toFixed(2));
 }
@@ -101,10 +96,8 @@ export default function PartidoDetallePage() {
   const [match, setMatch] = useState(null);
   const [user, setUser] = useState(null);
 
-  // NOTIFICACIÓN POP-UP
   const [notificacion, setNotificacion] = useState(null);
 
-  // MODAL RESULTADOS
   const [modalResultadoOpen, setModalResultadoOpen] = useState(false);
   const [set1A, setSet1A] = useState(6);
   const [set1B, setSet1B] = useState(4);
@@ -204,7 +197,6 @@ export default function PartidoDetallePage() {
     }
   }
 
-  // 1. PROPONER RESULTADO
   async function enviarPropuestaResultado(e) {
     e.preventDefault();
     if (!match || !user) return;
@@ -230,7 +222,6 @@ export default function PartidoDetallePage() {
 
     const ganadorFinal = setsGanadosA > setsGanadosB ? "A" : "B";
 
-    // Calcular suma total de juegos para medir paliza
     const totalJuegosA = Number(set1A) + Number(set2A) + (val3 ? Number(set3A) : 0);
     const totalJuegosB = Number(set1B) + Number(set2B) + (val3 ? Number(set3B) : 0);
     const diffGamesTotal = Math.abs(totalJuegosA - totalJuegosB);
@@ -278,7 +269,6 @@ export default function PartidoDetallePage() {
     }
   }
 
-  // 2. APROBAR O IMPUGNAR RESULTADO
   async function responderPropuesta(aprobar) {
     if (!match || !user) return;
 
@@ -301,7 +291,6 @@ export default function PartidoDetallePage() {
         return;
       }
 
-      // APROBAR Y EJECUTAR CÁLCULO DINÁMICO
       const propuesta = match.score_proposed;
       const ganador = propuesta.winner;
       const diffGamesTotal = propuesta.diffGamesTotal || 4;
@@ -318,7 +307,6 @@ export default function PartidoDetallePage() {
 
       if (matchErr) throw matchErr;
 
-      // 🔥 CÁLCULO DINÁMICO DE RATING Y FIABILIDAD PARA LOS 4 JUGADORES
       if (match.is_competitive) {
         const parejaA = match.players?.filter((p) => p.team === "A") || [];
         const parejaB = match.players?.filter((p) => p.team === "B") || [];
@@ -333,13 +321,21 @@ export default function PartidoDetallePage() {
           const esGanador = player.team === ganador;
 
           const ratingSelf = Number(player.padel_profile?.rating) || 1.50;
-          const ratingPartner = esParejaA ? (player.id === parejaA[0]?.id ? rA2 : rA1) : (player.id === parejaB[0]?.id ? rB2 : rB1);
+
+          let ratingPartner = 1.50;
+          if (esParejaA) {
+            const comp = parejaA.find((p) => p.user_id !== player.user_id);
+            ratingPartner = Number(comp?.padel_profile?.rating) || rA1;
+          } else {
+            const comp = parejaB.find((p) => p.user_id !== player.user_id);
+            ratingPartner = Number(comp?.padel_profile?.rating) || rB1;
+          }
+
           const ratingRiv1 = esParejaA ? rB1 : rA1;
           const ratingRiv2 = esParejaA ? rB2 : rA2;
 
           const fiabilidadActual = Number(player.padel_profile?.fiabilidad) || 20;
 
-          // Cálculo del cambio dinámico
           const delta = calcularAjusteRatingDinámico({
             ratingJugador: ratingSelf,
             ratingCompanero: ratingPartner,
@@ -351,7 +347,7 @@ export default function PartidoDetallePage() {
           });
 
           const nuevoRating = Math.max(1.0, parseFloat((ratingSelf + delta).toFixed(2)));
-          const nuevaFiabilidad = Math.min(100, fiabilidadActual + 5); // +5% por partido
+          const nuevaFiabilidad = Math.min(100, fiabilidadActual + 5);
           const nVics = (player.padel_profile?.victorias || 0) + (esGanador ? 1 : 0);
           const nDerr = (player.padel_profile?.derrotas || 0) + (esGanador ? 0 : 1);
 
@@ -364,11 +360,18 @@ export default function PartidoDetallePage() {
               derrotas: nDerr,
             })
             .eq("cuenta_id", player.user_id);
+
+          // 💾 GUARDAR EL DELTA DE RATING EN EL REGISTRO DEL JUGADOR
+          await supabase
+            .from("padel_match_players")
+            .update({ rating_change: delta })
+            .eq("match_id", match.id)
+            .eq("user_id", player.user_id);
         }
       }
 
       await cargarDetallePartido();
-      mostrarNotificacion("exito", "¡Partido Finalizado!", `El resultado fue aprobado. Se han recalculado los niveles según dominancia y fiabilidad.`);
+      mostrarNotificacion("exito", "¡Partido Finalizado!", `Marcador aprobado. Los niveles han sido ajustados según la diferencia de juegos.`);
     } catch (err) {
       console.error(err);
       mostrarNotificacion("error", "Error de Procesamiento", "No se pudo procesar la respuesta.");
@@ -418,7 +421,6 @@ export default function PartidoDetallePage() {
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 relative">
       <div className="mx-auto max-w-4xl space-y-6">
 
-        {/* CABECERA */}
         <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-3">
           <Link href="/padel/partidos" className="text-xs font-black uppercase text-blue-600 hover:underline block">
             ← Volver a Partidos
@@ -458,7 +460,6 @@ export default function PartidoDetallePage() {
           )}
         </div>
 
-        {/* ALERTA DE APROBACIÓN PENDIENTE */}
         {match.status !== "jugado" && match.score_status === "propuesto" && (
           <div className="bg-amber-50 border-2 border-amber-300 p-5 rounded-3xl shadow-sm space-y-3">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-amber-200/80 pb-3">
@@ -505,14 +506,12 @@ export default function PartidoDetallePage() {
           </div>
         )}
 
-        {/* ALINEACIÓN DE PISTA */}
         <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
           <h2 className="text-center text-xs font-black uppercase tracking-widest text-slate-400">
             Alineación de Pista
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
-            {/* PAREJA A */}
             <div className={`p-5 rounded-3xl border-2 space-y-4 ${
               match.winner_team === "A" ? "border-amber-400 bg-amber-50/30" : "border-slate-100 bg-slate-50/50"
             }`}>
@@ -553,7 +552,6 @@ export default function PartidoDetallePage() {
               </div>
             </div>
 
-            {/* PAREJA B */}
             <div className={`p-5 rounded-3xl border-2 space-y-4 ${
               match.winner_team === "B" ? "border-amber-400 bg-amber-50/30" : "border-slate-100 bg-slate-50/50"
             }`}>
@@ -595,7 +593,6 @@ export default function PartidoDetallePage() {
             </div>
           </div>
 
-          {/* BOTÓN CARGAR RESULTADO */}
           {match.status !== "jugado" && match.score_status !== "propuesto" && (
             <div className="pt-4 border-t border-slate-100 text-center">
               <button
@@ -617,11 +614,9 @@ export default function PartidoDetallePage() {
 
       </div>
 
-      {/* MODAL CARGA MARCADOR */}
       {modalResultadoOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
           <div className="bg-white rounded-[2.5rem] max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-slate-100 space-y-5 my-6">
-            
             <div className="flex justify-between items-start border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-xl font-black text-slate-900">Registrar Marcador</h3>
@@ -633,8 +628,6 @@ export default function PartidoDetallePage() {
             </div>
 
             <form onSubmit={enviarPropuestaResultado} className="space-y-5 text-xs font-bold">
-              
-              {/* SET 1 */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="font-black text-slate-900 uppercase">Set 1</span>
@@ -672,7 +665,6 @@ export default function PartidoDetallePage() {
                 )}
               </div>
 
-              {/* SET 2 */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="font-black text-slate-900 uppercase">Set 2</span>
@@ -710,7 +702,6 @@ export default function PartidoDetallePage() {
                 )}
               </div>
 
-              {/* SET 3 (DESEMPATE) */}
               <div className="flex items-center justify-between bg-blue-50/60 p-3 rounded-2xl border border-blue-100">
                 <span className="text-xs font-bold text-blue-900">¿Jugaron 3er Set (Desempate)?</span>
                 <button
@@ -773,7 +764,6 @@ export default function PartidoDetallePage() {
         </div>
       )}
 
-      {/* POP-UP NOTIFICACIÓN */}
       {notificacion && (
         <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white rounded-[2.5rem] max-w-sm w-full p-6 text-center space-y-4 shadow-2xl">

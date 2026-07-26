@@ -214,6 +214,113 @@ function formatFechaCorta(fechaStr) {
   });
 }
 
+// 📈 TRACKER GRÁFICO DE NIVEL
+function RatingTrackerChart({ partidosJugados, currentRating }) {
+  const historialPuntos = useMemo(() => {
+    if (!partidosJugados || partidosJugados.length === 0) {
+      return [{ matchNum: 0, rating: currentRating, change: 0, label: "Inicio" }];
+    }
+
+    const cronologicos = [...partidosJugados].reverse();
+    const totalDeltas = cronologicos.reduce((sum, m) => sum + (Number(m.rating_change) || 0), 0);
+    let ratingInicial = currentRating - totalDeltas;
+
+    const puntos = [{ matchNum: 0, rating: ratingInicial, change: 0, label: "Inicio" }];
+
+    let corriendo = ratingInicial;
+    cronologicos.forEach((m, idx) => {
+      const delta = Number(m.rating_change) || 0;
+      corriendo += delta;
+      puntos.push({
+        matchNum: idx + 1,
+        rating: parseFloat(corriendo.toFixed(2)),
+        change: delta,
+        label: `Partido ${idx + 1}`,
+      });
+    });
+
+    return puntos;
+  }, [partidosJugados, currentRating]);
+
+  if (historialPuntos.length <= 1) {
+    return (
+      <div className="bg-[#0B1120] text-white p-5 rounded-3xl border border-slate-800 text-center space-y-2">
+        <span className="text-xl block">📊</span>
+        <h4 className="text-xs font-black uppercase tracking-widest text-[#00FF9D]">Gráfico de Nivel en Calibración</h4>
+        <p className="text-[11px] text-slate-400 font-medium max-w-xs mx-auto">
+          Juega partidos competitivos para visualizar tu curva de nivel en tiempo real.
+        </p>
+      </div>
+    );
+  }
+
+  const width = 500;
+  const height = 130;
+  const padding = 25;
+
+  const ratingsVals = historialPuntos.map((p) => p.rating);
+  const minR = Math.min(...ratingsVals) - 0.2;
+  const maxR = Math.max(...ratingsVals) + 0.2;
+
+  const pointsFormatted = historialPuntos.map((pt, i) => {
+    const x = padding + (i / (historialPuntos.length - 1)) * (width - padding * 2);
+    const y = height - padding - ((pt.rating - minR) / (maxR - minR || 1)) * (height - padding * 2);
+    return { ...pt, x, y };
+  });
+
+  const pathD = pointsFormatted.reduce((acc, pt, i) => {
+    return i === 0 ? `M ${pt.x},${pt.y}` : `${acc} L ${pt.x},${pt.y}`;
+  }, "");
+
+  const areaD = `${pathD} L ${pointsFormatted[pointsFormatted.length - 1].x},${height - 10} L ${pointsFormatted[0].x},${height - 10} Z`;
+  const ultimoDelta = historialPuntos[historialPuntos.length - 1]?.change || 0;
+
+  return (
+    <div className="bg-[#0B1120] text-white p-5 rounded-[2rem] shadow-xl border border-slate-800 space-y-3">
+      <div className="flex justify-between items-center border-b border-slate-800 pb-2.5">
+        <div>
+          <span className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] block">
+            Tracker de Rendimiento
+          </span>
+          <h3 className="text-sm font-black text-white flex items-center gap-2">
+            <span>Evolución de Rating</span>
+            <span className="text-[11px] font-bold text-slate-400">({historialPuntos.length - 1} partidos)</span>
+          </h3>
+        </div>
+
+        <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-full border ${
+          ultimoDelta >= 0 ? "bg-[#00FF9D]/20 text-[#00FF9D] border-[#00FF9D]/40" : "bg-rose-500/20 text-rose-300 border-rose-500/40"
+        }`}>
+          {ultimoDelta >= 0 ? `+${ultimoDelta.toFixed(2)} pts` : `${ultimoDelta.toFixed(2)} pts`}
+        </span>
+      </div>
+
+      <div className="relative w-full overflow-x-auto pt-1">
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto overflow-visible">
+          <defs>
+            <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#00FF9D" stopOpacity="0.3" />
+              <stop offset="100%" stopColor="#00FF9D" stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+
+          <path d={areaD} fill="url(#chartGradient)" />
+          <path d={pathD} fill="none" stroke="#00FF9D" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+
+          {pointsFormatted.map((pt, idx) => (
+            <g key={idx}>
+              <circle cx={pt.x} cy={pt.y} r="4.5" className="fill-[#0B1120] stroke-[#00FF9D] stroke-[2.5]" />
+              <text x={pt.x} y={pt.y - 10} textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="900">
+                {pt.rating.toFixed(2)}
+              </text>
+            </g>
+          ))}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export default function PadelPerfilPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -222,22 +329,18 @@ export default function PadelPerfilPage() {
   const [padelProfile, setPadelProfile] = useState(null);
   const [userCreditos, setUserCreditos] = useState(0);
 
-  // LISTAS DE PARTIDOS (PRÓXIMOS Y JUGADOS)
   const [proximosPartidos, setProximosPartidos] = useState([]);
   const [partidosJugados, setPartidosJugados] = useState([]);
-  const [limiteHistorial, setLimiteHistorial] = useState(3); // Paginación de 3 en 3
+  const [limiteHistorial, setLimiteHistorial] = useState(3);
 
-  // Posiciones de Ranking
   const [posicionGlobal, setPosicionGlobal] = useState(null);
   const [posicionCiudad, setPosicionCiudad] = useState(null);
 
-  // Modales
   const [editandoPerfil, setEditandoPerfil] = useState(false);
   const [modalSolicitudOpen, setModalSolicitudOpen] = useState(false);
   const [modalInfoOpen, setModalInfoOpen] = useState(false);
   const [mostrarNotaAdmin, setMostrarNotaAdmin] = useState(true);
 
-  // ONBOARDING
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [onboardingResp, setOnboardingResp] = useState({});
@@ -247,7 +350,6 @@ export default function PadelPerfilPage() {
   const [mensaje, setMensaje] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Formularios
   const [formPerfil, setFormPerfil] = useState(DEFAULT_PROFILE);
   const [catSolicitada, setCatSolicitada] = useState("rookies");
   const [motivoSolicitud, setMotivoSolicitud] = useState("");
@@ -337,21 +439,34 @@ export default function PadelPerfilPage() {
         }
       }
 
-      // 🔥 CARGAR PARTIDOS EN 2 PASOS SEGUROS SIN ERRORES DE JOIN
-      const { data: myMatches } = await supabase
+      // 🔍 BÚSQUEDA BLINDADA DE PARTIDOS (SIN SENSIBILIDAD A COLUMNAS FALTANTES)
+      let myMatches = [];
+      const { data: mData, error: mErr } = await supabase
         .from("padel_match_players")
-        .select("match_id, team")
+        .select("match_id, team, rating_change")
         .eq("user_id", authUser.id);
 
-      const matchIds = (myMatches || []).map((m) => m.match_id).filter(Boolean);
+      if (mErr) {
+        const { data: mDataBasic } = await supabase
+          .from("padel_match_players")
+          .select("match_id, team")
+          .eq("user_id", authUser.id);
+        myMatches = mDataBasic || [];
+      } else {
+        myMatches = mData || [];
+      }
+
+      const matchIds = myMatches.map((m) => m.match_id).filter(Boolean);
       const userTeamMap = {};
-      (myMatches || []).forEach((m) => {
+      const userChangeMap = {};
+
+      myMatches.forEach((m) => {
         userTeamMap[m.match_id] = m.team;
+        userChangeMap[m.match_id] = m.rating_change || 0;
       });
 
       if (matchIds.length > 0) {
-        // 1. Cargar datos básicos de los partidos
-        const { data: allMatches, error: matchesErr } = await supabase
+        const { data: allMatches } = await supabase
           .from("padel_matches")
           .select(`
             id, match_type, scheduled_at, status, category_restriction,
@@ -362,11 +477,6 @@ export default function PadelPerfilPage() {
           .in("id", matchIds)
           .order("scheduled_at", { ascending: false });
 
-        if (matchesErr) {
-          console.error("Error al consultar partidos:", matchesErr);
-        }
-
-        // 2. Cargar todos los jugadores participantes para las tarjetas
         const { data: allPlayersData } = await supabase
           .from("padel_match_players")
           .select("id, match_id, user_id, team")
@@ -383,21 +493,16 @@ export default function PadelPerfilPage() {
             .select("id, nombre, avatar_url")
             .in("id", allUserIds);
 
-          (profs || []).forEach((p) => {
-            profilesMap[p.id] = p;
-          });
+          (profs || []).forEach((p) => { profilesMap[p.id] = p; });
 
           const { data: padelProfs } = await supabase
             .from("padel_profiles")
             .select("cuenta_id, rating")
             .in("cuenta_id", allUserIds);
 
-          (padelProfs || []).forEach((pp) => {
-            padelProfilesMap[pp.cuenta_id] = pp;
-          });
+          (padelProfs || []).forEach((pp) => { padelProfilesMap[pp.cuenta_id] = pp; });
         }
 
-        // Mapear jugadores a cada partido
         const playersByMatch = {};
         (allPlayersData || []).forEach((p) => {
           if (!playersByMatch[p.match_id]) playersByMatch[p.match_id] = [];
@@ -413,18 +518,21 @@ export default function PadelPerfilPage() {
 
         (allMatches || []).forEach((m) => {
           const miEquipo = userTeamMap[m.id];
-          const esGanador = m.status === "jugado" && m.winner_team === miEquipo;
+          const isJugado = m.status === "jugado" || m.status === "finalizado";
+          const esGanador = isJugado && m.winner_team === miEquipo;
+          const ratingChange = userChangeMap[m.id] || 0;
 
           const matchFormatted = {
             ...m,
             miEquipo,
             esGanador,
+            rating_change: Number(ratingChange),
             players: playersByMatch[m.id] || [],
           };
 
           if (m.status === "programado") {
             proximos.push(matchFormatted);
-          } else if (m.status === "jugado") {
+          } else if (isJugado) {
             jugados.push(matchFormatted);
           }
         });
@@ -451,14 +559,10 @@ export default function PadelPerfilPage() {
         .from("padel_profiles")
         .update({ categoria_comentario_admin: null })
         .eq("cuenta_id", user.id);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
   }
 
-  function seleccionarRespuesta(campo, value) {
-    setOnboardingResp((prev) => ({ ...prev, [campo]: value }));
-  }
+  function seleccionarRespuesta(campo, value) { setOnboardingResp((prev) => ({ ...prev, [campo]: value })); }
 
   function avanzarOnboarding() {
     const stepActual = ONBOARDING_STEPS[onboardingStep];
@@ -480,11 +584,7 @@ export default function PadelPerfilPage() {
 
     try {
       setSaving(true);
-
-      const ratingFinal = parseFloat(
-        Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2)
-      );
-
+      const ratingFinal = parseFloat(Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2));
       const catOficial = categoriaDesdeRating(ratingFinal);
       const opEdad = ONBOARDING_STEPS[6].opciones.find((o) => o.value === onboardingResp.q_edad);
       const edadNum = opEdad?.edadNum || 25;
@@ -597,14 +697,19 @@ export default function PadelPerfilPage() {
     }
   }
 
-  // CÁLCULO DE ESTADÍSTICAS REALES DESDE LOS PARTIDOS JUGADOS
+  // 📊 CÁLCULO DE ESTADÍSTICAS CON FALLBACK
   const estadisticas = useMemo(() => {
-    const partidos = partidosJugados.length;
-    const victorias = partidosJugados.filter((m) => m.esGanador).length;
-    const derrotas = Math.max(partidos - victorias, 0);
-    const pct = partidos > 0 ? Math.round((victorias / partidos) * 100) : 0;
-    return { partidos, victorias, derrotas, porcentajeVictorias: pct };
-  }, [partidosJugados]);
+    const partidosLista = partidosJugados.length;
+    const victoriasLista = partidosJugados.filter((m) => m.esGanador).length;
+    const derrotasLista = Math.max(partidosLista - victoriasLista, 0);
+
+    const vTotal = Math.max(victoriasLista, padelProfile?.victorias || 0);
+    const dTotal = Math.max(derrotasLista, padelProfile?.derrotas || 0);
+    const pTotal = Math.max(partidosLista, vTotal + dTotal);
+    const pct = pTotal > 0 ? Math.round((vTotal / pTotal) * 100) : 0;
+
+    return { partidos: pTotal, victorias: vTotal, derrotas: dTotal, porcentajeVictorias: pct };
+  }, [partidosJugados, padelProfile]);
 
   if (loading) {
     return (
@@ -633,12 +738,9 @@ export default function PadelPerfilPage() {
   const esPantallaRes = onboardingStep === ONBOARDING_STEPS.length;
   const respActual = stepActual ? onboardingResp[stepActual.campo] : null;
   const progresoBarPct = Math.round((onboardingStep / TOTAL_STEPS) * 100);
-  const ratingConAjuste = parseFloat(
-    Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2)
-  );
+  const ratingConAjuste = parseFloat(Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2));
   const catResult = categoriaDesdeRating(ratingConAjuste);
 
-  // Historial Visible (Paginado de 3 en 3)
   const jugadosVisibles = partidosJugados.slice(0, limiteHistorial);
   const hayMasHistorial = partidosJugados.length > limiteHistorial;
 
@@ -646,7 +748,6 @@ export default function PadelPerfilPage() {
     <div className="min-h-screen bg-gray-50/50 px-4 py-6 md:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
 
-        {/* NOTIFICACIÓN ÉXITO */}
         {mensaje && (
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-800 flex justify-between items-center shadow-sm">
             <span>{mensaje}</span>
@@ -654,31 +755,24 @@ export default function PadelPerfilPage() {
           </div>
         )}
 
-        {/* NOTA DEL ADMIN */}
         {padelProfile?.categoria_comentario_admin && mostrarNotaAdmin && (
           <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-xs font-bold text-blue-900 shadow-sm flex items-start justify-between gap-3">
             <div className="flex flex-col gap-1">
               <span className="text-[10px] uppercase text-blue-500 font-black tracking-widest">Nota de la Administración:</span>
               <p className="font-semibold text-sm">"{padelProfile.categoria_comentario_admin}"</p>
             </div>
-            <button
-              onClick={borrarNotaAdmin}
-              className="text-blue-500 hover:text-blue-800 text-sm font-black p-1 hover:bg-blue-100 rounded-lg transition-colors shrink-0"
-            >
-              ✕
-            </button>
+            <button onClick={borrarNotaAdmin} className="text-blue-500 hover:text-blue-800 text-sm font-black p-1 hover:bg-blue-100 rounded-lg transition-colors shrink-0">✕</button>
           </div>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
           {/* COLUMNA IZQUIERDA: CARTA JUGADOR */}
-          <div className="lg:col-span-5 w-full flex flex-col items-center">
+          <div className="lg:col-span-5 w-full flex flex-col items-center space-y-4">
             <div className="w-full bg-gradient-to-b from-[#0B0C2A] via-[#161848] to-[#0B0C2A] rounded-[2.5rem] p-6 md:p-8 text-white text-center shadow-xl border border-blue-500/20 relative overflow-hidden flex flex-col items-center justify-between min-h-[470px]">
               
               <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-blue-500/20 rounded-full blur-3xl pointer-events-none" />
 
-              {/* ENGRANAJE CONFIGURACIÓN */}
               <button
                 onClick={() => setEditandoPerfil(!editandoPerfil)}
                 className="absolute top-5 right-5 z-20 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center text-white transition-all shadow-md active:scale-95"
@@ -687,7 +781,6 @@ export default function PadelPerfilPage() {
                 ⚙️
               </button>
 
-              {/* FOTO AVATAR */}
               <div className="relative my-3 z-10">
                 <div className="w-28 h-28 md:w-32 md:h-32 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400 p-1 shadow-[0_0_30px_rgba(59,130,246,0.4)]">
                   <div className="w-full h-full rounded-full bg-[#0B0C2A] overflow-hidden flex items-center justify-center">
@@ -700,7 +793,6 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* NOMBRE + CATEGORÍA + INSIGNIA DE RANKING */}
               <div className="z-10 w-full flex flex-col items-center">
                 <h2 className="text-2xl md:text-3xl font-black tracking-tight text-white">{nombreCompleto}</h2>
                 
@@ -719,7 +811,6 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* BARRA DE RATING Y NIVEL */}
               <div className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 md:p-5 my-4 z-10 text-left">
                 <div className="flex justify-between items-center mb-2 font-bold">
                   <span className="text-gray-300 text-xs md:text-sm">
@@ -743,7 +834,6 @@ export default function PadelPerfilPage() {
                 </div>
               </div>
 
-              {/* FOOTER CARTA (VICTORIAS REALES CALCULADAS) */}
               <div className="w-full grid grid-cols-3 gap-2 pt-4 border-t border-white/10 text-center z-10">
                 <div>
                   <p className="text-[10px] md:text-xs font-bold text-gray-400 uppercase tracking-widest">VICTORIAS</p>
@@ -763,38 +853,27 @@ export default function PadelPerfilPage() {
 
             <button
               onClick={() => setModalInfoOpen(true)}
-              className="mt-4 text-xs md:text-sm font-extrabold text-slate-500 hover:text-blue-600 flex items-center gap-2 transition-colors py-2 px-3 rounded-full hover:bg-slate-100"
+              className="mt-2 text-xs md:text-sm font-extrabold text-slate-500 hover:text-blue-600 flex items-center gap-2 transition-colors py-2 px-3 rounded-full hover:bg-slate-100"
             >
               <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-black shrink-0">ℹ️</span>
               <span>¿Cómo funciona el nivel y los ascensos?</span>
             </button>
-
           </div>
 
-          {/* COLUMNA DERECHA */}
+          {/* COLUMNA DERECHA: ESTADÍSTICAS COMPLETAS Y TRACKER GRÁFICO */}
           <div className="lg:col-span-7 space-y-6">
 
             {editandoPerfil ? (
-              /* MODAL EDICIÓN RÁPIDA */
               <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
                 <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                   <h3 className="text-base font-black text-slate-900 uppercase tracking-tight">Editar Datos de Pista</h3>
-                  <button
-                    onClick={() => setEditandoPerfil(false)}
-                    className="text-slate-400 hover:text-slate-700 font-bold text-xs"
-                  >
-                    ✕ Cerrar
-                  </button>
+                  <button onClick={() => setEditandoPerfil(false)} className="text-slate-400 hover:text-slate-700 font-bold text-xs">✕ Cerrar</button>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-bold text-slate-700">
                   <div>
                     <label className="block mb-1 text-[10px] uppercase text-slate-400">Mano Hábil</label>
-                    <select
-                      value={formPerfil.mano_habil}
-                      onChange={(e) => setFormPerfil({ ...formPerfil, mano_habil: e.target.value })}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 outline-none focus:border-blue-500"
-                    >
+                    <select value={formPerfil.mano_habil} onChange={(e) => setFormPerfil({ ...formPerfil, mano_habil: e.target.value })} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 outline-none">
                       <option value="derecha">Derecha</option>
                       <option value="izquierda">Izquierda</option>
                       <option value="ambidiestro">Ambidiestro</option>
@@ -803,176 +882,139 @@ export default function PadelPerfilPage() {
 
                   <div>
                     <label className="block mb-1 text-[10px] uppercase text-slate-400">Posición en Pista</label>
-                    <select
-                      value={formPerfil.posicion}
-                      onChange={(e) => setFormPerfil({ ...formPerfil, posicion: e.target.value })}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 outline-none focus:border-blue-500"
-                    >
+                    <select value={formPerfil.posicion} onChange={(e) => setFormPerfil({ ...formPerfil, posicion: e.target.value })} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 outline-none">
                       <option value="drive">Drive (Lado Derecho)</option>
                       <option value="reves">Revés (Lado Izquierdo)</option>
                       <option value="ambos">Ambos Lados</option>
                     </select>
                   </div>
-
-                  <div>
-                    <label className="block mb-1 text-[10px] uppercase text-slate-400">Edad</label>
-                    <input
-                      type="number"
-                      min="10"
-                      max="99"
-                      value={formPerfil.edad}
-                      onChange={(e) => setFormPerfil({ ...formPerfil, edad: e.target.value })}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block mb-1 text-[10px] uppercase text-slate-400">Género</label>
-                    <select
-                      value={formPerfil.genero}
-                      onChange={(e) => setFormPerfil({ ...formPerfil, genero: e.target.value })}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 outline-none focus:border-blue-500"
-                    >
-                      <option value="masculino">Masculino</option>
-                      <option value="femenino">Femenino</option>
-                      <option value="otro">Otro</option>
-                    </select>
-                  </div>
                 </div>
 
                 <div className="flex gap-3 pt-3">
-                  <button
-                    onClick={guardarDatosPerfil}
-                    disabled={saving}
-                    className="flex-1 rounded-2xl bg-blue-600 py-3 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-50"
-                  >
+                  <button onClick={guardarDatosPerfil} disabled={saving} className="flex-1 rounded-2xl bg-blue-600 py-3 text-xs font-bold text-white">
                     {saving ? "Guardando..." : "Guardar Ficha"}
                   </button>
-                  <button
-                    onClick={() => setEditandoPerfil(false)}
-                    className="px-5 rounded-2xl border border-slate-200 bg-white py-3 text-xs font-bold text-slate-600 hover:bg-slate-50"
-                  >
+                  <button onClick={() => setEditandoPerfil(false)} className="px-5 rounded-2xl border border-slate-200 bg-white py-3 text-xs font-bold text-slate-600">
                     Cancelar
                   </button>
                 </div>
               </div>
             ) : (
-              /* MODO VISUALIZACIÓN PRINCIPAL DE TABLEROS */
-              <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
-                
-                {/* ENCABEZADO CON BOTÓN DE RANKING */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <h1 className="text-2xl font-black text-slate-900">{nombreCompleto}</h1>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-0.5">
-                      Jugador de Pádel • Level {ratingActual.toFixed(2)} ({catOficialLabel})
-                    </p>
+              <div className="space-y-6">
+
+                {/* 📈 COMPONENTE DE TRACKER DE GRÁFICA DE LEVEL */}
+                <RatingTrackerChart
+                  partidosJugados={partidosJugados}
+                  currentRating={ratingActual}
+                />
+
+                {/* 📊 TABLERO PRINCIPAL RESTAURADO (6 TARJETAS + RÉCORD DE CARRERA) */}
+                <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
+                  
+                  {/* CABECERA PERFIL */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h1 className="text-2xl font-black text-slate-900">{nombreCompleto}</h1>
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-0.5">
+                        JUGADOR DE PÁDEL • LEVEL {ratingActual.toFixed(2)} ({catOficialLabel.toUpperCase()})
+                      </p>
+                    </div>
+
+                    <Link href="/padel/ranking" className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-sm transition-all shrink-0 flex items-center justify-center gap-1.5 self-start sm:self-auto">
+                      <span>🏆</span>
+                      <span>Ver Tabla de Ranking →</span>
+                    </Link>
                   </div>
 
-                  <Link
-                    href="/padel/ranking"
-                    className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-sm transition-all shrink-0 flex items-center justify-center gap-1.5 self-start sm:self-auto"
-                  >
-                    <span>🏆</span>
-                    <span>Ver Tabla de Ranking →</span>
-                  </Link>
-                </div>
-
-                {/* BLOQUE DE ESTADO DE CATEGORÍA */}
-                <div className="bg-slate-50/80 border border-slate-200/80 p-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">
-                      Estado de Categoría
-                    </span>
-                    <p className="text-base font-black text-slate-900">
-                      {LABELS.estado_categoria[estadoCat] || "En revisión"}
-                    </p>
-                    {padelProfile?.categoria_solicitada && padelProfile?.categoria_solicitada !== padelProfile?.categoria_oficial && (
-                      <p className="text-xs font-bold text-amber-700">
-                        Categoría Solicitada: <span className="underline">{LABELS.categoria[padelProfile.categoria_solicitada]}</span>
+                  {/* BLOQUE DE ESTADO DE CATEGORÍA */}
+                  <div className="bg-slate-50/80 border border-slate-200/80 p-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">
+                        Estado de Categoría
+                      </span>
+                      <p className="text-base font-black text-slate-900">
+                        {LABELS.estado_categoria[estadoCat] || "En revisión"}
                       </p>
+                    </div>
+
+                    {!tieneSolicitudPendiente && (
+                      <button onClick={() => setModalSolicitudOpen(true)} className="px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black rounded-xl shadow-sm">
+                        🎾 Solicitar cambio de categoría
+                      </button>
                     )}
                   </div>
 
-                  {tieneSolicitudPendiente ? (
-                    <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-center md:text-right shrink-0">
-                      <span className="text-xs font-bold text-amber-800 block">⏳ Solicitud en revisión</span>
-                      <span className="text-[10px] font-semibold text-amber-600 block mt-0.5">Espera respuesta del admin</span>
+                  {/* 🟢 LAS 6 TARJETAS DE ESTADÍSTICAS REIMPLANTADAS */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    
+                    {/* 1. Puesto Ciudad */}
+                    <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 truncate">
+                        PUESTO EN {baseProfile?.ciudad?.toUpperCase() || "BARQUISIMETO"}
+                      </p>
+                      <p className="text-2xl font-black text-blue-600 mt-2">
+                        {posicionCiudad ? `#${posicionCiudad}` : "—"}
+                      </p>
                     </div>
-                  ) : (
-                    <button
-                      onClick={() => setModalSolicitudOpen(true)}
-                      className="px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black rounded-xl shadow-sm transition-all shrink-0 flex items-center justify-center gap-2"
-                    >
-                      <span>🎾</span>
-                      <span>Solicitar cambio de categoría</span>
-                    </button>
-                  )}
-                </div>
 
-                {/* GRILLA ESTADÍSTICA CALCULADA */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                  <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 truncate">
-                      PUESTO EN {baseProfile?.ciudad?.toUpperCase() || "CIUDAD"}
-                    </p>
-                    <p className="text-2xl font-black text-blue-600 mt-2">
-                      {posicionCiudad ? `#${posicionCiudad}` : "—"}
-                    </p>
-                  </div>
+                    {/* 2. Puesto Global */}
+                    <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PUESTO GLOBAL</p>
+                      <p className="text-2xl font-black text-emerald-600 mt-2">
+                        {posicionGlobal ? `#${posicionGlobal}` : "—"}
+                      </p>
+                    </div>
 
-                  <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PUESTO GLOBAL</p>
-                    <p className="text-2xl font-black text-emerald-600 mt-2">
-                      {posicionGlobal ? `#${posicionGlobal}` : "—"}
-                    </p>
-                  </div>
+                    {/* 3. Rating */}
+                    <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">RATING</p>
+                      <p className="text-2xl font-black text-cyan-600 mt-2">{ratingActual.toFixed(2)}</p>
+                    </div>
 
-                  <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">RATING</p>
-                    <p className="text-2xl font-black text-cyan-600 mt-2">{ratingActual.toFixed(2)}</p>
-                  </div>
+                    {/* 4. Partidos Jugados */}
+                    <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PARTIDOS JUGADOS</p>
+                      <p className="text-2xl font-black text-slate-900 mt-2">{estadisticas.partidos}</p>
+                    </div>
 
-                  <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PARTIDOS JUGADOS</p>
-                    <p className="text-2xl font-black text-slate-900 mt-2">{estadisticas.partidos}</p>
+                    {/* 5. Victorias Totales */}
+                    <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">VICTORIAS TOTALES</p>
+                      <p className="text-2xl font-black text-slate-900 mt-2 flex items-center gap-1">
+                        {estadisticas.victorias} <span className="text-lg">🏆</span>
+                      </p>
+                    </div>
+
+                    {/* 6. % Victorias */}
+                    <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">% VICTORIAS</p>
+                      <p className="text-2xl font-black text-emerald-600 mt-2">{estadisticas.porcentajeVictorias}%</p>
+                    </div>
+
                   </div>
 
-                  <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">VICTORIAS TOTALES</p>
-                    <p className="text-2xl font-black text-slate-900 mt-2 flex items-center gap-1">
-                      {estadisticas.victorias} <span className="text-lg">🏆</span>
-                    </p>
+                  {/* 🟢 RÉCORD DE CARRERA BARRITA HORIZONTAL */}
+                  <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl flex items-center justify-between">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">RÉCORD DE CARRERA</p>
+                      <p className="text-sm font-black mt-1">
+                        <span className="text-emerald-600">{estadisticas.victorias} Victorias</span>
+                        <span className="text-slate-300 mx-2">•</span>
+                        <span className="text-rose-500">{estadisticas.derrotas} Derrotas</span>
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">POSICIÓN</p>
+                      <p className="text-sm font-black text-slate-900">{LABELS.posicion[padelProfile?.posicion] || "Drive"}</p>
+                    </div>
                   </div>
 
-                  <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">% VICTORIAS</p>
-                    <p className="text-2xl font-black text-emerald-600 mt-2">{estadisticas.porcentajeVictorias}%</p>
-                  </div>
-                </div>
-
-                {/* RÉCORD DE CARRERA */}
-                <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl flex items-center justify-between">
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">RÉCORD DE CARRERA</p>
-                    <p className="text-sm font-black mt-1">
-                      <span className="text-emerald-600">{estadisticas.victorias} Victorias</span>
-                      <span className="text-slate-300 mx-2">•</span>
-                      <span className="text-rose-500">{estadisticas.derrotas} Derrotas</span>
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">POSICIÓN</p>
-                    <p className="text-sm font-black text-slate-900">{LABELS.posicion[padelProfile?.posicion] || "Drive"}</p>
-                  </div>
                 </div>
 
               </div>
             )}
 
-            {/* ==================================================== */}
-            {/* 🎾 1. SECCIÓN: PRÓXIMOS PARTIDOS                      */}
-            {/* ==================================================== */}
+            {/* 🎾 PRÓXIMOS PARTIDOS */}
             <div className="space-y-4 pt-2">
               <div className="flex items-center justify-between px-1">
                 <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
@@ -985,45 +1027,32 @@ export default function PadelPerfilPage() {
               </div>
 
               {proximosPartidos.length === 0 ? (
-                /* ESTADO VACÍO CON BOTÓN DE BÚSQUEDA A CLUBES */
                 <div className="bg-white rounded-3xl p-8 sm:p-10 text-center border border-dashed border-slate-200 shadow-xs space-y-3">
                   <span className="text-4xl block">🎾</span>
                   <h3 className="text-base font-black text-slate-800">No tienes próximos partidos programados</h3>
                   <p className="text-xs font-semibold text-slate-400 max-w-sm mx-auto">
                     Reserva una pista en tu club favorito o únete a un partido abierto de la comunidad.
                   </p>
-                  <Link
-                    href="/padel/clubes"
-                    className="inline-flex items-center gap-2 px-5 py-3 bg-[#0B1120] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-md active:scale-95"
-                  >
+                  <Link href="/padel/clubes" className="inline-flex items-center gap-2 px-5 py-3 bg-[#0B1120] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl shadow-md active:scale-95">
                     <span>🔍 BUSCAR PISTAS Y CLUBES</span>
                     <span>→</span>
                   </Link>
                 </div>
               ) : (
-                /* GRILLA DE TARJETAS DE PRÓXIMOS PARTIDOS */
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {proximosPartidos.map((match) => (
-                    <PartidoPadelCard
-                      key={match.id}
-                      match={match}
-                      currentUser={user}
-                      userCreditos={userCreditos}
-                      onUpdate={cargarPerfil}
-                    />
+                    <PartidoPadelCard key={match.id} match={match} currentUser={user} userCreditos={userCreditos} onUpdate={cargarPerfil} />
                   ))}
                 </div>
               )}
             </div>
 
-            {/* ==================================================== */}
-            {/* 🏆 2. SECCIÓN: ACTIVIDAD RECIENTE (PASTILLAS OSCURAS) */}
-            {/* ==================================================== */}
+            {/* 🏆 ACTIVIDAD RECIENTE (PASTILLAS CON DELTA DE RATING) */}
             <div className="space-y-4 pt-4">
               <div className="flex items-center justify-between px-1">
                 <div>
                   <h2 className="text-xl font-black text-slate-900">Actividad Reciente</h2>
-                  <p className="text-xs text-slate-400 font-bold">Tus últimos partidos jugados y resultados oficiales</p>
+                  <p className="text-xs text-slate-400 font-bold">Tus últimos partidos jugados y variación de nivel</p>
                 </div>
               </div>
 
@@ -1035,6 +1064,7 @@ export default function PadelPerfilPage() {
                 <div className="space-y-3">
                   {jugadosVisibles.map((match) => {
                     const esVictoria = match.esGanador;
+                    const change = match.rating_change || 0;
 
                     return (
                       <div
@@ -1043,7 +1073,6 @@ export default function PadelPerfilPage() {
                           esVictoria ? "border-l-[#00FF9D]" : "border-l-rose-500"
                         }`}
                       >
-                        {/* DETALLES IZQUIERDA */}
                         <div className="space-y-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
@@ -1058,6 +1087,16 @@ export default function PadelPerfilPage() {
                             >
                               {esVictoria ? "VICTORIA 🏆" : "DERROTA"}
                             </span>
+
+                            {change !== 0 && (
+                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
+                                change > 0
+                                  ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                                  : "bg-rose-500/20 text-rose-300 border-rose-500/30"
+                              }`}>
+                                {change > 0 ? `+${change.toFixed(2)} pts` : `${change.toFixed(2)} pts`}
+                              </span>
+                            )}
                           </div>
 
                           <h3 className="text-base sm:text-lg font-black tracking-tight text-white truncate">
@@ -1071,7 +1110,6 @@ export default function PadelPerfilPage() {
                           </p>
                         </div>
 
-                        {/* BARRITA DE MARCADOR DERECHA */}
                         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl px-4 py-2.5 text-center shrink-0 shadow-inner">
                           <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">
                             Marcador
@@ -1084,7 +1122,6 @@ export default function PadelPerfilPage() {
                     );
                   })}
 
-                  {/* BOTÓN CARGAR ANTERIORES (DE 3 EN 3) */}
                   {hayMasHistorial && (
                     <div className="pt-2 text-center">
                       <button
@@ -1105,72 +1142,31 @@ export default function PadelPerfilPage() {
 
       </div>
 
-      {/* MODAL NIVELACIÓN */}
       {onboardingOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-[#0B1120]/90 backdrop-blur-md p-4">
           <div className="w-full max-w-md rounded-[2.5rem] bg-[#EEF0F5] p-6 shadow-2xl flex flex-col overflow-hidden space-y-4">
-            
             <div className="flex items-center justify-between">
-              <span className="text-xs font-black uppercase tracking-widest text-blue-600">
-                Nivelación Inicial
-              </span>
+              <span className="text-xs font-black uppercase tracking-widest text-blue-600">Nivelación Inicial</span>
               <span className="text-xs font-bold text-gray-400">
                 {esPantallaRes ? "Resultado" : `Pregunta ${onboardingStep + 1} de ${ONBOARDING_STEPS.length}`}
               </span>
             </div>
 
             <div className="h-2 w-full rounded-full bg-gray-200 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-blue-600 transition-all duration-300"
-                style={{ width: `${progresoBarPct}%` }}
-              />
+              <div className="h-full rounded-full bg-blue-600 transition-all duration-300" style={{ width: `${progresoBarPct}%` }} />
             </div>
 
             {esPantallaRes ? (
               <div className="flex flex-col gap-4 pt-2">
                 <div className="rounded-3xl bg-[#0B1120] text-white p-6 text-center shadow-lg">
                   <p className="text-xs text-gray-400 uppercase tracking-widest">Tu Rating Asignado</p>
-                  <p className="text-5xl font-black text-cyan-300 my-2">
-                    {ratingConAjuste.toFixed(2)}
-                  </p>
+                  <p className="text-5xl font-black text-cyan-300 my-2">{ratingConAjuste.toFixed(2)}</p>
                   <span className="inline-block rounded-full bg-blue-500/30 border border-blue-400/30 px-4 py-1 text-xs font-black text-blue-300 uppercase tracking-wider">
                     🎾 {NIVEL_LABELS[catResult]?.label}
                   </span>
-                  <p className="text-xs text-gray-300 mt-3 leading-relaxed font-medium">
-                    {NIVEL_LABELS[catResult]?.desc}
-                  </p>
                 </div>
 
-                <div className="rounded-2xl bg-white p-4 shadow-sm border border-slate-200">
-                  <p className="text-xs font-bold text-slate-700 mb-1">¿Sientes que el nivel es adecuado?</p>
-                  <p className="text-[11px] text-slate-400 mb-3">Ajusta tu puntuación inicial (máx ±0.3):</p>
-                  
-                  <div className="flex items-center justify-between gap-3">
-                    <button
-                      onClick={() => setRatingAjuste((a) => parseFloat(Math.max(a - 0.1, -0.3).toFixed(1)))}
-                      disabled={ratingAjuste <= -0.3}
-                      className="w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-lg font-black text-slate-800 disabled:opacity-30"
-                    >
-                      −
-                    </button>
-                    <span className="text-xs font-black text-slate-900">
-                      {ratingAjuste === 0 ? "Sin ajuste" : ratingAjuste > 0 ? `+${ratingAjuste.toFixed(1)}` : ratingAjuste.toFixed(1)}
-                    </span>
-                    <button
-                      onClick={() => setRatingAjuste((a) => parseFloat(Math.min(a + 0.1, 0.3).toFixed(1)))}
-                      disabled={ratingAjuste >= 0.3}
-                      className="w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-lg font-black text-slate-800 disabled:opacity-30"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  onClick={guardarOnboarding}
-                  disabled={saving}
-                  className="w-full rounded-2xl bg-blue-600 py-3.5 text-xs font-black uppercase tracking-wider text-white hover:bg-blue-700 shadow-md transition-all"
-                >
+                <button onClick={guardarOnboarding} disabled={saving} className="w-full rounded-2xl bg-blue-600 py-3.5 text-xs font-black uppercase tracking-wider text-white">
                   {saving ? "Guardando..." : "Confirmar y Comenzar 🎾"}
                 </button>
               </div>
@@ -1180,170 +1176,61 @@ export default function PadelPerfilPage() {
 
                 <div className="flex flex-col gap-2">
                   {stepActual?.opciones.map((op) => (
-                    <button
-                      key={op.value}
-                      onClick={() => seleccionarRespuesta(stepActual.campo, op.value)}
-                      className={`w-full text-left rounded-2xl border-2 px-4 py-3 transition-all ${
-                        respActual === op.value
-                          ? "border-blue-600 bg-blue-600 text-white shadow-md"
-                          : "border-slate-200 bg-white text-slate-800 hover:border-slate-300"
-                      }`}
-                    >
+                    <button key={op.value} onClick={() => seleccionarRespuesta(stepActual.campo, op.value)} className={`w-full text-left rounded-2xl border-2 px-4 py-3 transition-all ${respActual === op.value ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-800"}`}>
                       <span className="block text-xs font-black">{op.label}</span>
-                      {op.cats && (
-                        <span className={`block text-[10px] mt-0.5 font-bold ${
-                          respActual === op.value ? "text-blue-100" : "text-slate-400"
-                        }`}>
-                          {op.cats}
-                        </span>
-                      )}
                     </button>
                   ))}
                 </div>
 
-                <button
-                  onClick={avanzarOnboarding}
-                  className={`w-full rounded-2xl py-3.5 text-xs font-black uppercase tracking-wider mt-2 transition-all ${
-                    !respActual
-                      ? "bg-slate-300 text-slate-500 cursor-not-allowed"
-                      : "bg-slate-900 text-white hover:bg-slate-800 shadow-md"
-                  }`}
-                >
+                <button onClick={avanzarOnboarding} className="w-full rounded-2xl py-3.5 text-xs font-black uppercase tracking-wider mt-2 bg-slate-900 text-white">
                   Siguiente →
                 </button>
               </div>
             )}
-
           </div>
         </div>
       )}
 
-      {/* MODAL SOLICITUD CATEGORÍA */}
       {modalSolicitudOpen && (
-        <div
-          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
-          onClick={() => setModalSolicitudOpen(false)}
-        >
-          <div
-            className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 relative space-y-5 my-8"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto" onClick={() => setModalSolicitudOpen(false)}>
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 my-8" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-start border-b border-slate-100 pb-3">
-              <div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-blue-600">Revisión de Nivel</span>
-                <h3 className="text-lg font-black text-slate-900">Solicitar Cambio de Categoría</h3>
-                <p className="text-xs text-slate-400 font-bold mt-0.5">
-                  Categoría Actual: <strong className="text-slate-800">{catOficialLabel}</strong>
-                </p>
-              </div>
-              <button
-                onClick={() => setModalSolicitudOpen(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold flex items-center justify-center hover:bg-slate-200 transition-colors"
-              >
-                ✕
-              </button>
+              <h3 className="text-lg font-black text-slate-900">Solicitar Cambio de Categoría</h3>
+              <button onClick={() => setModalSolicitudOpen(false)} className="text-slate-400 font-bold">✕</button>
             </div>
 
             <form onSubmit={enviarSolicitudCategoria} className="space-y-4 text-xs font-bold text-slate-700">
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1.5">
-                  Nueva Categoría Deseada
-                </label>
-                <select
-                  value={catSolicitada}
-                  onChange={(e) => setCatSolicitada(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
-                >
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">Nueva Categoría Deseada</label>
+                <select value={catSolicitada} onChange={(e) => setCatSolicitada(e.target.value)} className="w-full bg-slate-50 border p-2.5 rounded-xl font-bold">
                   {TODAS_CATEGORIAS.map((cat) => (
-                    <option key={cat.value} value={cat.value}>
-                      {cat.label} {cat.value === padelProfile?.categoria_oficial ? "(Actual)" : ""}
-                    </option>
+                    <option key={cat.value} value={cat.value}>{cat.label}</option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1.5">
-                  Motivo / Justificación de la Solicitud
-                </label>
-                <textarea
-                  rows={4}
-                  required
-                  placeholder="Ej: He estado entrenando y gané un torneo amistoso de 5ta categoría. Siento que mi nivel actual supera la 6ta."
-                  value={motivoSolicitud}
-                  onChange={(e) => setMotivoSolicitud(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
-                />
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">Motivo</label>
+                <textarea rows={4} required placeholder="Explica brevemente tu motivo..." value={motivoSolicitud} onChange={(e) => setMotivoSolicitud(e.target.value)} className="w-full bg-slate-50 border p-2.5 rounded-xl font-bold" />
               </div>
 
-              <div className="pt-2 flex gap-3">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl text-xs uppercase tracking-wider shadow-lg disabled:opacity-50 transition-colors"
-                >
-                  {saving ? "Enviando..." : "Enviar a Revisión"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModalSolicitudOpen(false)}
-                  className="px-4 py-3.5 bg-slate-100 text-slate-600 font-bold rounded-2xl text-xs hover:bg-slate-200 transition-colors"
-                >
-                  Cancelar
-                </button>
-              </div>
+              <button type="submit" disabled={saving} className="w-full py-3.5 bg-blue-600 text-white font-black rounded-2xl text-xs uppercase">
+                {saving ? "Enviando..." : "Enviar a Revisión"}
+              </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL INFORMATIVO */}
       {modalInfoOpen && (
-        <div 
-          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto"
-          onClick={() => setModalInfoOpen(false)}
-        >
-          <div 
-            className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 relative space-y-5 my-8"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-start border-b border-slate-100 pb-4">
-              <div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-blue-600">Sports Hub Pádel</span>
-                <h3 className="text-xl font-black text-slate-900">¿Cómo funciona el Nivel?</h3>
-              </div>
-              <button 
-                onClick={() => setModalInfoOpen(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold flex items-center justify-center hover:bg-slate-200 transition-colors"
-              >
-                ✕
-              </button>
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto" onClick={() => setModalInfoOpen(false)}>
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 my-8" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start border-b pb-4">
+              <h3 className="text-xl font-black text-slate-900">¿Cómo funciona el Nivel?</h3>
+              <button onClick={() => setModalInfoOpen(false)} className="text-slate-400 font-bold">✕</button>
             </div>
-
-            <div className="space-y-4 text-xs text-slate-600 leading-relaxed max-h-[65vh] overflow-y-auto pr-1">
-              <div className="bg-blue-50/60 p-3.5 rounded-2xl border border-blue-100">
-                <p className="font-extrabold text-blue-900 text-sm mb-1">⚡ 1. Tu Rating Numérico</p>
-                <p>
-                  Tu habilidad se mide con un número continuo (ej: <strong>2.65</strong>). Cada victoria en partidos competitivos suma puntos y cada derrota resta.
-                </p>
-              </div>
-
-              <div className="bg-emerald-50/60 p-3.5 rounded-2xl border border-emerald-100">
-                <p className="font-extrabold text-emerald-900 text-sm mb-1">🏆 2. Ascenso Automático de Categoría</p>
-                <p className="mb-2">
-                  No necesitas pedir la subida a un admin. Cuando tu barra llega al 100%, ¡asciendes automáticamente!
-                </p>
-              </div>
-            </div>
-
-            <div className="pt-2">
-              <button
-                onClick={() => setModalInfoOpen(false)}
-                className="w-full py-3 bg-slate-900 text-white font-extrabold rounded-2xl text-xs uppercase tracking-wider hover:bg-slate-800 transition-colors shadow-md"
-              >
-                ¡Entendido, a jugar!
-              </button>
-            </div>
+            <p className="text-xs text-slate-600">Tu nivel se ajusta automáticamente analizando tus resultados, diferencia de juegos, nivel del adversario y nivel de calibración de fiabilidad.</p>
+            <button onClick={() => setModalInfoOpen(false)} className="w-full py-3 bg-slate-900 text-white font-black rounded-2xl text-xs uppercase">Entendido</button>
           </div>
         </div>
       )}
