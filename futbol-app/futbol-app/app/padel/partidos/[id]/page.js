@@ -17,6 +17,19 @@ function formatFechaLarga(fechaStr) {
   });
 }
 
+// DETERMINAR CATEGORÍA OFICIAL SEGÚN EL RATING NUMÉRICO
+function categoriaDesdeRating(r) {
+  const num = Number(r) || 1.0;
+  if (num < 2.0) return "rookies";
+  if (num < 3.0) return "7ma";
+  if (num < 4.0) return "6ta";
+  if (num < 4.5) return "5ta";
+  if (num < 5.0) return "4ta";
+  if (num < 6.0) return "3era";
+  return "open";
+}
+
+// VALIDACIÓN REGLAMENTO OFICIAL DE PÁDEL
 function validarSet(gA, gB, tbA = 0, tbB = 0) {
   const a = parseInt(gA, 10);
   const b = parseInt(gB, 10);
@@ -50,6 +63,7 @@ function validarSet(gA, gB, tbA = 0, tbB = 0) {
   return { valido: false, msg: "Set inválido. Ejemplos válidos: 6-4, 7-5 o 7-6" };
 }
 
+// 🧠 ALGORITMO POTENCIADO DE NIVELACIÓN
 function calcularAjusteRatingDinámico({
   ratingJugador,
   ratingCompanero,
@@ -347,6 +361,7 @@ export default function PartidoDetallePage() {
           });
 
           const nuevoRating = Math.max(1.0, parseFloat((ratingSelf + delta).toFixed(2)));
+          const nuevaCat = categoriaDesdeRating(nuevoRating); // 🔥 RECALCULA CATEGORÍA OFICIAL (ASCENSO/DESCENSO)
           const nuevaFiabilidad = Math.min(100, fiabilidadActual + 5);
           const nVics = (player.padel_profile?.victorias || 0) + (esGanador ? 1 : 0);
           const nDerr = (player.padel_profile?.derrotas || 0) + (esGanador ? 0 : 1);
@@ -355,13 +370,13 @@ export default function PartidoDetallePage() {
             .from("padel_profiles")
             .update({
               rating: nuevoRating,
+              categoria_oficial: nuevaCat, // 💾 GUARDA LA NUEVA CATEGORÍA EN BASE DE DATOS
               fiabilidad: nuevaFiabilidad,
               victorias: nVics,
               derrotas: nDerr,
             })
             .eq("cuenta_id", player.user_id);
 
-          // 💾 GUARDAR EL DELTA DE RATING EN EL REGISTRO DEL JUGADOR
           await supabase
             .from("padel_match_players")
             .update({ rating_change: delta })
@@ -371,7 +386,7 @@ export default function PartidoDetallePage() {
       }
 
       await cargarDetallePartido();
-      mostrarNotificacion("exito", "¡Partido Finalizado!", `Marcador aprobado. Los niveles han sido ajustados según la diferencia de juegos.`);
+      mostrarNotificacion("exito", "¡Partido Finalizado!", `Marcador aprobado. Los niveles y categorías han sido actualizados.`);
     } catch (err) {
       console.error(err);
       mostrarNotificacion("error", "Error de Procesamiento", "No se pudo procesar la respuesta.");

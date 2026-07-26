@@ -167,25 +167,30 @@ function calcularRatingInicial(respuestas) {
   return parseFloat(Math.min(Math.max(suma, 1.0), 7.0).toFixed(2));
 }
 
+// 🎯 DETERMINAR CATEGORÍA SEGÚN RATING NUMÉRICO CORREGIDO
 function categoriaDesdeRating(r) {
-  if (r < 2.0) return "rookies";
-  if (r < 3.0) return "7ma";
-  if (r < 4.0) return "6ta";
-  if (r < 4.5) return "5ta";
-  if (r < 5.0) return "4ta";
-  if (r < 6.0) return "3era";
+  const num = Number(r) || 1.0;
+  if (num < 2.0) return "rookies";
+  if (num < 3.0) return "7ma";
+  if (num < 4.0) return "6ta";
+  if (num < 4.8) return "5ta";
+  if (num < 5.5) return "4ta";
+  if (num < 6.2) return "3era";
+  if (num < 7.0) return "2da";
   return "open";
 }
 
+// 🎯 INFORMACIÓN COMPLETA DE PROGRESIÓN (INCLUYE 3ERA Y 2DA)
 function getInfoRating(ratingVal) {
   const r = Number(ratingVal) || 1.0;
   if (r < 2.0) return { catActual: "Rookies", nextCat: "7ma", floor: 1.0, ceiling: 2.0 };
   if (r < 3.0) return { catActual: "7ma", nextCat: "6ta", floor: 2.0, ceiling: 3.0 };
   if (r < 4.0) return { catActual: "6ta", nextCat: "5ta", floor: 3.0, ceiling: 4.0 };
-  if (r < 4.5) return { catActual: "5ta", nextCat: "4ta", floor: 4.0, ceiling: 4.5 };
-  if (r < 5.0) return { catActual: "4ta", nextCat: "3era", floor: 4.5, ceiling: 5.0 };
-  if (r < 6.0) return { catActual: "3era", nextCat: "Open", floor: 5.0, ceiling: 6.0 };
-  return { catActual: "Open", nextCat: "MAX", floor: 6.0, ceiling: 7.0 };
+  if (r < 4.8) return { catActual: "5ta", nextCat: "4ta", floor: 4.0, ceiling: 4.8 };
+  if (r < 5.5) return { catActual: "4ta", nextCat: "3era", floor: 4.8, ceiling: 5.5 };
+  if (r < 6.2) return { catActual: "3era", nextCat: "2da", floor: 5.5, ceiling: 6.2 };
+  if (r < 7.0) return { catActual: "2da", nextCat: "Open", floor: 6.2, ceiling: 7.0 };
+  return { catActual: "Open", nextCat: "MAX", floor: 7.0, ceiling: 8.0 };
 }
 
 function calcProgresoPorcentaje(ratingVal) {
@@ -214,7 +219,6 @@ function formatFechaCorta(fechaStr) {
   });
 }
 
-// 📈 TRACKER GRÁFICO DE NIVEL
 function RatingTrackerChart({ partidosJugados, currentRating }) {
   const historialPuntos = useMemo(() => {
     if (!partidosJugados || partidosJugados.length === 0) {
@@ -222,15 +226,22 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
     }
 
     const cronologicos = [...partidosJugados].reverse();
-    const totalDeltas = cronologicos.reduce((sum, m) => sum + (Number(m.rating_change) || 0), 0);
-    let ratingInicial = currentRating - totalDeltas;
+    
+    const deltas = cronologicos.map((m) => {
+      const val = Number(m.rating_change);
+      if (!isNaN(val) && val !== 0) return val;
+      return m.esGanador ? 0.12 : -0.12;
+    });
+
+    const totalDeltas = deltas.reduce((sum, d) => sum + d, 0);
+    let ratingInicial = Math.max(1.0, parseFloat((currentRating - totalDeltas).toFixed(2)));
 
     const puntos = [{ matchNum: 0, rating: ratingInicial, change: 0, label: "Inicio" }];
 
     let corriendo = ratingInicial;
     cronologicos.forEach((m, idx) => {
-      const delta = Number(m.rating_change) || 0;
-      corriendo += delta;
+      const delta = deltas[idx];
+      corriendo = Math.max(1.0, corriendo + delta);
       puntos.push({
         matchNum: idx + 1,
         rating: parseFloat(corriendo.toFixed(2)),
@@ -391,6 +402,16 @@ export default function PadelPerfilPage() {
         finalPadel = created;
       }
 
+      // 🔥 AUTO-CORRECCIÓN DE CATEGORÍA SEGÚN LA NUEVA ESCALA REVISADA
+      const catReal = categoriaDesdeRating(finalPadel.rating);
+      if (finalPadel.categoria_oficial !== catReal) {
+        await supabase
+          .from("padel_profiles")
+          .update({ categoria_oficial: catReal })
+          .eq("cuenta_id", authUser.id);
+        finalPadel.categoria_oficial = catReal;
+      }
+
       setPadelProfile(finalPadel);
       setFormPerfil({
         posicion: finalPadel.posicion || "drive",
@@ -409,7 +430,6 @@ export default function PadelPerfilPage() {
         setOnboardingOpen(true);
       }
 
-      // CÁLCULO DE POSICIONES DE RANKING
       const { data: todosPadel } = await supabase
         .from("padel_profiles")
         .select(`
@@ -439,7 +459,6 @@ export default function PadelPerfilPage() {
         }
       }
 
-      // 🔍 BÚSQUEDA BLINDADA DE PARTIDOS (SIN SENSIBILIDAD A COLUMNAS FALTANTES)
       let myMatches = [];
       const { data: mData, error: mErr } = await supabase
         .from("padel_match_players")
@@ -697,7 +716,6 @@ export default function PadelPerfilPage() {
     }
   }
 
-  // 📊 CÁLCULO DE ESTADÍSTICAS CON FALLBACK
   const estadisticas = useMemo(() => {
     const partidosLista = partidosJugados.length;
     const victoriasLista = partidosJugados.filter((m) => m.esGanador).length;
@@ -730,7 +748,8 @@ export default function PadelPerfilPage() {
   const fiabilidadInfo = getEtiquetaFiabilidad(fiabilidadVal);
 
   const estadoCat = padelProfile?.estado_categoria || "pendiente";
-  const catOficialLabel = LABELS.categoria[padelProfile?.categoria_oficial] || "Rookies";
+  const catOficialKey = padelProfile?.categoria_oficial || categoriaDesdeRating(ratingActual);
+  const catOficialLabel = LABELS.categoria[catOficialKey] || "Rookies";
   const tieneSolicitudPendiente = estadoCat === "pendiente";
 
   const TOTAL_STEPS = ONBOARDING_STEPS.length + 1;
@@ -860,7 +879,7 @@ export default function PadelPerfilPage() {
             </button>
           </div>
 
-          {/* COLUMNA DERECHA: ESTADÍSTICAS COMPLETAS Y TRACKER GRÁFICO */}
+          {/* COLUMNA DERECHA */}
           <div className="lg:col-span-7 space-y-6">
 
             {editandoPerfil ? (
@@ -902,16 +921,15 @@ export default function PadelPerfilPage() {
             ) : (
               <div className="space-y-6">
 
-                {/* 📈 COMPONENTE DE TRACKER DE GRÁFICA DE LEVEL */}
+                {/* 📈 TRACKER DE GRÁFICA DE LEVEL */}
                 <RatingTrackerChart
                   partidosJugados={partidosJugados}
                   currentRating={ratingActual}
                 />
 
-                {/* 📊 TABLERO PRINCIPAL RESTAURADO (6 TARJETAS + RÉCORD DE CARRERA) */}
+                {/* TABLERO PRINCIPAL DE ESTADÍSTICAS */}
                 <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
                   
-                  {/* CABECERA PERFIL */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <h1 className="text-2xl font-black text-slate-900">{nombreCompleto}</h1>
@@ -926,7 +944,6 @@ export default function PadelPerfilPage() {
                     </Link>
                   </div>
 
-                  {/* BLOQUE DE ESTADO DE CATEGORÍA */}
                   <div className="bg-slate-50/80 border border-slate-200/80 p-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="space-y-1">
                       <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">
@@ -944,10 +961,7 @@ export default function PadelPerfilPage() {
                     )}
                   </div>
 
-                  {/* 🟢 LAS 6 TARJETAS DE ESTADÍSTICAS REIMPLANTADAS */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                    
-                    {/* 1. Puesto Ciudad */}
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 truncate">
                         PUESTO EN {baseProfile?.ciudad?.toUpperCase() || "BARQUISIMETO"}
@@ -957,7 +971,6 @@ export default function PadelPerfilPage() {
                       </p>
                     </div>
 
-                    {/* 2. Puesto Global */}
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PUESTO GLOBAL</p>
                       <p className="text-2xl font-black text-emerald-600 mt-2">
@@ -965,19 +978,16 @@ export default function PadelPerfilPage() {
                       </p>
                     </div>
 
-                    {/* 3. Rating */}
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">RATING</p>
                       <p className="text-2xl font-black text-cyan-600 mt-2">{ratingActual.toFixed(2)}</p>
                     </div>
 
-                    {/* 4. Partidos Jugados */}
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PARTIDOS JUGADOS</p>
                       <p className="text-2xl font-black text-slate-900 mt-2">{estadisticas.partidos}</p>
                     </div>
 
-                    {/* 5. Victorias Totales */}
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">VICTORIAS TOTALES</p>
                       <p className="text-2xl font-black text-slate-900 mt-2 flex items-center gap-1">
@@ -985,15 +995,12 @@ export default function PadelPerfilPage() {
                       </p>
                     </div>
 
-                    {/* 6. % Victorias */}
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">% VICTORIAS</p>
                       <p className="text-2xl font-black text-emerald-600 mt-2">{estadisticas.porcentajeVictorias}%</p>
                     </div>
-
                   </div>
 
-                  {/* 🟢 RÉCORD DE CARRERA BARRITA HORIZONTAL */}
                   <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl flex items-center justify-between">
                     <div>
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">RÉCORD DE CARRERA</p>
@@ -1047,7 +1054,7 @@ export default function PadelPerfilPage() {
               )}
             </div>
 
-            {/* 🏆 ACTIVIDAD RECIENTE (PASTILLAS CON DELTA DE RATING) */}
+            {/* 🏆 ACTIVIDAD RECIENTE */}
             <div className="space-y-4 pt-4">
               <div className="flex items-center justify-between px-1">
                 <div>
