@@ -4,6 +4,18 @@ import { useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../lib/supabaseClient";
 
+// JERARQUÍA OFICIAL DE NIVELES DE PÁDEL
+const CATEGORIA_NIVEL = {
+  rookies: 1,
+  "7ma": 2,
+  "6ta": 3,
+  "5ta": 4,
+  "4ta": 5,
+  "3era": 6,
+  "2da": 7,
+  open: 8,
+};
+
 function formatFechaLarga(fechaStr) {
   if (!fechaStr) return "";
   const d = new Date(fechaStr);
@@ -40,19 +52,47 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
 
     if (yaInscrito) return;
 
-    const costo = match.price_per_player || 4;
-    if (userCreditos < costo) {
-      alert(`⚠️ Saldo insuficiente. Necesitas ${costo} créditos y tienes ${userCreditos}.`);
-      return;
-    }
-
     try {
       setProcesando(true);
       setErrorMsg("");
 
-      const equipoA = players.filter((p) => p.team === "A").length;
-      const teamAsignado = equipoA < 2 ? "A" : "B";
+      // 1. OBTENER PERFIL DE PÁDEL DEL USUARIO ACTUAL
+      const { data: userPadelProfile } = await supabase
+        .from("padel_profiles")
+        .select("categoria_oficial, rating")
+        .eq("cuenta_id", currentUser.id)
+        .maybeSingle();
 
+      const userCatKey = (userPadelProfile?.categoria_oficial || "rookies").toLowerCase();
+      const matchCatKey = (match.category_restriction || "open").toLowerCase();
+
+      // 2. VALIDAR RESTRICCIÓN DE CATEGORÍA MÁXIMA
+      const userLevel = CATEGORIA_NIVEL[userCatKey] || 1;
+      const matchMaxLevel = CATEGORIA_NIVEL[matchCatKey] || 8;
+
+      if (matchCatKey !== "open" && userLevel > matchMaxLevel) {
+        const errorTexto = `⚠️ Tu categoría (${userCatKey.toUpperCase()}) supera la categoría máxima permitida para este partido (${matchCatKey.toUpperCase()}).`;
+        setErrorMsg(errorTexto);
+        alert(errorTexto);
+        setProcesando(false);
+        return;
+      }
+
+      // 3. VALIDAR CRÉDITOS
+      const costo = match.price_per_player || 4;
+      if (userCreditos < costo) {
+        const errorSaldo = `⚠️ Saldo insuficiente. Necesitas ${costo} créditos y tienes ${userCreditos}.`;
+        setErrorMsg(errorSaldo);
+        alert(errorSaldo);
+        setProcesando(false);
+        return;
+      }
+
+      // 4. ASIGNACIÓN DE EQUIPO (A O B)
+      const equipoACount = players.filter((p) => p.team === "A").length;
+      const teamAsignado = equipoACount < 2 ? "A" : "B";
+
+      // 5. INSCRIBIR EN LA BASE DE DATOS
       const { error: playerErr } = await supabase.from("padel_match_players").insert({
         match_id: match.id,
         user_id: currentUser.id,
@@ -61,6 +101,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
 
       if (playerErr) throw playerErr;
 
+      // 6. DESCONTAR SALDO
       const nuevoSaldo = userCreditos - costo;
       await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", currentUser.id);
 
@@ -94,7 +135,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
 
           <div className="flex items-center gap-1.5">
             <span className="bg-blue-50 text-blue-700 font-black text-[10px] uppercase px-2.5 py-0.5 rounded-full border border-blue-200">
-              {match.category_restriction || "Libre"}
+              Max: {match.category_restriction || "Libre"}
             </span>
             <span
               className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
@@ -119,8 +160,8 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
               const nombrePila = player.profile?.nombre || "Jugador";
               const avatar = player.profile?.avatar_url;
               const rating = player.padel_profile?.rating
-                ? Number(player.padel_profile.rating).toFixed(1)
-                : "1.5";
+                ? Number(player.padel_profile.rating).toFixed(2)
+                : "1.50";
 
               return (
                 <div key={player.id || idx} className="flex flex-col items-center gap-1 z-10 min-w-0">
@@ -185,7 +226,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
         </div>
 
         {errorMsg && (
-          <p className="text-[10px] font-bold text-rose-600 text-center bg-rose-50 p-1.5 rounded-xl border border-rose-200">
+          <p className="text-[10px] font-bold text-rose-600 text-center bg-rose-50 p-2 rounded-xl border border-rose-200">
             {errorMsg}
           </p>
         )}
