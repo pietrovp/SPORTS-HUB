@@ -32,7 +32,7 @@ const NAV_POR_DEPORTE = {
       { href: "/padel", label: "Inicio" },
       { href: "/padel/partidos", label: "Partidos" },
       { href: "/padel/clubes", label: "Clubes" },
-      { href: "/padel/perfil", label: "Estadísticas" }, // 🔥 SOLO 4 PASTILLAS LIMPIAS
+      { href: "/padel/perfil", label: "Estadísticas" },
     ],
   },
 };
@@ -67,6 +67,18 @@ export default function Navbar() {
   const [cerrandoSesion, setCerrandoSesion] = useState(false);
 
   const mobileNavRef = useRef(null);
+  const userMenuRef = useRef(null);
+
+  // Cerrar menú de usuario al hacer clic afuera
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   useEffect(() => {
     if (!supabase) return;
@@ -168,7 +180,9 @@ export default function Navbar() {
   }
 
   const avatarUrl = cuenta?.avatar_url || null;
-  const inicialAvatar = usuario?.email ? usuario.email[0].toUpperCase() : "U";
+  const inicialAvatar = cuenta?.nombre 
+    ? cuenta.nombre.charAt(0).toUpperCase() 
+    : (usuario?.email ? usuario.email[0].toUpperCase() : "U");
 
   return (
     <>
@@ -231,7 +245,7 @@ export default function Navbar() {
           {/* Iconos a la derecha: RANKING 🏆 + CRÉDITOS + PERFIL */}
           <div className="flex items-center gap-2 shrink-0">
             
-            {/* 🔥 BOTÓN DE RANKING DESTACADO EN CABECERA SUPERIOR */}
+            {/* BOTÓN DE RANKING DESTACADO EN CABECERA SUPERIOR */}
             {seccion === "padel" && (
               <Link
                 href="/padel/ranking"
@@ -328,11 +342,12 @@ export default function Navbar() {
                   <span>{creditos}</span>
                 </Link>
 
-                <div className="relative">
+                {/* BOTÓN CON MENÚ DESPLEGABLE RESTRUCTURADO (SOLUCIÓN 1) */}
+                <div className="relative" ref={userMenuRef}>
                   <button
                     onClick={() => setMenuOpen(!menuOpen)}
                     className={`flex items-center gap-2 text-xs font-bold pl-1.5 md:pr-3 pr-1.5 py-1.5 rounded-full transition-all border whitespace-nowrap shrink-0 ${
-                      pathname === "/perfil" && !menuOpen
+                      menuOpen
                         ? "bg-gray-100 border-gray-300 text-gray-900"
                         : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300 hover:text-gray-900"
                     }`}
@@ -344,25 +359,77 @@ export default function Navbar() {
                         <span>{inicialAvatar}</span>
                       )}
                     </div>
-                    <span className="hidden md:inline">Mi cuenta</span>
-                    <svg className="w-4 h-4 md:hidden text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16m-7 6h7" /></svg>
+                    <span className="hidden md:inline">{cuenta?.nombre || "Mi cuenta"}</span>
+                    <span className="text-[10px] text-gray-400">▼</span>
                   </button>
 
+                  {/* DESPLEGABLE INTELEVENTE DE PERFILES */}
                   {menuOpen && (
-                    <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded-2xl shadow-xl z-[110] overflow-hidden">
-                      <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 md:hidden">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Cambiar Deporte</p>
-                        <div className="flex gap-2">
-                          <Link href="/futbol" className="flex-1 bg-white border border-gray-200 rounded-lg py-1.5 text-center text-xs font-bold hover:border-emerald-300" onClick={() => setMenuOpen(false)}>⚽ Fut</Link>
-                          <Link href="/padel" className="flex-1 bg-white border border-gray-200 rounded-lg py-1.5 text-center text-xs font-bold hover:border-blue-300" onClick={() => setMenuOpen(false)}>🎾 Pad</Link>
-                        </div>
+                    <div className="absolute right-0 mt-2 w-60 bg-white border border-gray-200 rounded-2xl shadow-xl z-[110] overflow-hidden text-xs font-bold p-1.5 space-y-1 animate-in fade-in slide-in-from-top-2 duration-150">
+                      
+                      <div className="px-3 py-2 bg-gray-50/80 rounded-xl border border-gray-100/80 mb-1">
+                        <span className="text-[9px] uppercase font-black tracking-wider text-gray-400 block">
+                          Sesión iniciada
+                        </span>
+                        <p className="text-xs font-black text-gray-800 truncate">
+                          {cuenta?.nombre || usuario?.email}
+                        </p>
                       </div>
 
+                      <div className="px-3 pt-1 pb-0.5 text-[9px] font-black uppercase tracking-wider text-gray-400">
+                        Mis Fichas Deportivas
+                      </div>
+
+                      {/* Opción Pádel */}
+                      <Link
+                        href="/padel/perfil"
+                        onClick={() => setMenuOpen(false)}
+                        className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                          seccion === "padel"
+                            ? "bg-blue-50 text-blue-700 font-black border border-blue-100"
+                            : "text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span>🎾</span>
+                          <span>Mi Ficha de Pádel</span>
+                        </span>
+                        {seccion === "padel" && (
+                          <span className="text-[9px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-full">
+                            ACTIVO
+                          </span>
+                        )}
+                      </Link>
+
+                      {/* Opción Fútbol */}
+                      <Link
+                        href="/futbol/perfil"
+                        onClick={() => setMenuOpen(false)}
+                        className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                          seccion === "futbol"
+                            ? "bg-emerald-50 text-emerald-700 font-black border border-emerald-100"
+                            : "text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span>⚽</span>
+                          <span>Mi Carta de Fútbol</span>
+                        </span>
+                        {seccion === "futbol" && (
+                          <span className="text-[9px] bg-emerald-600 text-white font-black px-2 py-0.5 rounded-full">
+                            ACTIVO
+                          </span>
+                        )}
+                      </Link>
+
+                      <div className="border-t border-gray-100 my-1" />
+
+                      {/* Opciones Móvil Admin/Gerente */}
                       {seccion === "futbol" && esGerente && (
-                        <div className="md:hidden border-b border-gray-100">
+                        <div className="md:hidden border-b border-gray-100 pb-1">
                           <Link 
                             href="/futbol/admin-canchas"
-                            className="block px-4 py-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-50" 
+                            className="block px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-xl" 
                             onClick={() => setMenuOpen(false)}
                           >
                             {esDuenoCancha ? "🏟️ Gestión de Horarios" : "🏟️ Registrar Cancha"}
@@ -371,26 +438,39 @@ export default function Navbar() {
                       )}
 
                       {esAdmin && (
-                        <div className="md:hidden border-b border-gray-100 bg-violet-50/30">
-                          <p className="px-4 pt-3 text-[10px] font-bold text-violet-400 uppercase tracking-widest">Admin</p>
+                        <div className="md:hidden border-b border-gray-100 pb-1 bg-violet-50/30 rounded-xl p-1">
+                          <p className="px-2 pt-1 text-[9px] font-black text-violet-400 uppercase tracking-widest">Admin</p>
                           {seccion === "padel" ? (
-                            <Link href="/padel/admin/categorias" className="block px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50" onClick={() => setMenuOpen(false)}>Revisión Categorías</Link>
+                            <Link href="/padel/admin/categorias" className="block px-2 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Revisión Categorías</Link>
                           ) : (
                             <>
-                              <Link href="/futbol/admin" className="block px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50" onClick={() => setMenuOpen(false)}>Crear partido</Link>
-                              <Link href="/futbol/admin/pagos" className="block px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50" onClick={() => setMenuOpen(false)}>Pagos</Link>
-                              <Link href="/futbol/admin/Logros" className="block px-4 pb-3 pt-2 text-sm font-semibold text-violet-700 hover:bg-violet-50" onClick={() => setMenuOpen(false)}>Crear logros</Link>
+                              <Link href="/futbol/admin" className="block px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Crear partido</Link>
+                              <Link href="/futbol/admin/pagos" className="block px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Pagos</Link>
+                              <Link href="/futbol/admin/Logros" className="block px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Crear logros</Link>
                             </>
                           )}
                         </div>
                       )}
 
-                      <Link href="/perfil" className="block px-4 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50 border-b border-gray-100" onClick={() => setMenuOpen(false)}>
-                        👤 Mi Cuenta Global
+                      {/* Ajustes Globales de Cuenta */}
+                      <Link 
+                        href="/perfil" 
+                        className="flex items-center gap-2 px-3 py-2.5 text-gray-600 hover:bg-gray-50 rounded-xl transition-all" 
+                        onClick={() => setMenuOpen(false)}
+                      >
+                        <span>⚙️</span>
+                        <span>Ajustes de Cuenta Global</span>
                       </Link>
                       
-                      <button onClick={() => { setConfirmandoSalir(true); setMenuOpen(false); }} className="w-full text-left px-4 py-3 text-sm font-bold text-red-600 hover:bg-red-50">
-                        Salir de la cuenta
+                      <div className="border-t border-gray-100 my-1" />
+
+                      {/* Salir */}
+                      <button 
+                        onClick={() => { setConfirmandoSalir(true); setMenuOpen(false); }} 
+                        className="w-full text-left flex items-center gap-2 px-3 py-2.5 text-rose-600 hover:bg-rose-50 rounded-xl transition-all font-black"
+                      >
+                        <span>🚪</span>
+                        <span>Cerrar Sesión</span>
                       </button>
                     </div>
                   )}
@@ -428,7 +508,7 @@ export default function Navbar() {
           </div>
         </div>
 
-        {/* SUB-MENÚ MÓVIL (PASTILLAS DESPEJADAS Y SIN OVERFLOW) */}
+        {/* SUB-MENÚ MÓVIL */}
         {mainNav.length > 0 && (
           <div
             ref={mobileNavRef}

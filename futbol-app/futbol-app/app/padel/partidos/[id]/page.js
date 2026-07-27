@@ -75,45 +75,39 @@ function calcularAjusteRatingDinámico({
   const miParejaRating = (ratingJugador + ratingCompanero) / 2;
   const rivalesRating = (ratingRival1 + ratingRival2) / 2;
 
-  // 1. Ampliamos el divisor para que las probabilidades no sean extremas
   const diffNivel = rivalesRating - miParejaRating;
   const probGanarMiPareja = 1 / (1 + Math.pow(10, diffNivel / 1.5)); 
 
-  // 2. K-Factor Base (REDUCIDO DRÁSTICAMENTE PARA EXIGIR CONSTANCIA)
-  let kFactor = 0.08; // Ganancia promedio normal de apenas ~0.04
+  let kFactor = 0.08;
   
   if (fiabilidadActual < 30) {
-    kFactor = 0.25; // Calibración inicial (reducida del antiguo 0.70)
+    kFactor = 0.25;
   } else if (fiabilidadActual < 60) {
-    kFactor = 0.15; // Calibración media (reducida del antiguo 0.45)
+    kFactor = 0.15;
   }
 
-  // 3. Modificador de Palizas (Nerfeado para no regalar puntos)
   let factorDominancia = 1.0;
   if (diffGamesTotal >= 10) {
-    factorDominancia = 1.25; // Bono máximo del 25% por victoria aplastante
+    factorDominancia = 1.25;
   } else if (diffGamesTotal >= 6) {
-    factorDominancia = 1.10; // Bono leve del 10%
+    factorDominancia = 1.10;
   } else if (diffGamesTotal <= 2) {
-    factorDominancia = 0.85; // Descuento del 15% por partido sufrido
+    factorDominancia = 0.85;
   }
 
-  // Evitar "farmear" puntos ganando por paliza a novatos
   if (esGanador && probGanarMiPareja > 0.75) {
     factorDominancia = 1.0; 
   }
 
-  // 4. Cálculo del cambio neto de rating
   const resultadoReal = esGanador ? 1 : 0;
   let cambioNeto = kFactor * (resultadoReal - probGanarMiPareja) * factorDominancia;
 
-  // 5. LÍMITES ESTRICTOS (HARD-CAPS)
   if (esGanador) {
-    cambioNeto = Math.max(0.01, cambioNeto); // Nunca menos de +0.01
-    cambioNeto = Math.min(0.18, cambioNeto); // NUNCA subir más de +0.18 en un solo partido
+    cambioNeto = Math.max(0.01, cambioNeto);
+    cambioNeto = Math.min(0.18, cambioNeto);
   } else {
-    cambioNeto = Math.min(-0.01, cambioNeto); // Nunca menos de -0.01
-    cambioNeto = Math.max(-0.18, cambioNeto); // NUNCA bajar más de -0.18 en un partido
+    cambioNeto = Math.min(-0.01, cambioNeto);
+    cambioNeto = Math.max(-0.18, cambioNeto);
   }
 
   return parseFloat(cambioNeto.toFixed(2));
@@ -129,6 +123,7 @@ export default function PartidoDetallePage() {
   const [user, setUser] = useState(null);
 
   const [notificacion, setNotificacion] = useState(null);
+  const [modalCancelOpen, setModalCancelOpen] = useState(false);
 
   const [modalResultadoOpen, setModalResultadoOpen] = useState(false);
   const [set1A, setSet1A] = useState(6);
@@ -167,8 +162,8 @@ export default function PartidoDetallePage() {
       const { data: matchData, error: matchError } = await supabase
         .from("padel_matches")
         .select(`
-          id, match_type, scheduled_at, status, category_restriction,
-          gender_restriction, is_competitive, price_per_player, created_by, winner_team,
+          id, match_type, is_private, scheduled_at, status, category_restriction,
+          gender_restriction, is_competitive, price_per_player, total_price, created_by, winner_team,
           score_proposed, score_submitted_by, score_status, score_confirmations, score_text,
           club:padel_clubs ( name, city, address ),
           court:padel_courts ( name )
@@ -380,8 +375,7 @@ export default function PartidoDetallePage() {
 
           const nuevoRating = Math.max(1.0, parseFloat((ratingSelf + delta).toFixed(2)));
           const nuevaCat = categoriaDesdeRating(nuevoRating);
-          
-          // 🔥 Fiabilidad crece solo +3% (Tarda más en calibrarse totalmente)
+
           const nuevaFiabilidad = Math.min(100, fiabilidadActual + 3); 
           const nVics = (player.padel_profile?.victorias || 0) + (esGanador ? 1 : 0);
           const nDerr = (player.padel_profile?.derrotas || 0) + (esGanador ? 0 : 1);
@@ -406,10 +400,77 @@ export default function PartidoDetallePage() {
       }
 
       await cargarDetallePartido();
-      mostrarNotificacion("exito", "¡Partido Finalizado!", `Marcador aprobado. Los niveles han sido ajustados según la escala exigente de constancia.`);
+      mostrarNotificacion("exito", "¡Partido Finalizado!", `Marcador aprobado. Los niveles han sido ajustados.`);
     } catch (err) {
       console.error(err);
       mostrarNotificacion("error", "Error de Procesamiento", "No se pudo procesar la respuesta.");
+    } finally {
+      setProcesandoScore(false);
+    }
+  }
+
+  // 🚪 CANCELACIÓN EN VISTA DE DETALLE
+  async function confirmarCancelacionVista() {
+    if (!user || !match) return;
+
+    try {
+      setProcesandoScore(true);
+
+      const matchTime = new Date(match.scheduled_at).getTime();
+      const nowTime = new Date().getTime();
+      const diffHoras = (matchTime - nowTime) / (1000 * 60 * 60);
+      const esReembolsable = diffHoras > 10;
+
+      const soyCreador = match.created_by === user.id;
+      const esPrivado = match.is_private || match.match_type === "privado";
+      const costoIndividual = match.price_per_player || 4;
+      const costoTotalCancha = match.total_price || 16;
+
+      if (soyCreador || esPrivado) {
+        // Cancelar completo
+        await supabase.from("padel_matches").update({ status: "cancelado" }).eq("id", match.id);
+
+        if (esReembolsable) {
+          for (const p of match.players || []) {
+            if (!p.user_id) continue;
+            const montoDevolver = esPrivado && p.user_id === user.id ? costoTotalCancha : costoIndividual;
+
+            const { data: pProfile } = await supabase.from("profiles").select("creditos").eq("id", p.user_id).maybeSingle();
+            const nuevoSaldo = (pProfile?.creditos || 0) + montoDevolver;
+
+            await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", p.user_id);
+            await supabase.from("credit_ledger").insert({
+              user_id: p.user_id,
+              match_id: match.id,
+              delta: montoDevolver,
+              reason: "reembolso_cancelacion_partido_padel",
+              balance_after: nuevoSaldo,
+            });
+          }
+        }
+      } else {
+        // Salirse individualmente
+        await supabase.from("padel_match_players").delete().eq("match_id", match.id).eq("user_id", user.id);
+
+        if (esReembolsable) {
+          const { data: prof } = await supabase.from("profiles").select("creditos").eq("id", user.id).maybeSingle();
+          const nuevoSaldo = (prof?.creditos || 0) + costoIndividual;
+
+          await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", user.id);
+          await supabase.from("credit_ledger").insert({
+            user_id: user.id,
+            match_id: match.id,
+            delta: costoIndividual,
+            reason: "reembolso_salida_partido_padel",
+            balance_after: nuevoSaldo,
+          });
+        }
+      }
+
+      router.push("/padel/partidos");
+    } catch (e) {
+      console.error(e);
+      alert("No se pudo cancelar la reserva.");
     } finally {
       setProcesandoScore(false);
     }
@@ -423,11 +484,11 @@ export default function PartidoDetallePage() {
     );
   }
 
-  if (!match) {
+  if (!match || match.status === "cancelado") {
     return (
       <div className="min-h-screen bg-slate-50 p-8 flex flex-col items-center justify-center space-y-4">
-        <span className="text-4xl">🎾</span>
-        <h2 className="text-xl font-black text-slate-800">Partido no encontrado</h2>
+        <span className="text-4xl">🚫</span>
+        <h2 className="text-xl font-black text-slate-800">Partido Cancelado o No Encontrado</h2>
         <Link href="/padel/partidos" className="px-5 py-2.5 bg-slate-900 text-white text-xs font-black uppercase rounded-2xl">
           ← Volver a Partidos
         </Link>
@@ -443,6 +504,12 @@ export default function PartidoDetallePage() {
   const miJugador = match.players?.find((p) => p.user_id === user?.id);
   const soyDeParejaA = miJugador?.team === "A";
   const soyDeParejaB = miJugador?.team === "B";
+  const soyCreadorVista = match.created_by === user?.id;
+
+  const matchTimeVista = new Date(match.scheduled_at).getTime();
+  const nowTimeVista = new Date().getTime();
+  const horasFaltantesVista = (matchTimeVista - nowTimeVista) / (1000 * 60 * 60);
+  const esReembolsableVista = horasFaltantesVista > 10;
 
   const propuestoPorMiEquipo =
     (soyDeParejaA && match.players?.find((p) => p.user_id === match.score_submitted_by)?.team === "A") ||
@@ -456,6 +523,7 @@ export default function PartidoDetallePage() {
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 relative">
       <div className="mx-auto max-w-4xl space-y-6">
 
+        {/* HEADER DEL DETALLE */}
         <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-3">
           <Link href="/padel/partidos" className="text-xs font-black uppercase text-blue-600 hover:underline block">
             ← Volver a Partidos
@@ -628,8 +696,9 @@ export default function PartidoDetallePage() {
             </div>
           </div>
 
+          {/* ACCIONES Y BOTÓN DISCRETO DE CANCELACIÓN EN LA PARTE INFERIOR DE LA CARTA */}
           {match.status !== "jugado" && match.score_status !== "propuesto" && (
-            <div className="pt-4 border-t border-slate-100 text-center">
+            <div className="pt-4 border-t border-slate-100 text-center space-y-3">
               <button
                 onClick={() => partidoLleno && setModalResultadoOpen(true)}
                 disabled={!partidoLleno}
@@ -643,12 +712,25 @@ export default function PartidoDetallePage() {
                   ? "📝 Cargar Resultado del Partido"
                   : `⏳ Esperando a 4 jugadores para finalizar (${totalJugadores}/4)`}
               </button>
+
+              {/* 🔻 BOTÓN DE CANCELAR DISCRETO AL FINAL DE LA CARTA */}
+              {(miJugador || soyCreadorVista) && match.status === "programado" && (
+                <div>
+                  <button
+                    onClick={() => setModalCancelOpen(true)}
+                    className="text-xs font-bold text-rose-500 hover:text-rose-700 hover:underline transition-colors py-1 px-3"
+                  >
+                    🚫 Cancelar mi reserva de este partido
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
 
       </div>
 
+      {/* MODAL MARCADOR */}
       {modalResultadoOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
           <div className="bg-white rounded-[2.5rem] max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-slate-100 space-y-5 my-6">
@@ -795,6 +877,63 @@ export default function PartidoDetallePage() {
                 {procesandoScore ? "ENVIANDO..." : "PROPONER MARCADOR AL RIVAL →"}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CANCELAR EN DETALLE */}
+      {modalCancelOpen && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" onClick={() => setModalCancelOpen(false)}>
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4 text-center border border-slate-100" onClick={(e) => e.stopPropagation()}>
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto text-2xl font-black">
+              ⚠️
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-lg font-black text-slate-900">
+                {soyCreadorVista ? "¿Cancelar Partido Completo?" : "¿Salir del Partido?"}
+              </h3>
+              <p className="text-xs text-slate-500 font-bold">
+                {formatFechaLarga(match.scheduled_at)}
+              </p>
+            </div>
+
+            <div className={`p-3.5 rounded-2xl text-xs font-bold text-left space-y-1 ${
+              esReembolsableVista ? "bg-emerald-50 border border-emerald-200 text-emerald-900" : "bg-amber-50 border border-amber-200 text-amber-900"
+            }`}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-black tracking-wider">Política de Cancelación</span>
+                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${esReembolsableVista ? "bg-emerald-200 text-emerald-950" : "bg-amber-200 text-amber-950"}`}>
+                  Faltan {horasFaltantesVista.toFixed(1)}h
+                </span>
+              </div>
+
+              {esReembolsableVista ? (
+                <p className="normal-case text-[11px]">
+                  ✅ <strong>Faltan más de 10 horas.</strong> Tus créditos invertidos serán devueltos a tu saldo inmediatamente.
+                </p>
+              ) : (
+                <p className="normal-case text-[11px]">
+                  ⚠️ <strong>Faltan menos de 10 horas.</strong> La reserva se cancelará pero <u>tus créditos no serán reembolsados</u>.
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setModalCancelOpen(false)}
+                className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-2xl"
+              >
+                Volver
+              </button>
+              <button
+                onClick={confirmarCancelacionVista}
+                disabled={procesandoScore}
+                className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-2xl shadow-md"
+              >
+                {procesandoScore ? "Procesando..." : "Sí, Cancelar"}
+              </button>
+            </div>
           </div>
         </div>
       )}
