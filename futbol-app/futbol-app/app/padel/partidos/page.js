@@ -44,16 +44,16 @@ export default function PadelPartidosPage() {
         misPartidosIds = (misJugadoresData || []).map((m) => m.match_id).filter(Boolean);
       }
 
-      // 2. Consultar partidos programados
+      // 2. Consultar partidos programados Y jugados (Para no perder el historial)
       const { data: matchesData, error: matchesErr } = await supabase
         .from("padel_matches")
         .select(`
           id, club_id, court_id, match_type, is_private, scheduled_at, status, category_restriction,
-          gender_restriction, is_competitive, price_per_player, created_by,
+          gender_restriction, is_competitive, price_per_player, created_by, winner_team, score_status, score_text,
           club:padel_clubs ( name, city, address ),
           court:padel_courts ( name )
         `)
-        .eq("status", "programado")
+        .in("status", ["programado", "jugado"])
         .order("scheduled_at", { ascending: true });
 
       if (matchesErr) throw matchesErr;
@@ -118,7 +118,7 @@ export default function PadelPartidosPage() {
     }
   }
 
-  // 1. MIS PARTIDOS Y RESERVAS (Donde soy jugador o creador)
+  // 1. MIS PARTIDOS Y RESERVAS (Programados y Jugados donde participo)
   const misPartidos = useMemo(() => {
     if (!user) return [];
     return matches.filter((m) => {
@@ -128,13 +128,14 @@ export default function PadelPartidosPage() {
     });
   }, [matches, user]);
 
-  // 2. PARTIDOS ABIERTOS DE LA COMUNIDAD (Públicos donde NO estoy)
+  // 2. PARTIDOS ABIERTOS DE LA COMUNIDAD (Públicos y Programados donde NO estoy)
   const partidosAbiertos = useMemo(() => {
     return matches.filter((m) => {
+      if (m.status !== "programado") return false; // Sólo mostrar programados en abiertos
       const esPrivado = m.is_private || m.match_type === "privado";
       if (esPrivado) return false;
 
-      // Excluir los que ya estoy metido (esos están arriba en Mis Partidos)
+      // Excluir los que ya estoy metido
       if (user && m.players?.some((p) => p.user_id === user.id)) return false;
 
       // Filtros
@@ -164,7 +165,7 @@ export default function PadelPartidosPage() {
             <span className="text-xs font-black uppercase tracking-widest text-blue-600">Sports Hub · Pádel</span>
             <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight">Centro de Partidos 🎾</h1>
             <p className="text-xs text-slate-500 font-semibold mt-1">
-              Revisa tus reservas activas o únete a partidos abiertos creados por la comunidad.
+              Revisa tus reservas activas y partidos jugados, o únete a partidos abiertos.
             </p>
           </div>
 

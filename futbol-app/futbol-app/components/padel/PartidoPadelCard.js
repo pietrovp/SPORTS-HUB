@@ -42,6 +42,9 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
   const esPrivado = match.is_private || match.match_type === "privado";
   const lleno = inscritosCount >= 4;
 
+  const esJugado = match.status === "jugado";
+  const esPropuesto = match.score_status === "propuesto";
+
   const slots = [0, 1, 2, 3].map((index) => players[index] || null);
 
   // Cálculo de horas faltantes
@@ -149,7 +152,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
       const costoTotalCancha = match.total_price || 16;
 
       if (soyCreador || esPrivado) {
-        // CANCELAR PARTIDO COMPLETO
         const { error: errMatch } = await supabase
           .from("padel_matches")
           .update({ status: "cancelado" })
@@ -184,7 +186,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
           }
         }
       } else {
-        // SALIRSE INDIVIDUALMENTE DEL PARTIDO
         const { error: errDel } = await supabase
           .from("padel_match_players")
           .delete()
@@ -220,7 +221,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
   return (
     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between p-5 space-y-4">
       
-      {/* 1. HEADER FECHA & TIPO */}
+      {/* 1. HEADER FECHA & ESTADO */}
       <div>
         <div className="flex flex-wrap justify-between items-center gap-2 mb-2">
           <span className="text-xs sm:text-sm font-black text-slate-900 capitalize flex items-center gap-1.5">
@@ -229,7 +230,15 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
           </span>
 
           <div className="flex items-center gap-1.5">
-            {esPrivado ? (
+            {esJugado ? (
+              <span className="bg-emerald-100 text-emerald-800 font-black text-[10px] uppercase px-2.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1">
+                <span>🏆</span> Finalizado
+              </span>
+            ) : esPropuesto ? (
+              <span className="bg-amber-100 text-amber-900 font-black text-[10px] uppercase px-2.5 py-0.5 rounded-full border border-amber-300 animate-pulse flex items-center gap-1">
+                <span>⏳</span> Aprobar Marcador
+              </span>
+            ) : esPrivado ? (
               <span className="bg-slate-900 text-amber-300 font-black text-[10px] uppercase px-2.5 py-0.5 rounded-full border border-slate-800 flex items-center gap-1">
                 <span>🔒</span> Privado
               </span>
@@ -306,7 +315,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
               <button
                 key={idx}
                 onClick={unirse}
-                disabled={yaInscrito || lleno || procesando}
+                disabled={yaInscrito || lleno || procesando || esJugado}
                 className="flex flex-col items-center gap-1 group z-10 transition-transform active:scale-95"
               >
                 <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full border-2 border-dashed border-slate-300 group-hover:border-blue-500 bg-white flex items-center justify-center text-slate-400 group-hover:text-blue-600 transition-colors shadow-xs">
@@ -322,7 +331,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
         </div>
       </div>
 
-      {/* 3. FOOTER CLUB + BOTONES */}
+      {/* 3. FOOTER CLUB + BOTONES DINÁMICOS */}
       <div className="space-y-3 pt-1">
         <div className="flex justify-between items-end">
           <div>
@@ -336,7 +345,9 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
 
           <div className="text-right shrink-0">
             <span className="text-sm font-black text-blue-600 block">
-              {esPrivado ? (
+              {esJugado ? (
+                <span className="text-xs font-black text-emerald-600">{match.score_text || "Jugado"}</span>
+              ) : esPrivado ? (
                 <span className="text-xs font-black text-slate-700">Reserva Completa</span>
               ) : (
                 <>
@@ -355,7 +366,23 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
 
         {/* FILA DE BOTONES PRINCIPALES */}
         <div className="flex gap-2">
-          {esPrivado ? (
+          {esJugado ? (
+            /* 🟢 SI EL PARTIDO ESTÁ FINALIZADO */
+            <Link
+              href={`/padel/partidos/${match.id}`}
+              className="flex-1 py-3 bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 font-black text-xs uppercase tracking-wider rounded-2xl text-center block transition-colors shadow-xs"
+            >
+              🏆 Ver Resultado / Evaluación
+            </Link>
+          ) : esPropuesto && yaInscrito ? (
+            /* ⏳ SI HAY MARCADOR PROPUESTO PENDIENTE DE APROBACIÓN */
+            <Link
+              href={`/padel/partidos/${match.id}`}
+              className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl text-center block transition-all shadow-md active:scale-98"
+            >
+              ⏳ Aprobar Marcador
+            </Link>
+          ) : esPrivado ? (
             <Link
               href={`/padel/partidos/${match.id}`}
               className="flex-1 py-3 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-800 font-black text-xs uppercase tracking-wider rounded-2xl text-center block shadow-sm transition-colors"
@@ -367,7 +394,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
               href={`/padel/partidos/${match.id}`}
               className="flex-1 py-3 bg-emerald-50 text-emerald-800 border border-emerald-200 font-black text-xs uppercase tracking-wider rounded-2xl text-center block"
             >
-              ✓ Ver Partido / Resultado
+              ✓ Ver Partido
             </Link>
           ) : lleno ? (
             <Link
@@ -396,8 +423,8 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
           </Link>
         </div>
 
-        {/* 🔻 BOTÓN DE CANCELAR DISCRETO (UBICADO DEBAJO DE LOS BOTONES PRINCIPALES) */}
-        {(yaInscrito || soyCreador) && (
+        {/* 🔻 CANCELAR MI RESERVA (SÓLO PARA PARTIDOS PROGRAMADOS Y NO FINALIZADOS) */}
+        {!esJugado && match.status === "programado" && (yaInscrito || soyCreador) && (
           <div className="text-center pt-1">
             <button
               onClick={() => setModalCancelOpen(true)}

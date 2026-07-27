@@ -125,6 +125,7 @@ export default function PartidoDetallePage() {
   const [notificacion, setNotificacion] = useState(null);
   const [modalCancelOpen, setModalCancelOpen] = useState(false);
 
+  // Estados Marcador
   const [modalResultadoOpen, setModalResultadoOpen] = useState(false);
   const [set1A, setSet1A] = useState(6);
   const [set1B, setSet1B] = useState(4);
@@ -143,6 +144,11 @@ export default function PartidoDetallePage() {
   const [tb3B, setTb3B] = useState(0);
 
   const [procesandoScore, setProcesandoScore] = useState(false);
+
+  // 📝 Estados para la Encuesta de Nivel Post-Partido
+  const [evaluaciones, setEvaluaciones] = useState({});
+  const [encuestaEnviada, setEncuestaEnviada] = useState(false);
+  const [enviandoEncuesta, setEnviandoEncuesta] = useState(false);
 
   useEffect(() => {
     if (matchId) cargarDetallePartido();
@@ -176,9 +182,10 @@ export default function PartidoDetallePage() {
         return;
       }
 
+      // 🛑 AQUÍ SE AÑADIÓ "has_evaluated" AL SELECT
       const { data: rawPlayers } = await supabase
         .from("padel_match_players")
-        .select("id, user_id, team")
+        .select("id, user_id, team, has_evaluated")
         .eq("match_id", matchId);
 
       const userIds = (rawPlayers || []).map((p) => p.user_id).filter(Boolean);
@@ -216,6 +223,24 @@ export default function PartidoDetallePage() {
         ...matchData,
         players: playersFormatted,
       });
+
+      // Validar si el usuario actual ya había enviado la encuesta según la Base de Datos
+      if (authUser) {
+        const miJugadorDb = playersFormatted.find((p) => p.user_id === authUser.id);
+        
+        if (miJugadorDb?.has_evaluated) {
+          setEncuestaEnviada(true);
+        } else {
+          // Si no la ha enviado, inicializamos respuestas por defecto ("adecuado")
+          const otros = playersFormatted.filter((p) => p.user_id !== authUser.id && p.user_id);
+          const inicial = {};
+          otros.forEach((p) => {
+            inicial[p.user_id] = "adecuado";
+          });
+          setEvaluaciones(inicial);
+        }
+      }
+
     } catch (err) {
       console.error(err);
       setMatch(null);
@@ -224,9 +249,85 @@ export default function PartidoDetallePage() {
     }
   }
 
+  // 📝 ENVIAR ENCUESTA DE NIVEL DE JUGADORES
+  async function enviarEncuestaNivel() {
+    if (!user || !match) return;
+
+    try {
+      setEnviandoEncuesta(true);
+
+      for (const [targetUserId, opinion] of Object.entries(evaluaciones)) {
+        const targetPlayer = match.players?.find((p) => p.user_id === targetUserId);
+        if (!targetPlayer) continue;
+
+        const pProf = targetPlayer.padel_profile;
+        let fiabilidadActual = Number(pProf?.fiabilidad) || 20;
+        let ratingActual = Number(pProf?.rating) || 1.50;
+
+        if (opinion === "adecuado") {
+          // Aumenta la fiabilidad por confirmación de la comunidad (+2%)
+          fiabilidadActual = Math.min(100, fiabilidadActual + 2);
+        } else if (opinion === "mas_nivel") {
+          // Ligero ajuste de aceleración de rating
+          ratingActual = Math.min(7.0, parseFloat((ratingActual + 0.04).toFixed(2)));
+          fiabilidadActual = Math.min(100, fiabilidadActual + 1);
+        } else if (opinion === "menor_nivel") {
+          // Ligero ajuste a la baja
+          ratingActual = Math.max(1.0, parseFloat((ratingActual - 0.04).toFixed(2)));
+          fiabilidadActual = Math.min(100, fiabilidadActual + 1);
+        }
+
+        const nuevaCat = categoriaDesdeRating(ratingActual);
+
+        await supabase
+          .from("padel_profiles")
+          .update({
+            fiabilidad: fiabilidadActual,
+            rating: ratingActual,
+            categoria_oficial: nuevaCat,
+          })
+          .eq("cuenta_id", targetUserId);
+      }
+
+      // 🛑 AQUÍ MARCAMOS EN LA BD QUE ESTE USUARIO YA LLENÓ SU ENCUESTA PARA ESTE PARTIDO
+      await supabase
+        .from("padel_match_players")
+        .update({ has_evaluated: true })
+        .eq("match_id", match.id)
+        .eq("user_id", user.id);
+
+      // Recompensa al usuario que respondió la encuesta (+2% de fiabilidad en su perfil)
+      const { data: miPProf } = await supabase
+        .from("padel_profiles")
+        .select("fiabilidad")
+        .eq("cuenta_id", user.id)
+        .maybeSingle();
+
+      if (miPProf) {
+        await supabase
+          .from("padel_profiles")
+          .update({ fiabilidad: Math.min(100, (miPProf.fiabilidad || 20) + 2) })
+          .eq("cuenta_id", user.id);
+      }
+
+      setEncuestaEnviada(true);
+      mostrarNotificacion("exito", "¡Gracias por evaluar!", "Tus respuestas ayudan a mantener la precisión y fiabilidad del Ranking.");
+    } catch (err) {
+      console.error("Error guardando encuesta:", err);
+      mostrarNotificacion("error", "Error", "No se pudieron guardar las evaluaciones.");
+    } finally {
+      setEnviandoEncuesta(false);
+    }
+  }
+
   async function enviarPropuestaResultado(e) {
     e.preventDefault();
     if (!match || !user) return;
+
+    // Validación de seguridad adicional
+    if (match.created_by !== user.id) {
+      return mostrarNotificacion("error", "Sin Permisos", "Solo el organizador del partido puede proponer el marcador.");
+    }
 
     const val1 = validarSet(set1A, set1B, tb1A, tb1B);
     if (!val1.valido) return mostrarNotificacion("error", "Error en Set 1", val1.msg);
@@ -409,7 +510,6 @@ export default function PartidoDetallePage() {
     }
   }
 
-  // 🚪 CANCELACIÓN EN VISTA DE DETALLE
   async function confirmarCancelacionVista() {
     if (!user || !match) return;
 
@@ -427,7 +527,6 @@ export default function PartidoDetallePage() {
       const costoTotalCancha = match.total_price || 16;
 
       if (soyCreador || esPrivado) {
-        // Cancelar completo
         await supabase.from("padel_matches").update({ status: "cancelado" }).eq("id", match.id);
 
         if (esReembolsable) {
@@ -449,7 +548,6 @@ export default function PartidoDetallePage() {
           }
         }
       } else {
-        // Salirse individualmente
         await supabase.from("padel_match_players").delete().eq("match_id", match.id).eq("user_id", user.id);
 
         if (esReembolsable) {
@@ -506,6 +604,8 @@ export default function PartidoDetallePage() {
   const soyDeParejaB = miJugador?.team === "B";
   const soyCreadorVista = match.created_by === user?.id;
 
+  const otrosJugadores = match.players?.filter((p) => p.user_id !== user?.id && p.user_id) || [];
+
   const matchTimeVista = new Date(match.scheduled_at).getTime();
   const nowTimeVista = new Date().getTime();
   const horasFaltantesVista = (matchTimeVista - nowTimeVista) / (1000 * 60 * 60);
@@ -518,6 +618,9 @@ export default function PartidoDetallePage() {
   const v1 = validarSet(set1A, set1B, tb1A, tb1B);
   const v2 = validarSet(set2A, set2B, tb2A, tb2B);
   const v3 = usarSet3 ? validarSet(set3A, set3B, tb3A, tb3B) : { valido: true };
+
+  const creadorObj = match.players?.find((p) => p.user_id === match.created_by);
+  const nombreCreador = creadorObj?.profile?.nombre || "Organizador";
 
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 relative">
@@ -563,6 +666,7 @@ export default function PartidoDetallePage() {
           )}
         </div>
 
+        {/* ALERTA / BANNER SI HAY PROPUESTA PENDIENTE */}
         {match.status !== "jugado" && match.score_status === "propuesto" && (
           <div className="bg-amber-50 border-2 border-amber-300 p-5 rounded-3xl shadow-sm space-y-3">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-amber-200/80 pb-3">
@@ -609,6 +713,7 @@ export default function PartidoDetallePage() {
           </div>
         )}
 
+        {/* ALINEACIÓN DE PISTA */}
         <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
           <h2 className="text-center text-xs font-black uppercase tracking-widest text-slate-400">
             Alineación de Pista
@@ -696,24 +801,32 @@ export default function PartidoDetallePage() {
             </div>
           </div>
 
-          {/* ACCIONES Y BOTÓN DISCRETO DE CANCELACIÓN EN LA PARTE INFERIOR DE LA CARTA */}
+          {/* ACCIONES DE BOTÓN DE CARGA DE MARCADOR */}
           {match.status !== "jugado" && match.score_status !== "propuesto" && (
             <div className="pt-4 border-t border-slate-100 text-center space-y-3">
-              <button
-                onClick={() => partidoLleno && setModalResultadoOpen(true)}
-                disabled={!partidoLleno}
-                className={`px-6 py-3.5 font-black text-xs uppercase tracking-widest rounded-2xl transition-all shadow-lg ${
-                  partidoLleno
-                    ? "bg-[#0B1120] text-[#00FF9D] hover:bg-slate-900 active:scale-95 cursor-pointer"
-                    : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 shadow-none"
-                }`}
-              >
-                {partidoLleno
-                  ? "📝 Cargar Resultado del Partido"
-                  : `⏳ Esperando a 4 jugadores para finalizar (${totalJugadores}/4)`}
-              </button>
+              {soyCreadorVista ? (
+                /* SOLO EL CREADOR PUEDE CARGAR EL MARCADOR */
+                <button
+                  onClick={() => partidoLleno && setModalResultadoOpen(true)}
+                  disabled={!partidoLleno}
+                  className={`px-6 py-3.5 font-black text-xs uppercase tracking-widest rounded-2xl transition-all shadow-lg ${
+                    partidoLleno
+                      ? "bg-[#0B1120] text-[#00FF9D] hover:bg-slate-900 active:scale-95 cursor-pointer"
+                      : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 shadow-none"
+                  }`}
+                >
+                  {partidoLleno
+                    ? "📝 Cargar Resultado del Partido"
+                    : `⏳ Esperando a 4 jugadores para finalizar (${totalJugadores}/4)`}
+                </button>
+              ) : (
+                /* MENSAJE PARA LOS OTROS TRES JUGADORES */
+                <div className="bg-slate-50 border border-slate-200/80 p-3.5 rounded-2xl text-xs font-bold text-slate-600 max-w-md mx-auto">
+                  📌 Solo el organizador del partido (<strong className="text-slate-900">{nombreCreador}</strong>) tiene permisos para cargar el marcador inicial. Una vez enviado, podrás confirmarlo aquí.
+                </div>
+              )}
 
-              {/* 🔻 BOTÓN DE CANCELAR DISCRETO AL FINAL DE LA CARTA */}
+              {/* BOTÓN DISCRETO DE CANCELAR */}
               {(miJugador || soyCreadorVista) && match.status === "programado" && (
                 <div>
                   <button
@@ -727,6 +840,112 @@ export default function PartidoDetallePage() {
             </div>
           )}
         </div>
+
+        {/* 📊 SECCIÓN: ENCUESTA DE EVALUACIÓN DE NIVEL (SÓLO SI EL PARTIDO YA SE JUGÓ) */}
+        {match.status === "jugado" && miJugador && otrosJugadores.length > 0 && (
+          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
+            <div className="border-b border-slate-100 pb-3">
+              <span className="text-[10px] font-black uppercase tracking-widest text-blue-600 block">
+                Comunidad & Fiabilidad
+              </span>
+              <h3 className="text-base font-black text-slate-900 flex items-center gap-1.5 mt-0.5">
+                <span>🎯</span> Evaluemos el Nivel Real del Partido
+              </h3>
+              <p className="text-xs text-slate-500 font-semibold mt-1">
+                ¿Qué tal jugaron tus compañeros y rivales? Tu opinión ajusta la fiabilidad de sus perfiles y recalibra las categorías oficiales.
+              </p>
+            </div>
+
+            {encuestaEnviada ? (
+              <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center space-y-1">
+                <span className="text-xs font-black text-emerald-800 uppercase tracking-widest block">
+                  🎉 ¡Evaluación Registrada con Éxito!
+                </span>
+                <p className="text-xs font-bold text-emerald-900">
+                  Ganaste <strong className="text-emerald-950">+2% de Fiabilidad</strong> por contribuir a la comunidad.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4 pt-1">
+                <div className="space-y-3">
+                  {otrosJugadores.map((p) => {
+                    const nombreStr = p.profile ? `${p.profile.nombre} ${p.profile.apellido || ""}`.trim() : "Jugador";
+                    const actualRating = p.padel_profile?.rating ? Number(p.padel_profile.rating).toFixed(2) : "1.50";
+                    const actualOpinion = evaluaciones[p.user_id] || "adecuado";
+
+                    return (
+                      <div key={p.user_id} className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-slate-900 text-white font-black flex items-center justify-center overflow-hidden shrink-0 text-xs">
+                            {p.profile?.avatar_url ? (
+                              <img src={p.profile.avatar_url} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              nombreStr.charAt(0).toUpperCase()
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-xs font-black text-slate-900">{nombreStr}</p>
+                            <span className="text-[10px] font-bold text-slate-400">
+                              Nivel registrado: {actualRating}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* SELECTOR DE NIVEL */}
+                        <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                          <button
+                            type="button"
+                            onClick={() => setEvaluaciones({ ...evaluaciones, [p.user_id]: "menor_nivel" })}
+                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                              actualOpinion === "menor_nivel"
+                                ? "bg-rose-600 text-white shadow-xs"
+                                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                            }`}
+                          >
+                            📉 Menor
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setEvaluaciones({ ...evaluaciones, [p.user_id]: "adecuado" })}
+                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                              actualOpinion === "adecuado"
+                                ? "bg-emerald-600 text-white shadow-xs"
+                                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                            }`}
+                          >
+                            🟢 Adecuado
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setEvaluaciones({ ...evaluaciones, [p.user_id]: "mas_nivel" })}
+                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                              actualOpinion === "mas_nivel"
+                                ? "bg-blue-600 text-white shadow-xs"
+                                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                            }`}
+                          >
+                            ⚡ Mayor
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={enviarEncuestaNivel}
+                  disabled={enviandoEncuesta}
+                  className="w-full py-3.5 bg-[#0B1120] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md transition-all active:scale-95 disabled:opacity-50"
+                >
+                  {enviandoEncuesta ? "ENVIANDO EVALUACIONES..." : "ENVIAR EVALUACIÓN DE JUGADORES →"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
       </div>
 
