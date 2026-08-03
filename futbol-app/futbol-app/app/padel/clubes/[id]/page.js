@@ -88,8 +88,9 @@ export default function ClubDetallePage() {
     return new Date().toISOString().split("T")[0];
   });
 
-  // Modal Reserva
+  // Estado del Modal de Reserva (UX de 2 Pasos)
   const [modalReservaOpen, setModalReservaOpen] = useState(false);
+  const [pasoModal, setPasoModal] = useState(1); // 1 = Resumen, 2 = Pago
   const [slotSeleccionado, setSlotSeleccionado] = useState(null);
 
   // Formulario y Pagos
@@ -97,6 +98,7 @@ export default function ClubDetallePage() {
   const [tipoJuego, setTipoJuego] = useState("competitivo");
   const [catMaximaAmistoso, setCatMaximaAmistoso] = useState("open");
   const [prefGenero, setPrefGenero] = useState("todos");
+  const [metodoPagoElegido, setMetodoPagoElegido] = useState("efectivo"); // efectivo, zelle, pago_movil
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [errorReserva, setErrorReserva] = useState("");
 
@@ -230,19 +232,20 @@ export default function ClubDetallePage() {
     
     setModoPago("cuota");
     setTipoJuego("competitivo");
+    setMetodoPagoElegido("efectivo");
+    setPasoModal(1);
     setErrorReserva("");
     setModalReservaOpen(true);
   }
 
   const rangoCompetitivo = useMemo(() => getRangoCompetitivoAutomático(userCategoria), [userCategoria]);
 
-  // PROCESAR RESERVA
+  // PROCESAR RESERVA FINAL
   async function confirmarCreacionPartido() {
     if (!user || !slotSeleccionado || !club) return;
 
     const esPrivado = modoPago === "completa";
-    const costoFinal = esPrivado ? slotSeleccionado.precioTotal : (slotSeleccionado.precioTotal / 4);
-
+    
     try {
       setProcesandoPago(true);
       setErrorReserva("");
@@ -268,7 +271,7 @@ export default function ClubDetallePage() {
           club_id: club.id,
           court_id: slotSeleccionado.court.id,
           scheduled_at: new Date(matchTimestamp).toISOString(),
-          status: "programado",
+          status: "programado", // O podrías poner "pendiente_pago" si eligió Zelle/Pago Movil
           is_private: esPrivado,
           match_type: esPrivado ? "privado" : "abierto",
           category_restriction: restriccionCategoriaFinal,
@@ -287,12 +290,13 @@ export default function ClubDetallePage() {
         match_id: nuevoPartido.id,
         user_id: user.id,
         team: "A",
+        // payment_method: metodoPagoElegido // Opcional: si agregas esta columna a la BD en el futuro
       });
 
       if (playerErr) throw new Error(playerErr.message);
 
       setModalReservaOpen(false);
-      router.push(`/padel/partidos`);
+      router.push(`/padel/partidos`); // Redirige al centro de partidos donde verá su reserva
     } catch (err) {
       console.error("Error al reservar:", err);
       setErrorReserva("Error al procesar la reserva. Intenta de nuevo.");
@@ -452,90 +456,162 @@ export default function ClubDetallePage() {
         </div>
       </div>
 
-      {/* 🟢 POP-UP INFERIOR DE RESERVA ESTILO PLAYTOMIC */}
+      {/* 🟢 POP-UP INFERIOR DE RESERVA ESTILO PLAYTOMIC (2 PASOS) */}
       {modalReservaOpen && slotSeleccionado && (
         <div className="fixed inset-0 z-[10000] flex flex-col justify-end bg-black/50 backdrop-blur-xs transition-opacity" onClick={() => setModalReservaOpen(false)}>
           <div className="w-full max-w-2xl mx-auto bg-white rounded-t-[2.5rem] p-5 sm:p-7 shadow-[0_-15px_40px_rgba(0,0,0,0.15)] border-t border-slate-100 space-y-4 max-h-[88vh] overflow-y-auto animate-in slide-in-from-bottom duration-200" onClick={(e) => e.stopPropagation()}>
             
             <div className="flex justify-between items-start border-b border-slate-100 pb-3">
               <div>
-                <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Reservar Pista</h2>
+                {pasoModal === 1 && <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Reservar Pista</h2>}
+                {pasoModal === 2 && (
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setPasoModal(1)} className="text-slate-400 hover:text-slate-900 transition-colors">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" /></svg>
+                    </button>
+                    <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Método de Pago</h2>
+                  </div>
+                )}
                 <p className="text-xs font-bold text-slate-400 mt-0.5">{slotSeleccionado.court.name} • {slotSeleccionado.hora}</p>
               </div>
               <button onClick={() => setModalReservaOpen(false)} className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold flex items-center justify-center hover:bg-slate-200 transition-colors">✕</button>
             </div>
 
-            {/* Resumen Financiero Transparente con BCV para TODO */}
-            <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold text-slate-500 block">Costo de Pista (Club)</span>
-                  {tasaBcv > 0 && <span className="text-[9px] font-medium text-slate-400">Ref: Bs {(slotSeleccionado.precioClub * tasaBcv).toFixed(2)}</span>}
-                </div>
-                <span className="text-sm font-bold text-slate-500">${slotSeleccionado.precioClub.toFixed(2)}</span>
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold text-blue-600 block">Service Fee (App)</span>
-                  {tasaBcv > 0 && <span className="text-[9px] font-medium text-blue-400">Ref: Bs {(slotSeleccionado.comisionApp * tasaBcv).toFixed(2)}</span>}
-                </div>
-                <span className="text-sm font-bold text-blue-600">${slotSeleccionado.comisionApp.toFixed(2)}</span>
-              </div>
-              
-              <div className="border-t border-slate-200 pt-3 flex items-end justify-between">
-                <span className="text-sm font-black text-slate-900">Total a Pagar</span>
-                <div className="text-right">
-                  <span className="text-lg font-black text-slate-900 block">${slotSeleccionado.precioTotal.toFixed(2)}</span>
-                  {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Ref: Bs {(slotSeleccionado.precioTotal * tasaBcv).toFixed(2)}</span>}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div onClick={() => setModoPago("cuota")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${modoPago === "cuota" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
-                <div className="flex items-center gap-3">
-                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "cuota" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "cuota" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
-                  <div>
-                    <p className="font-black text-slate-900 text-sm">Pagas tu parte</p>
-                    <p className="text-xs font-semibold text-slate-400 mt-0.5">Partido público (1/4 del total)</p>
+            {/* ====== PASO 1: RESUMEN DE LA RESERVA ====== */}
+            {pasoModal === 1 && (
+              <div className="animate-in fade-in duration-200 space-y-4">
+                {/* Resumen Financiero */}
+                <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-slate-500 block">Costo de Pista (Club)</span>
+                      {tasaBcv > 0 && <span className="text-[9px] font-medium text-slate-400">Ref: Bs {(slotSeleccionado.precioClub * tasaBcv).toFixed(2)}</span>}
+                    </div>
+                    <span className="text-sm font-bold text-slate-500">${slotSeleccionado.precioClub.toFixed(2)}</span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-blue-600 block">Service Fee (App)</span>
+                      {tasaBcv > 0 && <span className="text-[9px] font-medium text-blue-400">Ref: Bs {(slotSeleccionado.comisionApp * tasaBcv).toFixed(2)}</span>}
+                    </div>
+                    <span className="text-sm font-bold text-blue-600">${slotSeleccionado.comisionApp.toFixed(2)}</span>
+                  </div>
+                  
+                  <div className="border-t border-slate-200 pt-3 flex items-end justify-between">
+                    <span className="text-sm font-black text-slate-900">Total a Pagar</span>
+                    <div className="text-right">
+                      <span className="text-lg font-black text-slate-900 block">${slotSeleccionado.precioTotal.toFixed(2)}</span>
+                      {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Ref: Bs {(slotSeleccionado.precioTotal * tasaBcv).toFixed(2)}</span>}
+                    </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
-                    ${(slotSeleccionado.precioTotal / 4).toFixed(2)} <span className="text-[10px] text-slate-400 font-bold">c/u</span>
-                  </span>
-                  {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Bs {((slotSeleccionado.precioTotal / 4) * tasaBcv).toFixed(2)}</span>}
-                </div>
-              </div>
 
-              <div onClick={() => setModoPago("completa")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${modoPago === "completa" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
-                <div className="flex items-center gap-3">
-                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "completa" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "completa" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
-                  <div>
-                    <p className="font-black text-slate-900 text-sm flex items-center gap-1.5">Reserva Completa 🔒</p>
-                    <p className="text-xs font-semibold text-slate-400 mt-0.5">Pagas el total, cancha privada</p>
+                <div className="space-y-2">
+                  <div onClick={() => setModoPago("cuota")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${modoPago === "cuota" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "cuota" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "cuota" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
+                      <div>
+                        <p className="font-black text-slate-900 text-sm">Pagas tu parte</p>
+                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Partido público (1/4 del total)</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
+                        ${(slotSeleccionado.precioTotal / 4).toFixed(2)} <span className="text-[10px] text-slate-400 font-bold">c/u</span>
+                      </span>
+                      {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Bs {((slotSeleccionado.precioTotal / 4) * tasaBcv).toFixed(2)}</span>}
+                    </div>
+                  </div>
+
+                  <div onClick={() => setModoPago("completa")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${modoPago === "completa" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "completa" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "completa" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
+                      <div>
+                        <p className="font-black text-slate-900 text-sm flex items-center gap-1.5">Reserva Completa 🔒</p>
+                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Pagas el total, cancha privada</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
+                        ${slotSeleccionado.precioTotal.toFixed(2)}
+                      </span>
+                      {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Bs {(slotSeleccionado.precioTotal * tasaBcv).toFixed(2)}</span>}
+                    </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
-                    ${slotSeleccionado.precioTotal.toFixed(2)}
-                  </span>
-                  {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Bs {(slotSeleccionado.precioTotal * tasaBcv).toFixed(2)}</span>}
+
+                <div className="border-t border-slate-100 pt-3 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <button type="button" disabled={modoPago === "completa"} onClick={() => setTipoJuego("competitivo")} className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${modoPago === "completa" ? "opacity-40 cursor-not-allowed bg-slate-100 text-slate-400" : tipoJuego === "competitivo" ? "bg-[#0B1120] text-[#00FF9D] shadow-md" : "bg-slate-50 border border-slate-200 text-slate-600"}`}>⚡ Comp.</button>
+                    <button type="button" onClick={() => setTipoJuego("amistoso")} className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${tipoJuego === "amistoso" ? "bg-[#0B1120] text-white shadow-md" : "bg-slate-50 border border-slate-200 text-slate-600"}`}>🤝 Amistoso</button>
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            <div className="border-t border-slate-100 pt-3 space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <button type="button" disabled={modoPago === "completa"} onClick={() => setTipoJuego("competitivo")} className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${modoPago === "completa" ? "opacity-40 cursor-not-allowed bg-slate-100 text-slate-400" : tipoJuego === "competitivo" ? "bg-[#0B1120] text-[#00FF9D] shadow-md" : "bg-slate-50 border border-slate-200 text-slate-600"}`}>⚡ Comp.</button>
-                <button type="button" onClick={() => setTipoJuego("amistoso")} className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${tipoJuego === "amistoso" ? "bg-[#0B1120] text-white shadow-md" : "bg-slate-50 border border-slate-200 text-slate-600"}`}>🤝 Amistoso</button>
+                <button onClick={() => setPasoModal(2)} className="w-full bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors shadow-lg shadow-gray-900/20">
+                  Continuar al Pago
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+                </button>
               </div>
-            </div>
+            )}
 
-            <button onClick={confirmarCreacionPartido} disabled={procesandoPago} className="w-full bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-70 shadow-lg shadow-gray-900/20">
-              {procesandoPago ? "Procesando Pago..." : `Pagar $${(modoPago === "completa" ? slotSeleccionado.precioTotal : slotSeleccionado.precioTotal / 4).toFixed(2)}`}
-            </button>
+            {/* ====== PASO 2: SELECCIÓN DE MÉTODO DE PAGO ====== */}
+            {pasoModal === 2 && (
+              <div className="animate-in slide-in-from-right-4 duration-200 space-y-4">
+                
+                <div className="space-y-3">
+                  {/* Opción 1: Zelle */}
+                  <div onClick={() => setMetodoPagoElegido("zelle")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${metodoPagoElegido === "zelle" ? "border-purple-500 bg-purple-50 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center font-bold text-lg">🇺🇸</div>
+                      <div>
+                        <p className="font-black text-slate-900 text-sm">Zelle</p>
+                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Transferencia en divisas</p>
+                      </div>
+                    </div>
+                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "zelle" ? "border-purple-500" : "border-slate-300"}`}>
+                      {metodoPagoElegido === "zelle" && <div className="w-2.5 h-2.5 bg-purple-500 rounded-full" />}
+                    </div>
+                  </div>
+
+                  {/* Opción 2: Pago Móvil */}
+                  <div onClick={() => setMetodoPagoElegido("pago_movil")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${metodoPagoElegido === "pago_movil" ? "border-sky-500 bg-sky-50 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center font-bold text-lg">📱</div>
+                      <div>
+                        <p className="font-black text-slate-900 text-sm">Pago Móvil</p>
+                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Transferencia en Bolívares</p>
+                      </div>
+                    </div>
+                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "pago_movil" ? "border-sky-500" : "border-slate-300"}`}>
+                      {metodoPagoElegido === "pago_movil" && <div className="w-2.5 h-2.5 bg-sky-500 rounded-full" />}
+                    </div>
+                  </div>
+
+                  {/* Opción 3: Efectivo */}
+                  <div onClick={() => setMetodoPagoElegido("efectivo")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${metodoPagoElegido === "efectivo" ? "border-emerald-500 bg-emerald-50 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-lg">💵</div>
+                      <div>
+                        <p className="font-black text-slate-900 text-sm">Efectivo en el Club</p>
+                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Pagas al llegar a recepción</p>
+                      </div>
+                    </div>
+                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "efectivo" ? "border-emerald-500" : "border-slate-300"}`}>
+                      {metodoPagoElegido === "efectivo" && <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full" />}
+                    </div>
+                  </div>
+                </div>
+
+                {errorReserva && <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl text-xs font-bold text-rose-800 text-center"><p>{errorReserva}</p></div>}
+
+                <button onClick={confirmarCreacionPartido} disabled={procesandoPago} className="w-full mt-2 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-70 shadow-lg shadow-gray-900/20">
+                  {procesandoPago ? "Procesando..." : "Confirmar Reserva"}
+                </button>
+                <p className="text-center text-[10px] text-slate-400 font-bold mt-2">Al confirmar, aseguras la pista. El club verificará tu pago.</p>
+              </div>
+            )}
+
           </div>
         </div>
       )}
