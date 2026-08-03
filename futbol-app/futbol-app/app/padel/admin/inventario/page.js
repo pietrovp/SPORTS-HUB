@@ -1,0 +1,218 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { supabase } from "../../../../lib/supabaseClient";
+
+export default function InventarioGerenciaPage() {
+  const [loading, setLoading] = useState(true);
+  const [userClubId, setUserClubId] = useState(null);
+  const [productos, setProductos] = useState([]);
+
+  // Estado del Modal de Nuevo Producto
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  
+  // Formulario
+  const [formData, setFormData] = useState({
+    name: "",
+    brand: "",
+    category: "pelotas",
+    price: "",
+    stock: "",
+    image_url: "",
+    is_rental: false
+  });
+
+  useEffect(() => {
+    cargarInventario();
+  }, []);
+
+  async function cargarInventario() {
+    try {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Buscar el club del gerente logueado
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("club_id")
+        .eq("id", user.id)
+        .single();
+
+      if (!profile?.club_id) {
+         console.warn("Este usuario no tiene un club asignado");
+         return;
+      }
+      setUserClubId(profile.club_id);
+
+      // Traer productos de su club
+      const { data: prods } = await supabase
+        .from("products")
+        .select("*")
+        .eq("club_id", profile.club_id)
+        .order("created_at", { ascending: false });
+
+      setProductos(prods || []);
+    } catch (error) {
+      console.error("Error cargando inventario:", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function guardarProducto(e) {
+    e.preventDefault();
+    if (!userClubId) return;
+
+    try {
+      setGuardando(true);
+      const { error } = await supabase
+        .from("products")
+        .insert({
+          club_id: userClubId,
+          name: formData.name,
+          brand: formData.brand,
+          category: formData.category,
+          price: parseFloat(formData.price),
+          stock: parseInt(formData.stock, 10),
+          image_url: formData.image_url,
+          is_rental: formData.is_rental
+        });
+
+      if (error) throw error;
+      
+      setIsModalOpen(false);
+      setFormData({ name: "", brand: "", category: "pelotas", price: "", stock: "", image_url: "", is_rental: false });
+      cargarInventario(); // Recargar lista
+    } catch (error) {
+      alert("Error al guardar producto: " + error.message);
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  if (loading) return <div className="p-10 text-center">Cargando inventario...</div>;
+
+  return (
+    <div className="p-6 bg-slate-50 min-h-screen">
+      <div className="max-w-6xl mx-auto space-y-6">
+        
+        {/* HEADER */}
+        <div className="flex justify-between items-end bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+          <div>
+            <h1 className="text-2xl font-black text-slate-900">📦 Inventario Deportivo</h1>
+            <p className="text-sm text-slate-500 font-medium">Gestiona pelotas, grips y alquiler de palas.</p>
+          </div>
+          <button 
+            onClick={() => setIsModalOpen(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl shadow-md transition-colors"
+          >
+            + Agregar Artículo
+          </button>
+        </div>
+
+        {/* LISTA DE PRODUCTOS (GRID) */}
+        {productos.length === 0 ? (
+          <div className="bg-white rounded-3xl p-10 text-center border border-dashed border-slate-300">
+            <span className="text-4xl block mb-3">🛍️</span>
+            <p className="text-slate-500 font-bold">No tienes artículos en inventario.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+            {productos.map(p => (
+              <div key={p.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col group">
+                <div className="h-32 w-full bg-slate-100 rounded-xl mb-4 overflow-hidden relative flex items-center justify-center">
+                  {p.image_url ? (
+                    <img src={p.image_url} alt={p.name} className="w-full h-full object-contain mix-blend-multiply p-2" />
+                  ) : (
+                    <span className="text-3xl">{p.category === 'alquiler_pala' ? '🎾' : '📦'}</span>
+                  )}
+                  {p.is_rental && (
+                    <span className="absolute top-2 right-2 bg-purple-100 text-purple-700 text-[9px] font-black px-2 py-1 rounded-md uppercase">
+                      Alquiler
+                    </span>
+                  )}
+                </div>
+                
+                <div className="flex-1">
+                  <span className="text-[10px] font-black uppercase text-blue-500">{p.brand}</span>
+                  <h3 className="font-bold text-slate-900 leading-tight mt-0.5">{p.name}</h3>
+                  <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-50">
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Stock</p>
+                      <p className={`font-black ${p.stock < 5 ? 'text-rose-500' : 'text-slate-700'}`}>{p.stock} und.</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Precio</p>
+                      <p className="font-black text-emerald-600">${p.price.toFixed(2)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* MODAL DE NUEVO PRODUCTO */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center mb-5">
+              <h2 className="text-xl font-black text-slate-900">Agregar Artículo</h2>
+              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-700">✕</button>
+            </div>
+
+            <form onSubmit={guardarProducto} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2">
+                  <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Nombre del Artículo</label>
+                  <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="Ej: Pelotas Premium Pro" className="w-full p-3 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-blue-500" />
+                </div>
+                
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Marca</label>
+                  <input required type="text" value={formData.brand} onChange={e => setFormData({...formData, brand: e.target.value})} placeholder="Ej: Bullpadel" className="w-full p-3 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-blue-500" />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Categoría</label>
+                  <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value, is_rental: e.target.value === 'alquiler_pala'})} className="w-full p-3 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-blue-500">
+                    <option value="pelotas">Pelotas</option>
+                    <option value="grips">Overgrips / Accesorios</option>
+                    <option value="alquiler_pala">Alquiler de Pala</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Precio ($)</label>
+                  <input required type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} placeholder="0.00" className="w-full p-3 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-blue-500" />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Stock Inicial</label>
+                  <input required type="number" value={formData.stock} onChange={e => setFormData({...formData, stock: e.target.value})} placeholder="0" className="w-full p-3 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-blue-500" />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">URL de la Imagen (Opcional)</label>
+                  <input type="url" value={formData.image_url} onChange={e => setFormData({...formData, image_url: e.target.value})} placeholder="https://..." className="w-full p-3 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-blue-500" />
+                  {formData.image_url && (
+                    <div className="mt-2 h-20 w-20 rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
+                      <img src={formData.image_url} alt="Preview" className="w-full h-full object-contain mix-blend-multiply" />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button disabled={guardando} type="submit" className="w-full bg-[#0B0C15] text-[#00FF9D] font-black uppercase py-4 rounded-xl mt-4 hover:bg-slate-900 transition-colors disabled:opacity-70">
+                {guardando ? "Guardando..." : "Guardar en Inventario"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
