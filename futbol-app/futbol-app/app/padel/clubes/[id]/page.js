@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "../../../../lib/supabaseClient";
 
-// Categorías ordenadas correlativamente de menor a mayor
+// Categorías ordenadas
 const CATEGORIAS_ORDENADAS = [
   { value: "rookies", label: "Rookies" },
   { value: "7ma", label: "7ma Categoría" },
@@ -24,14 +24,12 @@ const PREFERENCIA_GENERO = [
   { value: "mixto", label: "👫 Mixto" },
 ];
 
-// 🧠 Cálculo automático del Rango Competitivo (1 Abajo • Tu Nivel • 1 Arriba)
+// 🧠 Cálculo automático del Rango Competitivo
 function getRangoCompetitivoAutomático(userCatValue) {
   const idx = CATEGORIAS_ORDENADAS.findIndex((c) => c.value === userCatValue);
   const safeIdx = idx === -1 ? 0 : idx;
-
   const minIdx = Math.max(0, safeIdx - 1);
   const maxIdx = Math.min(CATEGORIAS_ORDENADAS.length - 1, safeIdx + 1);
-
   const permitidas = CATEGORIAS_ORDENADAS.slice(minIdx, maxIdx + 1);
 
   return {
@@ -40,15 +38,13 @@ function getRangoCompetitivoAutomático(userCatValue) {
     max: CATEGORIAS_ORDENADAS[maxIdx],
     permitidas,
     etiquetaRango: permitidas.map((c) => c.label).join(" • "),
-    etiquetaCorta: permitidas.map((c) => c.value).join(" • "), // Formato compacto para BD
+    etiquetaCorta: permitidas.map((c) => c.value).join(" • "),
   };
 }
 
 // 🧠 Función para generar horarios dinámicos según el club
 function generarHorariosClub(openTime, closeTime, durationMin) {
   const horarios = [];
-  
-  // Extraer horas y minutos (ej. "07:00:00" -> 7, 0)
   const [openH, openM] = openTime.split(':').map(Number);
   const [closeH, closeM] = closeTime.split(':').map(Number);
   
@@ -59,14 +55,15 @@ function generarHorariosClub(openTime, closeTime, durationMin) {
     const h = Math.floor(currentMin / 60);
     const m = currentMin % 60;
     
-    // Convertir a formato 12 horas (AM/PM)
     const isPM = h >= 12;
     const displayH = h > 12 ? h - 12 : (h === 0 ? 12 : h);
     const ampm = isPM ? "PM" : "AM";
     
+    // Convertir a formato hora y agregar lógica de precio dinámico
     const timeStr = `${displayH.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
-    horarios.push(timeStr);
+    const precio = (h >= 17 && h < 21) ? 25.00 : 15.00; // Puedes traer esto de la BD luego
     
+    horarios.push({ timeStr, precio });
     currentMin += durationMin;
   }
   
@@ -81,50 +78,43 @@ export default function ClubDetallePage() {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [userCategoria, setUserCategoria] = useState("rookies");
-  const [saldoCreditos, setSaldoCreditos] = useState(0);
 
   const [club, setClub] = useState(null);
   const [pistas, setPistas] = useState([]);
   const [partidosFecha, setPartidosFecha] = useState([]);
   const [horariosDisponibles, setHorariosDisponibles] = useState([]);
-
-  // ↕️ Estado para controlar qué pistas están colapsadas
   const [pistasColapsadas, setPistasColapsadas] = useState({});
 
-  // Control de Fecha
   const [fechaSeleccionada, setFiltroFecha] = useState(() => {
-    const hoy = new Date();
-    return hoy.toISOString().split("T")[0];
+    return new Date().toISOString().split("T")[0];
   });
 
-  // Estado del Pop-up de Reserva
+  // Modal Reserva
   const [modalReservaOpen, setModalReservaOpen] = useState(false);
   const [slotSeleccionado, setSlotSeleccionado] = useState(null);
 
-  // Formulario de Reserva
-  const [modoPago, setModoPago] = useState("cuota"); // 'cuota' o 'completa'
-  const [tipoJuego, setTipoJuego] = useState("competitivo"); // 'competitivo' o 'amistoso'
+  // Formulario
+  const [modoPago, setModoPago] = useState("cuota");
+  const [tipoJuego, setTipoJuego] = useState("competitivo");
   const [catMaximaAmistoso, setCatMaximaAmistoso] = useState("open");
   const [prefGenero, setPrefGenero] = useState("todos");
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [errorReserva, setErrorReserva] = useState("");
 
+  // CONSTANTES DEL NEGOCIO
+  const TASA_COMISION = 0.10; // 10% de SPORTS-HUB
+  const TASA_BCV = 36.50; // TODO: Esto debería venir de tu BD o una API (Ej: await supabase.from('settings').select('tasa_bcv'))
+
   useEffect(() => {
     if (clubParam) cargarClubYHorarios();
   }, [clubParam, fechaSeleccionada]);
 
-  // 🛡️ Si es reserva completa, forzar modo Amistoso
   useEffect(() => {
-    if (modoPago === "completa") {
-      setTipoJuego("amistoso");
-    }
+    if (modoPago === "completa") setTipoJuego("amistoso");
   }, [modoPago]);
 
   function toggleColapsarPista(pistaId) {
-    setPistasColapsadas((prev) => ({
-      ...prev,
-      [pistaId]: !prev[pistaId],
-    }));
+    setPistasColapsadas((prev) => ({ ...prev, [pistaId]: !prev[pistaId] }));
   }
 
   async function cargarClubYHorarios() {
@@ -136,68 +126,46 @@ export default function ClubDetallePage() {
       setUser(authUser);
 
       if (authUser) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("creditos")
-          .eq("id", authUser.id)
-          .maybeSingle();
-        setSaldoCreditos(profile?.creditos || 0);
-
         const { data: pProfile } = await supabase
           .from("padel_profiles")
           .select("categoria_oficial")
           .eq("cuenta_id", authUser.id)
           .maybeSingle();
-
-        const catActual = pProfile?.categoria_oficial || "rookies";
-        setUserCategoria(catActual);
+        setUserCategoria(pProfile?.categoria_oficial || "rookies");
       }
 
-      // 1. Datos del Club (Buscamos por slug o ID real)
+      // 1. Datos del Club
       let targetClub = null;
-      
-      const { data: clubBySlug } = await supabase
-        .from("padel_clubs")
-        .select("*")
-        .eq("slug", clubParam)
-        .maybeSingle();
+      const { data: clubBySlug } = await supabase.from("padel_clubs").select("*").eq("slug", clubParam).maybeSingle();
 
       if (clubBySlug) {
         targetClub = clubBySlug;
       } else {
-        const { data: clubById } = await supabase
-          .from("padel_clubs")
-          .select("*")
-          .eq("id", clubParam)
-          .maybeSingle();
+        const { data: clubById } = await supabase.from("padel_clubs").select("*").eq("id", clubParam).maybeSingle();
         targetClub = clubById;
       }
 
       if (!targetClub) throw new Error("No se encontró el club.");
       setClub(targetClub);
 
-      // ✅ GENERAR HORARIOS DINÁMICOS
-      const duration = targetClub.slot_duration_minutes || 90; // Por defecto 90 si no tiene
+      // 2. Horarios Dinámicos
+      const duration = targetClub.slot_duration_minutes || 60;
       const openTime = targetClub.open_time || '07:00:00';
       const closeTime = targetClub.close_time || '23:00:00';
-      
-      const slotsGenerados = generarHorariosClub(openTime, closeTime, duration);
-      setHorariosDisponibles(slotsGenerados);
+      setHorariosDisponibles(generarHorariosClub(openTime, closeTime, duration));
 
-      // 2. Canchas del Club (Usando el ID real)
+      // 3. Canchas
       let { data: courtsData } = await supabase
         .from("padel_courts")
         .select("*")
         .eq("club_id", targetClub.id)
         .eq("is_active", true)
-        .order('court_number', { ascending: true }); // Ordenar por numero de pista
-
+        .order('court_number', { ascending: true });
       setPistas(courtsData || []);
 
-      // 3. Partidos programados para la fecha
+      // 4. Partidos programados
       const inicioDia = new Date(`${fechaSeleccionada}T00:00:00`).toISOString();
       const finDia = new Date(`${fechaSeleccionada}T23:59:59`).toISOString();
-
       const { data: matches } = await supabase
         .from("padel_matches")
         .select(`
@@ -217,7 +185,6 @@ export default function ClubDetallePage() {
     }
   }
 
-  // Carrusel de 7 días
   const diasCarrusel = useMemo(() => {
     const dias = [];
     const hoy = new Date();
@@ -233,43 +200,39 @@ export default function ClubDetallePage() {
     return dias;
   }, []);
 
-  function abrirModalReserva(court, horaStr) {
+  function abrirModalReserva(court, slot) {
     if (!user) {
       router.push("/login");
       return;
     }
-    const precioTotalCancha = court.price_credits || 16;
-    setSlotSeleccionado({ court, hora: horaStr, precioTotal: precioTotalCancha });
+    
+    // Cálculo de precios con modelo de negocio
+    const precioClub = slot.precio;
+    const comisionApp = precioClub * TASA_COMISION;
+    const precioTotal = precioClub + comisionApp;
+
+    setSlotSeleccionado({ 
+      court, 
+      hora: slot.timeStr, 
+      precioClub,
+      comisionApp,
+      precioTotal
+    });
+    
     setModoPago("cuota");
     setTipoJuego("competitivo");
     setErrorReserva("");
     setModalReservaOpen(true);
   }
 
-  // Rango competitivo automático
-  const rangoCompetitivo = useMemo(() => {
-    return getRangoCompetitivoAutomático(userCategoria);
-  }, [userCategoria]);
+  const rangoCompetitivo = useMemo(() => getRangoCompetitivoAutomático(userCategoria), [userCategoria]);
 
-  // PROCESAR RESERVA
+  // PROCESAR RESERVA (MOCK DE PASARELA)
   async function confirmarCreacionPartido() {
-    let currentUser = user;
-    if (!currentUser) {
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      currentUser = authUser;
-    }
-
-    if (!currentUser || !slotSeleccionado || !club) return;
+    if (!user || !slotSeleccionado || !club) return;
 
     const esPrivado = modoPago === "completa";
-    const costoTotalCancha = slotSeleccionado.precioTotal;
-    const costoIndividual = Math.ceil(costoTotalCancha / 4);
-    const costoAPagar = esPrivado ? costoTotalCancha : costoIndividual;
-
-    if (saldoCreditos < costoAPagar) {
-      setErrorReserva(`Saldo insuficiente. Necesitas ${costoAPagar} créditos y tienes ${saldoCreditos}.`);
-      return;
-    }
+    const costoFinal = esPrivado ? slotSeleccionado.precioTotal : (slotSeleccionado.precioTotal / 4);
 
     try {
       setProcesandoPago(true);
@@ -284,14 +247,13 @@ export default function ClubDetallePage() {
 
       const matchTimestamp = `${fechaSeleccionada}T${horaReal24}`;
 
-      // Usa la etiqueta corta para BD (ej. "7ma • 6ta • 5ta")
       const restriccionCategoriaFinal = esPrivado
         ? "Libre"
         : tipoJuego === "competitivo"
         ? rangoCompetitivo.etiquetaCorta
         : catMaximaAmistoso;
 
-      // 1. Crear registro de partido
+      // 1. Crear registro
       const { data: nuevoPartido, error: matchError } = await supabase
         .from("padel_matches")
         .insert({
@@ -304,81 +266,46 @@ export default function ClubDetallePage() {
           category_restriction: restriccionCategoriaFinal,
           gender_restriction: prefGenero,
           is_competitive: !esPrivado && tipoJuego === "competitivo",
-          price_per_player: costoIndividual,
-          total_price: costoTotalCancha,
-          created_by: currentUser.id
+          price_per_player: (slotSeleccionado.precioTotal / 4),
+          total_price: slotSeleccionado.precioTotal,
+          created_by: user.id
         })
         .select()
         .single();
 
-      if (matchError) throw new Error(`Error en padel_matches: ${matchError.message}`);
+      if (matchError) throw new Error(matchError.message);
 
       // 2. Inscribir creador
       const { error: playerErr } = await supabase.from("padel_match_players").insert({
         match_id: nuevoPartido.id,
-        user_id: currentUser.id,
+        user_id: user.id,
         team: "A",
       });
 
-      if (playerErr) throw new Error(`Error en padel_match_players: ${playerErr.message}`);
-
-      // 3. Descontar créditos
-      const nuevoSaldo = saldoCreditos - costoAPagar;
-      const { error: errSaldo } = await supabase
-        .from("profiles")
-        .update({ creditos: nuevoSaldo })
-        .eq("id", currentUser.id);
-
-      if (errSaldo) throw new Error(`Error descontando créditos: ${errSaldo.message}`);
-
-      // 4. Ledger
-      await supabase.from("credit_ledger").insert({
-        user_id: currentUser.id,
-        delta: -costoAPagar,
-        reason: esPrivado ? "reserva_privada_padel" : "creacion_partido_abierto_padel",
-        balance_after: nuevoSaldo
-      });
+      if (playerErr) throw new Error(playerErr.message);
 
       setModalReservaOpen(false);
-      setSaldoCreditos(nuevoSaldo);
       router.push(`/padel/partidos`);
     } catch (err) {
       console.error("Error al reservar:", err);
-      setErrorReserva(err.message || "Ocurrió un error al procesar la reserva.");
+      setErrorReserva("Error al procesar el pago o crear la reserva. Intenta de nuevo.");
     } finally {
       setProcesandoPago(false);
     }
   }
 
-  // Unirse a partido
+  // UNIRSE A PARTIDO
   async function unirseAPartido(match) {
-    if (!user) {
-      router.push("/login");
-      return;
-    }
+    if (!user) return router.push("/login");
 
     const inscritos = match.players?.length || 0;
-    if (inscritos >= 4) {
-      alert("Este partido ya está lleno (4/4).");
-      return;
-    }
-
-    if (match.players?.some((p) => p.user_id === user.id)) {
-      alert("Ya estás inscrito en este partido.");
-      return;
-    }
-
-    const costoInscripcion = match.price_per_player || 4;
-    if (saldoCreditos < costoInscripcion) {
-      alert(`⚠️ Saldo insuficiente. Necesitas ${costoInscripcion} créditos y tienes ${saldoCreditos}.`);
-      return;
-    }
+    if (inscritos >= 4) return alert("Este partido ya está lleno (4/4).");
+    if (match.players?.some((p) => p.user_id === user.id)) return alert("Ya estás inscrito.");
 
     try {
       setLoading(true);
 
       const teamAsignado = match.players?.filter((p) => p.team === "A").length < 2 ? "A" : "B";
-
       const { error: playerErr } = await supabase.from("padel_match_players").insert({
         match_id: match.id,
         user_id: user.id,
@@ -386,23 +313,11 @@ export default function ClubDetallePage() {
       });
 
       if (playerErr) throw playerErr;
-
-      const nuevoSaldo = saldoCreditos - costoInscripcion;
-      await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", user.id);
-
-      await supabase.from("credit_ledger").insert({
-        user_id: user.id,
-        match_id: match.id,
-        delta: -costoInscripcion,
-        reason: "inscripcion_partido_abierto_padel",
-        balance_after: nuevoSaldo
-      });
-
-      setSaldoCreditos(nuevoSaldo);
       router.push("/padel/partidos");
     } catch (error) {
       console.error("Error uniéndose:", error);
       alert(`No se pudo completar la inscripción: ${error.message}`);
+    } finally {
       setLoading(false);
     }
   }
@@ -421,27 +336,16 @@ export default function ClubDetallePage() {
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 pb-36">
       <div className="mx-auto max-w-6xl space-y-6">
 
-        {/* 🏟️ HEADER CON IMAGEN DE BAJA OPACIDAD */}
+        {/* 🏟️ HEADER DEL CLUB */}
         <div className="relative bg-white rounded-3xl p-5 sm:p-7 border border-slate-200 shadow-sm overflow-hidden min-h-[140px] flex items-center">
           <div className="absolute inset-0 z-0 pointer-events-none">
-            <img
-              src={club?.image_url || club?.banner_url || imagenClubFallback}
-              alt={club?.name || "Cancha de pádel"}
-              className="w-full h-full object-cover object-right opacity-20"
-            />
+            <img src={club?.image_url || club?.banner_url || imagenClubFallback} alt={club?.name} className="w-full h-full object-cover object-right opacity-20" />
             <div className="absolute inset-0 bg-gradient-to-r from-white via-white/80 to-transparent" />
           </div>
-
           <div className="relative z-10 space-y-1.5 max-w-sm sm:max-w-md">
-            <Link href="/padel/clubes" className="text-xs font-black uppercase tracking-widest text-blue-600 hover:underline inline-block">
-              ← Volver a Clubes
-            </Link>
-            <h1 className="text-2xl sm:text-4xl font-black text-slate-900 tracking-tight leading-tight">
-              {club?.name || "Club de Pádel"}
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 font-bold flex items-center gap-1">
-              📍 {club?.address || club?.city || "Ubicación disponible"}
-            </p>
+            <Link href="/padel/clubes" className="text-xs font-black uppercase tracking-widest text-blue-600 hover:underline inline-block">← Volver a Clubes</Link>
+            <h1 className="text-2xl sm:text-4xl font-black text-slate-900 tracking-tight leading-tight">{club?.name || "Club de Pádel"}</h1>
+            <p className="text-xs sm:text-sm text-slate-500 font-bold flex items-center gap-1">📍 {club?.address || club?.city}</p>
           </div>
         </div>
 
@@ -452,29 +356,17 @@ export default function ClubDetallePage() {
             {diasCarrusel.map((d) => {
               const esActivo = fechaSeleccionada === d.iso;
               return (
-                <button
-                  key={d.iso}
-                  onClick={() => setFiltroFecha(d.iso)}
-                  className={`flex flex-col items-center min-w-[72px] py-2.5 px-3 rounded-2xl border transition-all shrink-0 ${
-                    esActivo
-                      ? "bg-blue-600 text-white border-blue-600 shadow-md scale-105"
-                      : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  <span className={`text-[10px] font-black uppercase ${esActivo ? "text-blue-100" : "text-slate-400"}`}>
-                    {d.diaNombre}
-                  </span>
+                <button key={d.iso} onClick={() => setFiltroFecha(d.iso)} className={`flex flex-col items-center min-w-[72px] py-2.5 px-3 rounded-2xl border transition-all shrink-0 ${esActivo ? "bg-blue-600 text-white border-blue-600 shadow-md scale-105" : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"}`}>
+                  <span className={`text-[10px] font-black uppercase ${esActivo ? "text-blue-100" : "text-slate-400"}`}>{d.diaNombre}</span>
                   <span className="text-lg font-black my-0.5">{d.diaNum}</span>
-                  <span className={`text-[9px] font-extrabold ${esActivo ? "text-blue-200" : "text-slate-400"}`}>
-                    {d.mesNombre}
-                  </span>
+                  <span className={`text-[9px] font-extrabold ${esActivo ? "text-blue-200" : "text-slate-400"}`}>{d.mesNombre}</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* PARRILLA DE PISTAS Y HORARIOS CON ACORDEÓN REPLEGABLE */}
+        {/* PARRILLA DE PISTAS Y HORARIOS */}
         <div className="space-y-4">
           <h2 className="text-lg font-black text-slate-900 px-1">Disponibilidad de Pistas</h2>
 
@@ -489,64 +381,40 @@ export default function ClubDetallePage() {
 
               return (
                 <div key={pista.id} className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-3 transition-all">
-                  <div
-                    onClick={() => toggleColapsarPista(pista.id)}
-                    className="flex items-center justify-between cursor-pointer select-none border-b border-slate-100 pb-3 group"
-                  >
+                  <div onClick={() => toggleColapsarPista(pista.id)} className="flex items-center justify-between cursor-pointer select-none border-b border-slate-100 pb-3 group">
                     <div className="flex items-center gap-2">
                       <span className="text-xl">🎾</span>
-                      <h3 className="text-base font-black text-slate-900 group-hover:text-blue-600 transition-colors">
-                        {pista.name}
-                      </h3>
+                      <h3 className="text-base font-black text-slate-900 group-hover:text-blue-600 transition-colors">{pista.name}</h3>
                     </div>
-
                     <div className="flex items-center gap-2.5">
                       <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-3 py-1 border border-blue-200 rounded-full uppercase">
                         {pista.surface_type || "Cristal"} - {pista.court_type || "Indoor"}
                       </span>
-
-                      <button
-                        type="button"
-                        className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition-all shrink-0"
-                        title={estaColapsada ? "Desplegar cancha" : "Recoger cancha"}
-                      >
-                        <svg
-                          className={`w-4 h-4 transition-transform duration-300 ${estaColapsada ? "rotate-180" : "rotate-0"}`}
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
-                        </svg>
+                      <button className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition-all shrink-0">
+                        <svg className={`w-4 h-4 transition-transform duration-300 ${estaColapsada ? "rotate-180" : "rotate-0"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" /></svg>
                       </button>
                     </div>
                   </div>
 
                   {!estaColapsada && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5 pt-1 animate-in fade-in duration-200">
-                      {horariosDisponibles.map((horaStr) => {
-                        const isPM = horaStr.includes("PM");
-                        let [h, m] = horaStr.split(" ")[0].split(":");
+                      {horariosDisponibles.map((slot) => {
+                        const isPM = slot.timeStr.includes("PM");
+                        let [h, m] = slot.timeStr.split(" ")[0].split(":");
                         let hrsNum = parseInt(h, 10);
                         if (isPM && hrsNum !== 12) hrsNum += 12;
                         if (!isPM && hrsNum === 12) hrsNum = 0;
                         const hora24 = `${hrsNum.toString().padStart(2, "0")}:${m}:00`;
-
                         const targetTimeMs = new Date(`${fechaSeleccionada}T${hora24}`).getTime();
 
-                        const partidoOcupado = partidosFecha.find((m) => {
-                          if (m.court_id !== pista.id || !m.scheduled_at) return false;
-                          const matchTimeMs = new Date(m.scheduled_at).getTime();
-                          return matchTimeMs === targetTimeMs;
-                        });
-
+                        const partidoOcupado = partidosFecha.find((m) => m.court_id === pista.id && new Date(m.scheduled_at).getTime() === targetTimeMs);
                         const inscritos = partidoOcupado?.players?.length || 0;
                         const esAbierto = partidoOcupado && !partidoOcupado.is_private && inscritos < 4;
 
                         if (partidoOcupado && !esAbierto) {
                           return (
-                            <div key={horaStr} className="bg-slate-100 border border-slate-200 rounded-2xl py-2.5 text-center opacity-60">
-                              <span className="text-xs font-bold text-slate-400 block">{horaStr}</span>
+                            <div key={slot.timeStr} className="bg-slate-100 border border-slate-200 rounded-2xl py-2.5 text-center opacity-60">
+                              <span className="text-xs font-bold text-slate-400 block">{slot.timeStr}</span>
                               <span className="text-[9px] font-black text-rose-500 uppercase block mt-0.5">Reservado</span>
                             </div>
                           );
@@ -554,29 +422,17 @@ export default function ClubDetallePage() {
 
                         if (esAbierto) {
                           return (
-                            <button
-                              key={horaStr}
-                              onClick={() => unirseAPartido(partidoOcupado)}
-                              className="bg-amber-50 border border-amber-300 hover:bg-amber-100 rounded-2xl py-2.5 text-center transition-all shadow-sm"
-                            >
-                              <span className="text-xs font-black text-amber-900 block">{horaStr}</span>
-                              <span className="text-[9px] font-black text-amber-700 uppercase block mt-0.5">
-                                Unirse ({inscritos}/4)
-                              </span>
+                            <button key={slot.timeStr} onClick={() => unirseAPartido(partidoOcupado)} className="bg-amber-50 border border-amber-300 hover:bg-amber-100 rounded-2xl py-2.5 text-center transition-all shadow-sm">
+                              <span className="text-xs font-black text-amber-900 block">{slot.timeStr}</span>
+                              <span className="text-[9px] font-black text-amber-700 uppercase block mt-0.5">Unirse ({inscritos}/4)</span>
                             </button>
                           );
                         }
 
                         return (
-                          <button
-                            key={horaStr}
-                            onClick={() => abrirModalReserva(pista, horaStr)}
-                            className="bg-emerald-50/80 border border-emerald-300/80 hover:bg-emerald-400 hover:text-slate-950 rounded-2xl py-2.5 text-center transition-all shadow-sm group"
-                          >
-                            <span className="text-xs font-black text-emerald-950 group-hover:text-slate-950 block">{horaStr}</span>
-                            <span className="text-[9px] font-extrabold text-emerald-700 group-hover:text-slate-950 uppercase block mt-0.5">
-                              Disponible
-                            </span>
+                          <button key={slot.timeStr} onClick={() => abrirModalReserva(pista, slot)} className="bg-emerald-50/80 border border-emerald-300/80 hover:bg-emerald-400 hover:text-slate-950 rounded-2xl py-2.5 text-center transition-all shadow-sm group">
+                            <span className="text-xs font-black text-emerald-950 group-hover:text-slate-950 block">{slot.timeStr}</span>
+                            <span className="text-[9px] font-extrabold text-emerald-700 group-hover:text-slate-950 uppercase block mt-0.5">${slot.precio.toFixed(2)}</span>
                           </button>
                         );
                       })}
@@ -587,224 +443,83 @@ export default function ClubDetallePage() {
             })
           )}
         </div>
-
       </div>
 
-      {/* 🟢 POP-UP INFERIOR DE RESERVA ESTILO FÚTBOL (BOTTOM SHEET) */}
+      {/* 🟢 POP-UP INFERIOR DE RESERVA ESTILO PLAYTOMIC */}
       {modalReservaOpen && slotSeleccionado && (
-        <div
-          className="fixed inset-0 z-[10000] flex flex-col justify-end bg-black/50 backdrop-blur-xs transition-opacity"
-          onClick={() => setModalReservaOpen(false)}
-        >
-          <div
-            className="w-full max-w-2xl mx-auto bg-white rounded-t-[2.5rem] p-5 sm:p-7 shadow-[0_-15px_40px_rgba(0,0,0,0.15)] border-t border-slate-100 space-y-4 max-h-[88vh] overflow-y-auto animate-in slide-in-from-bottom duration-200"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-[10000] flex flex-col justify-end bg-black/50 backdrop-blur-xs transition-opacity" onClick={() => setModalReservaOpen(false)}>
+          <div className="w-full max-w-2xl mx-auto bg-white rounded-t-[2.5rem] p-5 sm:p-7 shadow-[0_-15px_40px_rgba(0,0,0,0.15)] border-t border-slate-100 space-y-4 max-h-[88vh] overflow-y-auto animate-in slide-in-from-bottom duration-200" onClick={(e) => e.stopPropagation()}>
+            
             <div className="flex justify-between items-start border-b border-slate-100 pb-3">
               <div>
                 <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Reservar Pista</h2>
-                <p className="text-xs font-bold text-slate-400 mt-0.5">
-                  {slotSeleccionado.court.name} • {slotSeleccionado.hora}
-                </p>
+                <p className="text-xs font-bold text-slate-400 mt-0.5">{slotSeleccionado.court.name} • {slotSeleccionado.hora}</p>
               </div>
-              <button
-                onClick={() => setModalReservaOpen(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold flex items-center justify-center hover:bg-slate-200 transition-colors"
-              >
-                ✕
-              </button>
+              <button onClick={() => setModalReservaOpen(false)} className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold flex items-center justify-center hover:bg-slate-200 transition-colors">✕</button>
             </div>
 
-            <div className="bg-slate-50 border border-slate-100 p-3.5 rounded-2xl flex justify-between items-center text-xs font-bold">
-              <span className="text-slate-500">Saldo disponible:</span>
-              <span className="text-sm font-black text-slate-900">{saldoCreditos} créditos</span>
+            {/* Resumen Financiero Transparente con BCV */}
+            <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-2">
+              <div className="flex justify-between text-xs font-bold text-slate-500">
+                <span>Costo de Pista (Club)</span>
+                <span>${slotSeleccionado.precioClub.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-xs font-bold text-blue-600">
+                <span>Service Fee (App)</span>
+                <span>${slotSeleccionado.comisionApp.toFixed(2)}</span>
+              </div>
+              <div className="border-t border-slate-200 pt-2 flex items-end justify-between">
+                <span className="text-sm font-black text-slate-900">Total</span>
+                <div className="text-right">
+                  <span className="text-sm font-black text-slate-900 block">${slotSeleccionado.precioTotal.toFixed(2)}</span>
+                  <span className="text-[10px] font-bold text-slate-400 block">Ref: Bs {(slotSeleccionado.precioTotal * TASA_BCV).toFixed(2)}</span>
+                </div>
+              </div>
             </div>
 
             <div className="space-y-2">
-              <div
-                onClick={() => setModoPago("cuota")}
-                className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${
-                  modoPago === "cuota" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"
-                }`}
-              >
+              <div onClick={() => setModoPago("cuota")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${modoPago === "cuota" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
                 <div className="flex items-center gap-3">
-                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "cuota" ? "border-[#00FF9D]" : "border-slate-300"}`}>
-                    {modoPago === "cuota" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}
-                  </div>
+                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "cuota" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "cuota" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
                   <div>
                     <p className="font-black text-slate-900 text-sm">Pagas tu parte</p>
                     <p className="text-xs font-semibold text-slate-400 mt-0.5">El partido será público para la comunidad</p>
                   </div>
                 </div>
-                <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap">
-                  {Math.ceil(slotSeleccionado.precioTotal / 4)} <span className="text-[10px] text-slate-400 font-bold">créditos</span>
-                </span>
+                <div className="text-right">
+                  <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
+                    ${(slotSeleccionado.precioTotal / 4).toFixed(2)} <span className="text-[10px] text-slate-400 font-bold">c/u</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-400 block">Bs {((slotSeleccionado.precioTotal / 4) * TASA_BCV).toFixed(2)}</span>
+                </div>
               </div>
 
-              <div
-                onClick={() => setModoPago("completa")}
-                className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${
-                  modoPago === "completa" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"
-                }`}
-              >
+              <div onClick={() => setModoPago("completa")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${modoPago === "completa" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
                 <div className="flex items-center gap-3">
-                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "completa" ? "border-[#00FF9D]" : "border-slate-300"}`}>
-                    {modoPago === "completa" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}
-                  </div>
+                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "completa" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "completa" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
                   <div>
-                    <p className="font-black text-slate-900 text-sm flex items-center gap-1.5">
-                      Reservar cancha completa 🔒
-                    </p>
-                    <p className="text-xs font-semibold text-slate-400 mt-0.5">Cancha privada</p>
+                    <p className="font-black text-slate-900 text-sm flex items-center gap-1.5">Reserva Completa 🔒</p>
+                    <p className="text-xs font-semibold text-slate-400 mt-0.5">Pagas el total, cancha privada</p>
                   </div>
                 </div>
-                <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap">
-                  {slotSeleccionado.precioTotal} <span className="text-[10px] text-slate-400 font-bold">créditos</span>
-                </span>
+                <div className="text-right">
+                  <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
+                    ${slotSeleccionado.precioTotal.toFixed(2)}
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-400 block">Bs {(slotSeleccionado.precioTotal * TASA_BCV).toFixed(2)}</span>
+                </div>
               </div>
             </div>
 
             <div className="border-t border-slate-100 pt-3 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Tipo de Juego</span>
-                {modoPago === "completa" && (
-                  <span className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
-                    🔒 Reserva completa = Amistoso
-                  </span>
-                )}
-              </div>
-              
               <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  disabled={modoPago === "completa"}
-                  onClick={() => setTipoJuego("competitivo")}
-                  className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${
-                    modoPago === "completa"
-                      ? "opacity-40 cursor-not-allowed bg-slate-100 text-slate-400 border border-slate-200"
-                      : tipoJuego === "competitivo"
-                      ? "bg-[#0B1120] text-[#00FF9D] shadow-md"
-                      : "bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  ⚡ Competitivo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTipoJuego("amistoso")}
-                  className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${
-                    tipoJuego === "amistoso"
-                      ? "bg-[#0B1120] text-white shadow-md"
-                      : "bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  🤝 Amistoso
-                </button>
+                <button type="button" disabled={modoPago === "completa"} onClick={() => setTipoJuego("competitivo")} className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${modoPago === "completa" ? "opacity-40 cursor-not-allowed bg-slate-100 text-slate-400" : tipoJuego === "competitivo" ? "bg-[#0B1120] text-[#00FF9D] shadow-md" : "bg-slate-50 border border-slate-200 text-slate-600"}`}>⚡ Comp.</button>
+                <button type="button" onClick={() => setTipoJuego("amistoso")} className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${tipoJuego === "amistoso" ? "bg-[#0B1120] text-white shadow-md" : "bg-slate-50 border border-slate-200 text-slate-600"}`}>🤝 Amistoso</button>
               </div>
-
-              {modoPago === "cuota" ? (
-                <div className="space-y-3 pt-1">
-                  
-                  {tipoJuego === "competitivo" ? (
-                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 p-4 rounded-2xl space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-black uppercase tracking-wider text-blue-700 flex items-center gap-1">
-                          <span>🎯</span> Restricción Competitiva Automática
-                        </span>
-                        <span className="text-[9px] font-black bg-blue-600 text-white px-2.5 py-0.5 rounded-full uppercase">
-                          Regla ±1 Nivel
-                        </span>
-                      </div>
-                      
-                      <p className="text-xs font-black text-slate-900 pt-0.5">
-                        Jugadores permitidos: <span className="text-blue-700">{rangoCompetitivo.etiquetaRango}</span>
-                      </p>
-
-                      <p className="text-[11px] font-semibold text-slate-500 leading-tight">
-                        Al ser tu nivel <strong className="text-slate-900">{rangoCompetitivo.actual.label}</strong>, el partido admitirá automáticamente a jugadores de 1 categoría abajo, tu misma categoría o 1 categoría arriba.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
-                          Categoría Máxima Permitida
-                        </label>
-                        <select
-                          value={catMaximaAmistoso}
-                          onChange={(e) => setCatMaximaAmistoso(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 outline-none"
-                        >
-                          <option value="open">Abierto (Sin restricción)</option>
-                          {CATEGORIAS_ORDENADAS.map((c) => (
-                            <option key={c.value} value={c.value}>{c.label}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
-                          Preferencia Jugadores
-                        </label>
-                        <select
-                          value={prefGenero}
-                          onChange={(e) => setPrefGenero(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 outline-none"
-                        >
-                          {PREFERENCIA_GENERO.map((g) => (
-                            <option key={g.value} value={g.value}>{g.label}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  )}
-
-                  {tipoJuego === "competitivo" && (
-                    <div>
-                      <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
-                        Preferencia Jugadores
-                      </label>
-                      <select
-                        value={prefGenero}
-                        onChange={(e) => setPrefGenero(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 outline-none"
-                      >
-                        {PREFERENCIA_GENERO.map((g) => (
-                          <option key={g.value} value={g.value}>{g.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                </div>
-              ) : (
-                <div className="bg-slate-50 border border-slate-200/80 p-3 rounded-2xl text-[11px] font-bold text-slate-500 text-center">
-                  🔒 Los partidos privados de cancha completa se registran como <strong className="text-slate-900">Amistosos</strong> para mantener la integridad del Rating oficial.
-                </div>
-              )}
             </div>
 
-            {errorReserva && (
-              <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl text-xs font-bold text-rose-800 text-center">
-                <p>{errorReserva}</p>
-              </div>
-            )}
-
-            <button
-              onClick={confirmarCreacionPartido}
-              disabled={procesandoPago}
-              className="w-full bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-70 shadow-lg shadow-gray-900/20 active:scale-[0.99]"
-            >
-              {procesandoPago ? (
-                "Procesando..."
-              ) : (
-                <>
-                  Confirmar y Pagar
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                  </svg>
-                </>
-              )}
+            <button onClick={confirmarCreacionPartido} disabled={procesandoPago} className="w-full bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-70 shadow-lg shadow-gray-900/20">
+              {procesandoPago ? "Procesando Pago..." : `Pagar $${(modoPago === "completa" ? slotSeleccionado.precioTotal : slotSeleccionado.precioTotal / 4).toFixed(2)}`}
             </button>
           </div>
         </div>
