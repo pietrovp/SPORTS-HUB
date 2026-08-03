@@ -24,9 +24,6 @@ const PREFERENCIA_GENERO = [
   { value: "mixto", label: "👫 Mixto" },
 ];
 
-// Bloques de horario estándar
-const HORARIOS_DISPONIBLES = ["07:00 AM", "08:30 AM", "10:00 AM", "04:30 PM", "06:00 PM", "07:30 PM", "09:00 PM"];
-
 // 🧠 Cálculo automático del Rango Competitivo (1 Abajo • Tu Nivel • 1 Arriba)
 function getRangoCompetitivoAutomático(userCatValue) {
   const idx = CATEGORIAS_ORDENADAS.findIndex((c) => c.value === userCatValue);
@@ -47,10 +44,39 @@ function getRangoCompetitivoAutomático(userCatValue) {
   };
 }
 
+// 🧠 Función para generar horarios dinámicos según el club
+function generarHorariosClub(openTime, closeTime, durationMin) {
+  const horarios = [];
+  
+  // Extraer horas y minutos (ej. "07:00:00" -> 7, 0)
+  const [openH, openM] = openTime.split(':').map(Number);
+  const [closeH, closeM] = closeTime.split(':').map(Number);
+  
+  let currentMin = (openH * 60) + openM;
+  const endMin = (closeH * 60) + closeM;
+
+  while (currentMin + durationMin <= endMin) {
+    const h = Math.floor(currentMin / 60);
+    const m = currentMin % 60;
+    
+    // Convertir a formato 12 horas (AM/PM)
+    const isPM = h >= 12;
+    const displayH = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+    const ampm = isPM ? "PM" : "AM";
+    
+    const timeStr = `${displayH.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
+    horarios.push(timeStr);
+    
+    currentMin += durationMin;
+  }
+  
+  return horarios;
+}
+
 export default function ClubDetallePage() {
   const params = useParams();
   const router = useRouter();
-  const clubId = params?.id;
+  const clubParam = params?.id;
 
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
@@ -60,6 +86,7 @@ export default function ClubDetallePage() {
   const [club, setClub] = useState(null);
   const [pistas, setPistas] = useState([]);
   const [partidosFecha, setPartidosFecha] = useState([]);
+  const [horariosDisponibles, setHorariosDisponibles] = useState([]);
 
   // ↕️ Estado para controlar qué pistas están colapsadas
   const [pistasColapsadas, setPistasColapsadas] = useState({});
@@ -83,8 +110,8 @@ export default function ClubDetallePage() {
   const [errorReserva, setErrorReserva] = useState("");
 
   useEffect(() => {
-    if (clubId) cargarClubYHorarios();
-  }, [clubId, fechaSeleccionada]);
+    if (clubParam) cargarClubYHorarios();
+  }, [clubParam, fechaSeleccionada]);
 
   // 🛡️ Si es reserva completa, forzar modo Amistoso
   useEffect(() => {
@@ -126,22 +153,44 @@ export default function ClubDetallePage() {
         setUserCategoria(catActual);
       }
 
-      // 1. Datos del Club
-      const { data: clubData, error: errClub } = await supabase
+      // 1. Datos del Club (Buscamos por slug o ID real)
+      let targetClub = null;
+      
+      const { data: clubBySlug } = await supabase
         .from("padel_clubs")
         .select("*")
-        .eq("id", clubId)
+        .eq("slug", clubParam)
         .maybeSingle();
 
-      if (errClub) throw errClub;
-      setClub(clubData);
+      if (clubBySlug) {
+        targetClub = clubBySlug;
+      } else {
+        const { data: clubById } = await supabase
+          .from("padel_clubs")
+          .select("*")
+          .eq("id", clubParam)
+          .maybeSingle();
+        targetClub = clubById;
+      }
 
-      // 2. Canchas del Club
+      if (!targetClub) throw new Error("No se encontró el club.");
+      setClub(targetClub);
+
+      // ✅ GENERAR HORARIOS DINÁMICOS
+      const duration = targetClub.slot_duration_minutes || 90; // Por defecto 90 si no tiene
+      const openTime = targetClub.open_time || '07:00:00';
+      const closeTime = targetClub.close_time || '23:00:00';
+      
+      const slotsGenerados = generarHorariosClub(openTime, closeTime, duration);
+      setHorariosDisponibles(slotsGenerados);
+
+      // 2. Canchas del Club (Usando el ID real)
       let { data: courtsData } = await supabase
         .from("padel_courts")
         .select("*")
-        .eq("club_id", clubId)
-        .eq("is_active", true);
+        .eq("club_id", targetClub.id)
+        .eq("is_active", true)
+        .order('court_number', { ascending: true }); // Ordenar por numero de pista
 
       setPistas(courtsData || []);
 
@@ -155,7 +204,7 @@ export default function ClubDetallePage() {
           id, court_id, scheduled_at, status, is_private, match_type, price_per_player, category_restriction, is_competitive,
           players:padel_match_players ( user_id, team )
         `)
-        .eq("club_id", clubId)
+        .eq("club_id", targetClub.id)
         .neq("status", "cancelado")
         .gte("scheduled_at", inicioDia)
         .lte("scheduled_at", finDia);
@@ -453,7 +502,7 @@ export default function ClubDetallePage() {
 
                     <div className="flex items-center gap-2.5">
                       <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-3 py-1 border border-blue-200 rounded-full uppercase">
-                        {pista.court_type || "Cristal"}
+                        {pista.surface_type || "Cristal"} - {pista.court_type || "Indoor"}
                       </span>
 
                       <button
@@ -475,7 +524,7 @@ export default function ClubDetallePage() {
 
                   {!estaColapsada && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5 pt-1 animate-in fade-in duration-200">
-                      {HORARIOS_DISPONIBLES.map((horaStr) => {
+                      {horariosDisponibles.map((horaStr) => {
                         const isPM = horaStr.includes("PM");
                         let [h, m] = horaStr.split(" ")[0].split(":");
                         let hrsNum = parseInt(h, 10);
