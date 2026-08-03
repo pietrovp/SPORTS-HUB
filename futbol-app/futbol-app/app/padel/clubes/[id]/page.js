@@ -297,9 +297,10 @@ export default function ClubDetallePage() {
 
       setModalReservaOpen(false);
       router.push(`/padel/partidos`); // Redirige al centro de partidos donde verá su reserva
-    } catch (err) {
-      console.error("Error al reservar:", err);
-      setErrorReserva("Error al procesar la reserva. Intenta de nuevo.");
+      } catch (err) {
+      console.error("Error al reservar (Detalle técnico):", err);
+      // 👇 Cambiamos el mensaje genérico para que muestre el error real de Supabase
+      setErrorReserva(`Error de BD: ${err.message}`);
     } finally {
       setProcesandoPago(false);
     }
