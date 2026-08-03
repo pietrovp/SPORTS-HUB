@@ -59,9 +59,8 @@ function generarHorariosClub(openTime, closeTime, durationMin) {
     const displayH = h > 12 ? h - 12 : (h === 0 ? 12 : h);
     const ampm = isPM ? "PM" : "AM";
     
-    // Convertir a formato hora y agregar lógica de precio dinámico
     const timeStr = `${displayH.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
-    const precio = (h >= 17 && h < 21) ? 25.00 : 15.00; // Puedes traer esto de la BD luego
+    const precio = (h >= 17 && h < 21) ? 25.00 : 15.00; // Lógica básica de precio por hora
     
     horarios.push({ timeStr, precio });
     currentMin += durationMin;
@@ -93,7 +92,7 @@ export default function ClubDetallePage() {
   const [modalReservaOpen, setModalReservaOpen] = useState(false);
   const [slotSeleccionado, setSlotSeleccionado] = useState(null);
 
-  // Formulario
+  // Formulario y Pagos
   const [modoPago, setModoPago] = useState("cuota");
   const [tipoJuego, setTipoJuego] = useState("competitivo");
   const [catMaximaAmistoso, setCatMaximaAmistoso] = useState("open");
@@ -101,9 +100,9 @@ export default function ClubDetallePage() {
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [errorReserva, setErrorReserva] = useState("");
 
-  // CONSTANTES DEL NEGOCIO
+  // NEGOCIO Y TASAS
   const TASA_COMISION = 0.10; // 10% de SPORTS-HUB
-  const TASA_BCV = 36.50; // TODO: Esto debería venir de tu BD o una API (Ej: await supabase.from('settings').select('tasa_bcv'))
+  const [tasaBcv, setTasaBcv] = useState(0);
 
   useEffect(() => {
     if (clubParam) cargarClubYHorarios();
@@ -121,6 +120,17 @@ export default function ClubDetallePage() {
     try {
       setLoading(true);
       setErrorReserva("");
+
+      // 0. Obtener tasa BCV dinámica de tu API interna
+      try {
+        const resBcv = await fetch("/api/futbol/bcv-rate");
+        if (resBcv.ok) {
+          const dataBcv = await resBcv.json();
+          if (dataBcv.usdRate) setTasaBcv(dataBcv.usdRate);
+        }
+      } catch (errBcv) {
+        console.error("Error obteniendo tasa BCV:", errBcv);
+      }
 
       const { data: { user: authUser } } = await supabase.auth.getUser();
       setUser(authUser);
@@ -206,7 +216,6 @@ export default function ClubDetallePage() {
       return;
     }
     
-    // Cálculo de precios con modelo de negocio
     const precioClub = slot.precio;
     const comisionApp = precioClub * TASA_COMISION;
     const precioTotal = precioClub + comisionApp;
@@ -227,7 +236,7 @@ export default function ClubDetallePage() {
 
   const rangoCompetitivo = useMemo(() => getRangoCompetitivoAutomático(userCategoria), [userCategoria]);
 
-  // PROCESAR RESERVA (MOCK DE PASARELA)
+  // PROCESAR RESERVA
   async function confirmarCreacionPartido() {
     if (!user || !slotSeleccionado || !club) return;
 
@@ -253,7 +262,6 @@ export default function ClubDetallePage() {
         ? rangoCompetitivo.etiquetaCorta
         : catMaximaAmistoso;
 
-      // 1. Crear registro
       const { data: nuevoPartido, error: matchError } = await supabase
         .from("padel_matches")
         .insert({
@@ -275,7 +283,6 @@ export default function ClubDetallePage() {
 
       if (matchError) throw new Error(matchError.message);
 
-      // 2. Inscribir creador
       const { error: playerErr } = await supabase.from("padel_match_players").insert({
         match_id: nuevoPartido.id,
         user_id: user.id,
@@ -288,7 +295,7 @@ export default function ClubDetallePage() {
       router.push(`/padel/partidos`);
     } catch (err) {
       console.error("Error al reservar:", err);
-      setErrorReserva("Error al procesar el pago o crear la reserva. Intenta de nuevo.");
+      setErrorReserva("Error al procesar la reserva. Intenta de nuevo.");
     } finally {
       setProcesandoPago(false);
     }
@@ -458,21 +465,29 @@ export default function ClubDetallePage() {
               <button onClick={() => setModalReservaOpen(false)} className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold flex items-center justify-center hover:bg-slate-200 transition-colors">✕</button>
             </div>
 
-            {/* Resumen Financiero Transparente con BCV */}
-            <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-2">
-              <div className="flex justify-between text-xs font-bold text-slate-500">
-                <span>Costo de Pista (Club)</span>
-                <span>${slotSeleccionado.precioClub.toFixed(2)}</span>
+            {/* Resumen Financiero Transparente con BCV para TODO */}
+            <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-500 block">Costo de Pista (Club)</span>
+                  {tasaBcv > 0 && <span className="text-[9px] font-medium text-slate-400">Ref: Bs {(slotSeleccionado.precioClub * tasaBcv).toFixed(2)}</span>}
+                </div>
+                <span className="text-sm font-bold text-slate-500">${slotSeleccionado.precioClub.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between text-xs font-bold text-blue-600">
-                <span>Service Fee (App)</span>
-                <span>${slotSeleccionado.comisionApp.toFixed(2)}</span>
+              
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-blue-600 block">Service Fee (App)</span>
+                  {tasaBcv > 0 && <span className="text-[9px] font-medium text-blue-400">Ref: Bs {(slotSeleccionado.comisionApp * tasaBcv).toFixed(2)}</span>}
+                </div>
+                <span className="text-sm font-bold text-blue-600">${slotSeleccionado.comisionApp.toFixed(2)}</span>
               </div>
-              <div className="border-t border-slate-200 pt-2 flex items-end justify-between">
-                <span className="text-sm font-black text-slate-900">Total</span>
+              
+              <div className="border-t border-slate-200 pt-3 flex items-end justify-between">
+                <span className="text-sm font-black text-slate-900">Total a Pagar</span>
                 <div className="text-right">
-                  <span className="text-sm font-black text-slate-900 block">${slotSeleccionado.precioTotal.toFixed(2)}</span>
-                  <span className="text-[10px] font-bold text-slate-400 block">Ref: Bs {(slotSeleccionado.precioTotal * TASA_BCV).toFixed(2)}</span>
+                  <span className="text-lg font-black text-slate-900 block">${slotSeleccionado.precioTotal.toFixed(2)}</span>
+                  {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Ref: Bs {(slotSeleccionado.precioTotal * tasaBcv).toFixed(2)}</span>}
                 </div>
               </div>
             </div>
@@ -483,14 +498,14 @@ export default function ClubDetallePage() {
                   <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "cuota" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "cuota" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
                   <div>
                     <p className="font-black text-slate-900 text-sm">Pagas tu parte</p>
-                    <p className="text-xs font-semibold text-slate-400 mt-0.5">El partido será público para la comunidad</p>
+                    <p className="text-xs font-semibold text-slate-400 mt-0.5">Partido público (1/4 del total)</p>
                   </div>
                 </div>
                 <div className="text-right">
                   <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
                     ${(slotSeleccionado.precioTotal / 4).toFixed(2)} <span className="text-[10px] text-slate-400 font-bold">c/u</span>
                   </span>
-                  <span className="text-[10px] font-bold text-slate-400 block">Bs {((slotSeleccionado.precioTotal / 4) * TASA_BCV).toFixed(2)}</span>
+                  {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Bs {((slotSeleccionado.precioTotal / 4) * tasaBcv).toFixed(2)}</span>}
                 </div>
               </div>
 
@@ -506,7 +521,7 @@ export default function ClubDetallePage() {
                   <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
                     ${slotSeleccionado.precioTotal.toFixed(2)}
                   </span>
-                  <span className="text-[10px] font-bold text-slate-400 block">Bs {(slotSeleccionado.precioTotal * TASA_BCV).toFixed(2)}</span>
+                  {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Bs {(slotSeleccionado.precioTotal * tasaBcv).toFixed(2)}</span>}
                 </div>
               </div>
             </div>
