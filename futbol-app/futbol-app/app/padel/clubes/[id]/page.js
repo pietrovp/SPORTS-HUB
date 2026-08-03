@@ -60,7 +60,7 @@ function generarHorariosClub(openTime, closeTime, durationMin) {
     const ampm = isPM ? "PM" : "AM";
     
     const timeStr = `${displayH.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
-    const precio = (h >= 17 && h < 21) ? 25.00 : 15.00; // Lógica básica de precio por hora
+    const precio = (h >= 17 && h < 21) ? 25.00 : 15.00; // Lógica básica de precio
     
     horarios.push({ timeStr, precio });
     currentMin += durationMin;
@@ -88,9 +88,9 @@ export default function ClubDetallePage() {
     return new Date().toISOString().split("T")[0];
   });
 
-  // Estado del Modal de Reserva (UX de 2 Pasos)
+  // Modal Reserva
   const [modalReservaOpen, setModalReservaOpen] = useState(false);
-  const [pasoModal, setPasoModal] = useState(1); // 1 = Resumen, 2 = Pago
+  const [pasoModal, setPasoModal] = useState(1); 
   const [slotSeleccionado, setSlotSeleccionado] = useState(null);
 
   // Formulario y Pagos
@@ -98,12 +98,13 @@ export default function ClubDetallePage() {
   const [tipoJuego, setTipoJuego] = useState("competitivo");
   const [catMaximaAmistoso, setCatMaximaAmistoso] = useState("open");
   const [prefGenero, setPrefGenero] = useState("todos");
-  const [metodoPagoElegido, setMetodoPagoElegido] = useState("efectivo"); // efectivo, zelle, pago_movil
+  const [metodoPagoElegido, setMetodoPagoElegido] = useState("efectivo"); 
+  const [referenciaPago, setReferenciaPago] = useState(""); // NUEVO ESTADO PARA LA REFERENCIA
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [errorReserva, setErrorReserva] = useState("");
 
   // NEGOCIO Y TASAS
-  const TASA_COMISION = 0.10; // 10% de SPORTS-HUB
+  const TASA_COMISION = 0.10; // 10%
   const [tasaBcv, setTasaBcv] = useState(0);
 
   useEffect(() => {
@@ -123,7 +124,7 @@ export default function ClubDetallePage() {
       setLoading(true);
       setErrorReserva("");
 
-      // 0. Obtener tasa BCV dinámica de tu API interna
+      // 0. Obtener tasa BCV
       try {
         const resBcv = await fetch("/api/futbol/bcv-rate");
         if (resBcv.ok) {
@@ -233,6 +234,7 @@ export default function ClubDetallePage() {
     setModoPago("cuota");
     setTipoJuego("competitivo");
     setMetodoPagoElegido("efectivo");
+    setReferenciaPago("");
     setPasoModal(1);
     setErrorReserva("");
     setModalReservaOpen(true);
@@ -240,9 +242,16 @@ export default function ClubDetallePage() {
 
   const rangoCompetitivo = useMemo(() => getRangoCompetitivoAutomático(userCategoria), [userCategoria]);
 
-  // PROCESAR RESERVA FINAL
+  // VALIDACIÓN DE PAGO
+  const puedePagar = metodoPagoElegido === "efectivo" || (referenciaPago.trim().length > 3);
+
+  // PROCESAR RESERVA
   async function confirmarCreacionPartido() {
     if (!user || !slotSeleccionado || !club) return;
+    if (!puedePagar) {
+      setErrorReserva("Por favor ingresa el número de referencia del pago.");
+      return;
+    }
 
     const esPrivado = modoPago === "completa";
     
@@ -271,7 +280,7 @@ export default function ClubDetallePage() {
           club_id: club.id,
           court_id: slotSeleccionado.court.id,
           scheduled_at: new Date(matchTimestamp).toISOString(),
-          status: "programado", // O podrías poner "pendiente_pago" si eligió Zelle/Pago Movil
+          status: metodoPagoElegido === "efectivo" ? "programado" : "pendiente_verificacion",
           is_private: esPrivado,
           match_type: esPrivado ? "privado" : "abierto",
           category_restriction: restriccionCategoriaFinal,
@@ -286,20 +295,21 @@ export default function ClubDetallePage() {
 
       if (matchError) throw new Error(matchError.message);
 
+      // Inscribimos al jugador Y guardamos su método de pago y referencia
       const { error: playerErr } = await supabase.from("padel_match_players").insert({
         match_id: nuevoPartido.id,
         user_id: user.id,
         team: "A",
-        // payment_method: metodoPagoElegido // Opcional: si agregas esta columna a la BD en el futuro
+        payment_method: metodoPagoElegido,
+        payment_reference: metodoPagoElegido === "efectivo" ? "En Taquilla" : referenciaPago
       });
 
       if (playerErr) throw new Error(playerErr.message);
 
       setModalReservaOpen(false);
-      router.push(`/padel/partidos`); // Redirige al centro de partidos donde verá su reserva
-      } catch (err) {
-      console.error("Error al reservar (Detalle técnico):", err);
-      // 👇 Cambiamos el mensaje genérico para que muestre el error real de Supabase
+      router.push(`/padel/partidos`);
+    } catch (err) {
+      console.error("Error al reservar:", err);
       setErrorReserva(`Error de BD: ${err.message}`);
     } finally {
       setProcesandoPago(false);
@@ -478,10 +488,9 @@ export default function ClubDetallePage() {
               <button onClick={() => setModalReservaOpen(false)} className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold flex items-center justify-center hover:bg-slate-200 transition-colors">✕</button>
             </div>
 
-            {/* ====== PASO 1: RESUMEN DE LA RESERVA ====== */}
+            {/* ====== PASO 1: RESUMEN ====== */}
             {pasoModal === 1 && (
               <div className="animate-in fade-in duration-200 space-y-4">
-                {/* Resumen Financiero */}
                 <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
@@ -556,40 +565,86 @@ export default function ClubDetallePage() {
               </div>
             )}
 
-            {/* ====== PASO 2: SELECCIÓN DE MÉTODO DE PAGO ====== */}
+            {/* ====== PASO 2: MÉTODO DE PAGO ====== */}
             {pasoModal === 2 && (
               <div className="animate-in slide-in-from-right-4 duration-200 space-y-4">
                 
                 <div className="space-y-3">
-                  {/* Opción 1: Zelle */}
-                  <div onClick={() => setMetodoPagoElegido("zelle")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${metodoPagoElegido === "zelle" ? "border-purple-500 bg-purple-50 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center font-bold text-lg">🇺🇸</div>
-                      <div>
-                        <p className="font-black text-slate-900 text-sm">Zelle</p>
-                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Transferencia en divisas</p>
+                  {/* Zelle */}
+                  <div className={`p-4 rounded-2xl border-2 transition-all ${metodoPagoElegido === "zelle" ? "border-purple-500 bg-purple-50/50 shadow-sm" : "border-slate-100 bg-white"}`}>
+                    <div onClick={() => setMetodoPagoElegido("zelle")} className="flex items-center justify-between cursor-pointer">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center font-bold text-lg">🇺🇸</div>
+                        <div>
+                          <p className="font-black text-slate-900 text-sm">Zelle</p>
+                          <p className="text-xs font-semibold text-slate-400 mt-0.5">Transferencia en divisas</p>
+                        </div>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "zelle" ? "border-purple-500" : "border-slate-300"}`}>
+                        {metodoPagoElegido === "zelle" && <div className="w-2.5 h-2.5 bg-purple-500 rounded-full" />}
                       </div>
                     </div>
-                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "zelle" ? "border-purple-500" : "border-slate-300"}`}>
-                      {metodoPagoElegido === "zelle" && <div className="w-2.5 h-2.5 bg-purple-500 rounded-full" />}
-                    </div>
+                    {metodoPagoElegido === "zelle" && (
+                      <div className="mt-4 pt-4 border-t border-purple-100 animate-in fade-in">
+                        <div className="bg-white p-3 rounded-xl border border-purple-100 mb-3">
+                          <p className="text-[10px] uppercase font-black text-purple-400 mb-1">Datos de Transferencia:</p>
+                          <p className="text-sm font-black text-slate-900">pagos@elitepadel.com</p>
+                          <p className="text-xs text-slate-500 font-medium">Elite Padel Center LLC</p>
+                        </div>
+                        <input 
+                          type="text" 
+                          placeholder="Número de Confirmación Zelle" 
+                          value={referenciaPago}
+                          onChange={(e) => setReferenciaPago(e.target.value)}
+                          className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10 transition-all"
+                        />
+                      </div>
+                    )}
                   </div>
 
-                  {/* Opción 2: Pago Móvil */}
-                  <div onClick={() => setMetodoPagoElegido("pago_movil")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${metodoPagoElegido === "pago_movil" ? "border-sky-500 bg-sky-50 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center font-bold text-lg">📱</div>
-                      <div>
-                        <p className="font-black text-slate-900 text-sm">Pago Móvil</p>
-                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Transferencia en Bolívares</p>
+                  {/* Pago Móvil */}
+                  <div className={`p-4 rounded-2xl border-2 transition-all ${metodoPagoElegido === "pago_movil" ? "border-sky-500 bg-sky-50/50 shadow-sm" : "border-slate-100 bg-white"}`}>
+                    <div onClick={() => setMetodoPagoElegido("pago_movil")} className="flex items-center justify-between cursor-pointer">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center font-bold text-lg">📱</div>
+                        <div>
+                          <p className="font-black text-slate-900 text-sm">Pago Móvil</p>
+                          <p className="text-xs font-semibold text-slate-400 mt-0.5">Transferencia en Bolívares</p>
+                        </div>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "pago_movil" ? "border-sky-500" : "border-slate-300"}`}>
+                        {metodoPagoElegido === "pago_movil" && <div className="w-2.5 h-2.5 bg-sky-500 rounded-full" />}
                       </div>
                     </div>
-                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "pago_movil" ? "border-sky-500" : "border-slate-300"}`}>
-                      {metodoPagoElegido === "pago_movil" && <div className="w-2.5 h-2.5 bg-sky-500 rounded-full" />}
-                    </div>
+                    {metodoPagoElegido === "pago_movil" && (
+                      <div className="mt-4 pt-4 border-t border-sky-100 animate-in fade-in">
+                        <div className="bg-white p-3 rounded-xl border border-sky-100 mb-3 grid grid-cols-2 gap-2">
+                          <div className="col-span-2"><p className="text-[10px] uppercase font-black text-sky-400 mb-1">Datos Pago Móvil:</p></div>
+                          <div>
+                            <p className="text-xs text-slate-400 font-bold">Banco</p>
+                            <p className="text-sm font-black text-slate-900">Banesco (0134)</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-400 font-bold">Teléfono</p>
+                            <p className="text-sm font-black text-slate-900">0414-1234567</p>
+                          </div>
+                          <div className="col-span-2 mt-1">
+                            <p className="text-xs text-slate-400 font-bold">RIF</p>
+                            <p className="text-sm font-black text-slate-900">J-50000000-0</p>
+                          </div>
+                        </div>
+                        <input 
+                          type="text" 
+                          placeholder="Últimos 4 dígitos de Referencia" 
+                          value={referenciaPago}
+                          onChange={(e) => setReferenciaPago(e.target.value)}
+                          className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10 transition-all"
+                        />
+                      </div>
+                    )}
                   </div>
 
-                  {/* Opción 3: Efectivo */}
+                  {/* Efectivo */}
                   <div onClick={() => setMetodoPagoElegido("efectivo")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${metodoPagoElegido === "efectivo" ? "border-emerald-500 bg-emerald-50 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-lg">💵</div>
@@ -606,10 +661,13 @@ export default function ClubDetallePage() {
 
                 {errorReserva && <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl text-xs font-bold text-rose-800 text-center"><p>{errorReserva}</p></div>}
 
-                <button onClick={confirmarCreacionPartido} disabled={procesandoPago} className="w-full mt-2 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-70 shadow-lg shadow-gray-900/20">
-                  {procesandoPago ? "Procesando..." : "Confirmar Reserva"}
+                <button 
+                  onClick={confirmarCreacionPartido} 
+                  disabled={procesandoPago || !puedePagar} 
+                  className="w-full mt-2 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-gray-900/20"
+                >
+                  {procesandoPago ? "Procesando..." : "Confirmar y Finalizar"}
                 </button>
-                <p className="text-center text-[10px] text-slate-400 font-bold mt-2">Al confirmar, aseguras la pista. El club verificará tu pago.</p>
               </div>
             )}
 
