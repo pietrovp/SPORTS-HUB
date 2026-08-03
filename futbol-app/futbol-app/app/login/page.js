@@ -40,6 +40,9 @@ function Login() {
   const searchParams = useSearchParams();
   const [modo, setModo] = useState(searchParams.get("modo") === "registro" ? "registro" : "ingreso");
   
+  // NUEVO ESTADO PARA MODO ADMIN
+  const [modoAdmin, setModoAdmin] = useState(false); 
+  
   const [form, setForm] = useState({
     nombre: "",
     apellido: "",
@@ -189,7 +192,7 @@ function Login() {
       return;
     }
 
-    // INGRESO
+    // INGRESO (Jugador o Admin)
     setCargando(true);
     mostrarMensaje("");
 
@@ -204,7 +207,13 @@ function Login() {
       mostrarMensaje(error.message, "error");
     } else {
       mostrarMensaje("Ingresaste correctamente.", "ok");
-      router.push("/");
+      
+      // Si está en modo admin, mandarlo al panel, sino a la vista de jugador normal.
+      if (modoAdmin) {
+        router.push("/padel/admin/recepcion");
+      } else {
+        router.push("/"); // O la ruta de dashboard de jugador
+      }
       router.refresh();
     }
   }
@@ -222,32 +231,41 @@ function Login() {
   const ciudadesDisponibles = CIUDADES_POR_PAIS[form.nacionalidad] || ["Otra"];
 
   return (
-    <div className="min-h-[85vh] flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-xl border border-gray-100 p-6 md:p-8 flex flex-col gap-6">
+    <div className="min-h-[85vh] flex items-center justify-center px-4 py-8 bg-slate-50">
+      <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 p-6 md:p-8 flex flex-col gap-6 relative overflow-hidden">
         
+        {/* LINEA VERDE DE ADMIN (SOLO VISIBLE EN MODO ADMIN) */}
+        {modoAdmin && (
+          <div className="absolute top-0 left-0 right-0 h-1.5 bg-[#00FF9D]"></div>
+        )}
+
         {/* ENCABEZADO */}
         <div className="text-center">
-          <div className="w-14 h-14 mx-auto rounded-2xl bg-[#00FF9D]/10 flex items-center justify-center text-3xl mb-3">
-            🏟️
+          <div className={`w-14 h-14 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${modoAdmin ? 'bg-slate-900' : 'bg-[#00FF9D]/10'}`}>
+            {modoAdmin ? '🏢' : '🏟️'}
           </div>
           <h1 className="text-2xl font-black text-gray-900 tracking-tight">
-            {modo === "registro"
-              ? "Crea tu cuenta"
-              : modo === "ingreso"
-              ? "Bienvenido de vuelta"
-              : "Recupera tu contraseña"}
+            {modoAdmin 
+              ? "Acceso Administrativo" 
+              : modo === "registro"
+                ? "Crea tu cuenta"
+                : modo === "ingreso"
+                  ? "Bienvenido de vuelta"
+                  : "Recupera tu contraseña"}
           </h1>
           <p className="text-xs text-gray-500 font-medium mt-1">
-            {modo === "registro"
-              ? "Una sola cuenta para fútbol, pádel y tus estadísticas."
-              : modo === "ingreso"
-              ? "Ingresa con tu correo y contraseña."
-              : "Te enviaremos un enlace para restablecerla."}
+            {modoAdmin 
+              ? "Panel exclusivo para Recepción y Gerencia."
+              : modo === "registro"
+                ? "Una sola cuenta para fútbol, pádel y tus estadísticas."
+                : modo === "ingreso"
+                  ? "Ingresa con tu correo y contraseña."
+                  : "Te enviaremos un enlace para restablecerla."}
           </p>
         </div>
 
-        {/* SELECTOR MODO */}
-        {modo !== "recuperar" && (
+        {/* SELECTOR MODO (OCULTO EN MODO ADMIN Y RECUPERAR) */}
+        {!modoAdmin && modo !== "recuperar" && (
           <div className="grid grid-cols-2 gap-1 bg-gray-100 rounded-full p-1">
             <button
               type="button"
@@ -282,7 +300,7 @@ function Login() {
 
         {/* FORMULARIO */}
         <div className="flex flex-col gap-3.5">
-          {modo === "registro" && (
+          {modo === "registro" && !modoAdmin && (
             <>
               {/* NOMBRES Y APELLIDOS */}
               <div className="grid grid-cols-2 gap-3">
@@ -310,7 +328,7 @@ function Login() {
                 </div>
               </div>
 
-              {/* PAÍS Y CIUDAD (DROPDOWN INTEGRADO) */}
+              {/* PAÍS Y CIUDAD */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
@@ -334,7 +352,7 @@ function Login() {
 
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
-                    Ciudad (Ranking)
+                    Ciudad
                   </label>
                   <select
                     className={inputClass}
@@ -350,7 +368,7 @@ function Login() {
                 </div>
               </div>
 
-              {/* CAMPO DE TEXTO SI ELIGE "OTRA" CIUDAD */}
+              {/* CAMPO TEXTO SI ELIGE OTRA CIUDAD */}
               {form.ciudad === "Otra" && (
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
@@ -358,7 +376,7 @@ function Login() {
                   </label>
                   <input
                     className={inputClass}
-                    placeholder="Ej. Barinas, San Cristóbal..."
+                    placeholder="Ej. Barinas..."
                     value={form.ciudadPersonalizada}
                     onChange={(e) => actualizar("ciudadPersonalizada", e.target.value)}
                   />
@@ -395,7 +413,7 @@ function Login() {
                 </div>
               </div>
 
-              {/* TELÉFONO (UNIFICADO Y CORREGIDO SIN DESBORDAMIENTO) */}
+              {/* TELÉFONO */}
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
                   Teléfono
@@ -427,7 +445,7 @@ function Login() {
             </>
           )}
 
-          {/* CORREO */}
+          {/* CORREO (SIEMPRE VISIBLE) */}
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
               Correo Electrónico
@@ -457,8 +475,8 @@ function Login() {
             </div>
           )}
 
-          {/* CONFIRMAR CONTRASEÑA */}
-          {modo === "registro" && (
+          {/* CONFIRMAR CONTRASEÑA (SOLO REGISTRO Y NO ADMIN) */}
+          {modo === "registro" && !modoAdmin && (
             <div className="flex flex-col gap-1">
               <label className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest">
                 Confirmar contraseña
@@ -474,29 +492,31 @@ function Login() {
                 value={form.claveConfirm}
                 onChange={(e) => actualizar("claveConfirm", e.target.value)}
               />
-              {form.claveConfirm && form.clave !== form.claveConfirm && (
-                <p className="text-[10px] text-rose-500 font-bold mt-0.5">
-                  Las contraseñas no coinciden.
-                </p>
-              )}
             </div>
           )}
 
+          {/* BOTÓN PRINCIPAL */}
           <button
             disabled={cargando}
             onClick={enviar}
-            className="mt-3 bg-[#0B0C15] text-[#00FF9D] rounded-2xl py-3.5 text-xs font-black uppercase tracking-widest hover:bg-slate-900 active:scale-[0.98] transition-all disabled:opacity-60 shadow-md"
+            className={`mt-3 rounded-2xl py-3.5 text-xs font-black uppercase tracking-widest shadow-md transition-all disabled:opacity-60 ${
+              modoAdmin 
+                ? "bg-slate-900 text-[#00FF9D] hover:bg-slate-800" 
+                : "bg-[#0B0C15] text-[#00FF9D] hover:bg-slate-900"
+            }`}
           >
             {cargando
               ? "Un momento..."
-              : modo === "registro"
-              ? "Crear cuenta"
-              : modo === "ingreso"
-              ? "Ingresar"
-              : "Enviar correo de recuperación"}
+              : modoAdmin 
+                ? "Acceder al Panel"
+                : modo === "registro"
+                  ? "Crear cuenta"
+                  : modo === "ingreso"
+                    ? "Ingresar"
+                    : "Enviar correo de recuperación"}
           </button>
 
-          {modo === "ingreso" && (
+          {modo === "ingreso" && !modoAdmin && (
             <button
               onClick={() => {
                 setModo("recuperar");
@@ -519,6 +539,21 @@ function Login() {
               Volver al inicio de sesión
             </button>
           )}
+
+          {/* ⚡ BOTON: ¿ERES ADMIN O GERENCIA? ⚡ */}
+          <div className="mt-4 pt-4 border-t border-gray-100 flex justify-center">
+            <button 
+              onClick={() => {
+                setModoAdmin(!modoAdmin);
+                setModo("ingreso"); // Forzamos ir a modo ingreso al cambiar
+                mostrarMensaje("");
+              }}
+              className="text-[11px] font-black text-slate-800 hover:text-emerald-600 transition-colors uppercase tracking-widest"
+            >
+              {modoAdmin ? "← Volver a acceso de Jugadores" : "⚙️ ¿Eres Admin o Gerencia?"}
+            </button>
+          </div>
+
         </div>
 
         {mensaje && (
