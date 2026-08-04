@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
+import { supabase } from "../../../lib/supabaseClient";
 
 // Catálogo estandarizado de Ciudades para garantizar Rankings sin typos
 const CIUDADES_POR_PAIS = {
@@ -185,8 +185,8 @@ function Login() {
 
         setCargando(false);
         mostrarMensaje("¡Cuenta creada con éxito!", "ok");
-        router.push("/");
-        router.refresh();
+        // REDIRECCIÓN LIMPIA PARA REGISTRO
+        window.location.href = "/";
       }
 
       return;
@@ -208,13 +208,12 @@ function Login() {
     } else {
       mostrarMensaje("Ingresaste correctamente.", "ok");
       
-      // Si está en modo admin, mandarlo al panel, sino a la vista de jugador normal.
+      // REDIRECCIÓN LIMPIA (Evita error removeChild de Next.js)
       if (modoAdmin) {
-        router.push("/padel/admin/recepcion");
+        window.location.href = "/admin/recepcion"; 
       } else {
-        router.push("/"); // O la ruta de dashboard de jugador
+        window.location.href = "/"; 
       }
-      router.refresh();
     }
   }
 

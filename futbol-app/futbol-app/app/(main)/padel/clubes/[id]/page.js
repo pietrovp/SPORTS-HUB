@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { supabase } from "../../../../lib/supabaseClient";
+import { supabase } from "../../../../../lib/supabaseClient";
 
 // Categorías ordenadas
 const CATEGORIAS_ORDENADAS = [

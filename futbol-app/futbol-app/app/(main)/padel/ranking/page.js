@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { supabase } from "../../../lib/supabaseClient";
+import { supabase } from "../../../../lib/supabaseClient";
 
 // Banderas por código de país
 const BANDERAS_PAIS = {

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import PartidoCard from "../../components/futbol/PartidoCard";
-import { supabase } from "../../lib/supabaseClient";
+import PartidoCard from "../../../components/futbol/PartidoCard";
+import { supabase } from "../../../lib/supabaseClient";
 import Link from "next/link";
 
 export default function Home() {
