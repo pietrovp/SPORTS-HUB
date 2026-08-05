@@ -137,18 +137,27 @@ export default function RecepcionElite() {
     }]);
   };
 
+  // En la tienda ya no bloqueamos por stock 0 si es ALQUILER (porque igual lo puedes alquilar mil veces)
   const agregarProductoAlTicket = (prod) => {
-    if (prod.stock <= 0) return alert("Producto sin stock");
+    if (!prod.is_rental && prod.stock <= 0) return alert("Producto sin stock para vender");
+    
     setCarrito(prev => {
       const existe = prev.find(i => i.id === `prod-${prod.id}`);
       if (existe) {
-        if (existe.cantidad >= prod.stock) return prev;
+        // Si no es alquiler y no hay suficiente stock, no sumar más al carrito
+        if (!prod.is_rental && existe.cantidad >= prod.stock) return prev;
         return prev.map(i => i.id === `prod-${prod.id}` ? { ...i, cantidad: i.cantidad + 1 } : i);
       }
       return [...prev, { 
-        id: `prod-${prod.id}`, tipo: 'producto', producto_id: prod.id, 
-        nombre: prod.name, detalle: prod.is_rental ? 'Alquiler' : 'Tienda',
-        precio: prod.price, cantidad: 1, stock_disp: prod.stock
+        id: `prod-${prod.id}`, 
+        tipo: 'producto', 
+        producto_id: prod.id, 
+        nombre: prod.name, 
+        detalle: prod.is_rental ? 'Alquiler' : 'Tienda',
+        precio: prod.price, 
+        cantidad: 1, 
+        stock_disp: prod.stock, 
+        is_rental: prod.is_rental // 🔴 AQUÍ GUARDAMOS EL BOOLEANO PARA LEERLO AL COBRAR
       }];
     });
   };
@@ -158,7 +167,8 @@ export default function RecepcionElite() {
       if (i.id === id) {
         const nuevaCant = i.cantidad + delta;
         if (nuevaCant <= 0) return null;
-        if (nuevaCant > i.stock_disp) return i;
+        // Si no es de alquiler, validar que no supere el stock
+        if (!i.is_rental && nuevaCant > i.stock_disp) return i;
         return { ...i, cantidad: nuevaCant };
       }
       return i;
@@ -167,10 +177,8 @@ export default function RecepcionElite() {
 
   const quitarDelTicket = (id) => setCarrito(prev => prev.filter(i => i.id !== id));
   
-  // El Total Real del Ticket (lo que cuesta todo neto sin comisiones adicionales)
   const totalCobrarUSD = carrito.reduce((sum, i) => sum + (i.precio * i.cantidad), 0);
   
-  // El Total a Cobrar al Cliente (Pistas Netas + Tienda Neta + 10% Fee App sobre las pistas)
   const totalConFeeAlJugador = carrito.reduce((sum, i) => {
     let subtotal = i.precio * i.cantidad;
     if (i.tipo === 'reserva') subtotal = subtotal * 1.10; 
@@ -188,8 +196,9 @@ export default function RecepcionElite() {
       const { data: ventaCaja, error: errVenta } = await supabase.from("sales").insert({
         club_id: clubId, 
         cashier_id: user.id, 
-        total_amount: totalCobrarUSD, // Precio neto
-        payment_method: metodoPago
+        total_amount: totalCobrarUSD, 
+        payment_method: metodoPago,
+        exchange_rate: tasaBCV 
       }).select("id").single();
 
       if (errVenta) throw new Error("Error creando ticket maestro: " + errVenta.message);
@@ -205,7 +214,7 @@ export default function RecepcionElite() {
             club_id: clubId, 
             court_id: item.cancha_id, 
             scheduled_at: fechaBd.toISOString(),
-            total_price: item.precio, // Precio neto
+            total_price: item.precio, 
             match_type: "privado", 
             status: "programado" 
           });
@@ -218,17 +227,21 @@ export default function RecepcionElite() {
             item_name: item.nombre,
             item_detail: item.detalle,
             quantity: 1,
-            price_unit: item.precio // Precio neto
+            price_unit: item.precio 
           });
 
         } else if (item.tipo === 'producto') {
-          const nuevoStock = item.stock_disp - item.cantidad;
           
-          const { error: errProd } = await supabase.from("products")
-            .update({ stock: nuevoStock })
-            .eq("id", item.producto_id);
+          // 🔴 CORRECCIÓN INFALIBLE: Validamos directo con la propiedad booleana
+          if (!item.is_rental) {
+            const nuevoStock = item.stock_disp - item.cantidad;
+            
+            const { error: errProd } = await supabase.from("products")
+              .update({ stock: nuevoStock })
+              .eq("id", item.producto_id);
 
-          if (errProd) throw new Error("Error descontando inventario: " + errProd.message);
+            if (errProd) throw new Error("Error descontando inventario: " + errProd.message);
+          }
 
           await supabase.from("sales_items").insert({
             sale_id: idVentaMaestra,
@@ -319,7 +332,6 @@ export default function RecepcionElite() {
     }
   }
 
-  // --- GUARDAR EL CIERRE DE CAJA EN SUPABASE ---
   async function ejecutarCierreDeCaja() {
     if (!efectivoReal || isNaN(efectivoReal)) {
       alert("Por favor ingresa cuánto dinero real tienes en caja.");
@@ -529,16 +541,24 @@ export default function RecepcionElite() {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {productos.map(p => (
-                    <button key={p.id} onClick={() => { agregarProductoAlTicket(p); setModalTienda(false); }} disabled={p.stock <= 0} className="bg-slate-50 border border-slate-100 hover:border-[#00FF9D] hover:bg-[#00FF9D]/5 p-4 rounded-2xl text-center transition-all disabled:opacity-50">
-                      <div className="text-3xl mb-2">{p.is_rental ? '🎾' : '🛍️'}</div>
-                      <h3 className="text-xs font-black text-slate-900 leading-tight h-8">{p.name}</h3>
-                      <div className="mt-2 flex justify-between items-center bg-white px-2 py-1 rounded-lg border border-slate-200">
-                        <span className="text-xs font-black text-emerald-600">${p.price.toFixed(2)}</span>
-                        <span className="text-[9px] font-bold text-slate-400">Disp: {p.stock}</span>
-                      </div>
-                    </button>
-                  ))}
+                  {productos.map(p => {
+                    // Si NO es alquiler y no hay stock, se deshabilita
+                    const deshabilitar = !p.is_rental && p.stock <= 0;
+                    return (
+                      <button key={p.id} onClick={() => { agregarProductoAlTicket(p); setModalTienda(false); }} disabled={deshabilitar} className="bg-slate-50 border border-slate-100 hover:border-[#00FF9D] hover:bg-[#00FF9D]/5 p-4 rounded-2xl text-center transition-all disabled:opacity-50">
+                        <div className="text-3xl mb-2">{p.is_rental ? '🎾' : '🛍️'}</div>
+                        <h3 className="text-xs font-black text-slate-900 leading-tight h-8">{p.name}</h3>
+                        <div className="mt-2 flex justify-between items-center bg-white px-2 py-1 rounded-lg border border-slate-200">
+                          <span className="text-xs font-black text-emerald-600">${p.price.toFixed(2)}</span>
+                          {p.is_rental ? (
+                            <span className="text-[9px] font-black text-purple-500 uppercase">Alquiler</span>
+                          ) : (
+                            <span className="text-[9px] font-bold text-slate-400">Disp: {p.stock}</span>
+                          )}
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </div>

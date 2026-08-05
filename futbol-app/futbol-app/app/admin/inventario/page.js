@@ -23,10 +23,10 @@ export default function InventarioGerenciaPage() {
     is_rental: false
   });
 
-  // --- ESTADOS PARA ACTUALIZAR STOCK RÁPIDO ---
+  // --- ESTADOS PARA ACTUALIZAR/AJUSTAR STOCK ---
   const [modalStockOpen, setModalStockOpen] = useState(false);
   const [productoSeleccionado, setProductoSeleccionado] = useState(null);
-  const [cantidadASumar, setCantidadASumar] = useState("");
+  const [nuevoStockExacto, setNuevoStockExacto] = useState("");
 
   useEffect(() => {
     cargarInventario();
@@ -38,7 +38,6 @@ export default function InventarioGerenciaPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Buscar el club del gerente logueado
       const { data: profile } = await supabase
         .from("profiles")
         .select("club_id")
@@ -51,7 +50,6 @@ export default function InventarioGerenciaPage() {
       }
       setUserClubId(profile.club_id);
 
-      // Traer productos de su club
       const { data: prods } = await supabase
         .from("products")
         .select("*")
@@ -73,6 +71,9 @@ export default function InventarioGerenciaPage() {
 
     try {
       setGuardando(true);
+      
+      const stockInicial = formData.is_rental ? 999 : parseInt(formData.stock, 10);
+
       const { error } = await supabase
         .from("products")
         .insert({
@@ -81,7 +82,7 @@ export default function InventarioGerenciaPage() {
           brand: formData.brand,
           category: formData.category,
           price: parseFloat(formData.price),
-          stock: parseInt(formData.stock, 10),
+          stock: stockInicial,
           image_url: formData.image_url,
           is_rental: formData.is_rental
         });
@@ -90,7 +91,7 @@ export default function InventarioGerenciaPage() {
       
       setIsModalOpen(false);
       setFormData({ name: "", brand: "", category: "pelotas", price: "", stock: "", image_url: "", is_rental: false });
-      cargarInventario(); // Recargar lista
+      cargarInventario();
     } catch (error) {
       alert("Error al guardar producto: " + error.message);
     } finally {
@@ -98,26 +99,26 @@ export default function InventarioGerenciaPage() {
     }
   }
 
-  // --- FUNCIÓN PARA SUMAR STOCK A PRODUCTO EXISTENTE ---
+  // --- FUNCIÓN PARA AJUSTAR EL STOCK AL NÚMERO EXACTO ---
   async function actualizarStock(e) {
     e.preventDefault();
-    if (!productoSeleccionado || !cantidadASumar) return;
+    if (!productoSeleccionado || nuevoStockExacto === "") return;
 
     try {
       setGuardando(true);
-      const nuevoStock = productoSeleccionado.stock + parseInt(cantidadASumar, 10);
+      const stockFinal = parseInt(nuevoStockExacto, 10);
 
       const { error } = await supabase
         .from("products")
-        .update({ stock: nuevoStock })
+        .update({ stock: stockFinal })
         .eq("id", productoSeleccionado.id);
 
       if (error) throw error;
 
       setModalStockOpen(false);
-      setCantidadASumar("");
+      setNuevoStockExacto("");
       setProductoSeleccionado(null);
-      cargarInventario(); // Recargar la lista para ver el nuevo número
+      cargarInventario(); 
     } catch (error) {
       alert("Error al actualizar stock: " + error.message);
     } finally {
@@ -125,7 +126,12 @@ export default function InventarioGerenciaPage() {
     }
   }
 
-  return (
+  const abrirModalAjuste = (producto) => {
+    setProductoSeleccionado(producto);
+    setNuevoStockExacto(producto.stock.toString());
+    setModalStockOpen(true);
+  };
+    return (
     <div className="bg-slate-50 min-h-screen w-full">
       {loading ? (
         <div className="p-10 text-center font-bold text-slate-500 animate-pulse">
@@ -166,7 +172,7 @@ export default function InventarioGerenciaPage() {
                         <span className="text-3xl">{p.category === 'alquiler_pala' ? '🎾' : '📦'}</span>
                       )}
                       {p.is_rental && (
-                        <span className="absolute top-2 right-2 bg-purple-100 text-purple-700 text-[9px] font-black px-2 py-1 rounded-md uppercase">
+                        <span className="absolute top-2 right-2 bg-purple-100 text-purple-700 text-[9px] font-black px-2 py-1 rounded-md uppercase tracking-widest">
                           Alquiler
                         </span>
                       )}
@@ -175,25 +181,45 @@ export default function InventarioGerenciaPage() {
                     <div className="flex-1">
                       <span className="text-[10px] font-black uppercase text-blue-500">{p.brand}</span>
                       <h3 className="font-bold text-slate-900 leading-tight mt-0.5">{p.name}</h3>
-                      <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-50">
-                        <div>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase">Stock</p>
-                          <div className="flex items-center gap-2">
-                            <p className={`font-black ${p.stock < 5 ? 'text-rose-500' : 'text-slate-700'}`}>{p.stock} und.</p>
-                            <button 
-                              onClick={() => { setProductoSeleccionado(p); setModalStockOpen(true); }}
-                              className="bg-blue-100 text-blue-700 hover:bg-blue-200 text-[10px] font-black px-2 py-0.5 rounded transition-colors"
-                              title="Sumar unidades"
-                            >
-                              +
-                            </button>
+                      
+                      {/* SECCIÓN PRECIO Y STOCK MEJORADA */}
+                      <div className="flex justify-between items-end mt-4 pt-3 border-t border-slate-100">
+                        
+                        {/* 🔴 LÓGICA DE ALQUILER VS VENTA PARA OCULTAR EL BOTÓN EDITAR */}
+                        {p.is_rental ? (
+                          <div className="flex-1">
+                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Disponibilidad</p>
+                            <p className="text-[10px] font-black text-purple-600 bg-purple-50 px-3 py-1.5 rounded-md uppercase tracking-widest inline-block border border-purple-100">
+                              Ilimitado
+                            </p>
                           </div>
-                        </div>
+                        ) : (
+                          <div>
+                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Stock Actual</p>
+                            <div className="flex items-center gap-2">
+                              <p className={`text-xl font-black leading-none ${p.stock < 5 ? 'text-rose-500' : 'text-slate-800'}`}>
+                                {p.stock}
+                              </p>
+                              <button 
+                                onClick={() => abrirModalAjuste(p)}
+                                className="flex items-center gap-1 bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-slate-400 hover:text-blue-600 text-[9px] font-black px-2 py-1 rounded-md transition-all shadow-sm group"
+                                title="Editar stock"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="group-hover:rotate-12 transition-transform">
+                                  <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                                </svg>
+                                EDITAR
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         <div className="text-right">
-                          <p className="text-[10px] font-bold text-slate-400 uppercase">Precio</p>
-                          <p className="font-black text-emerald-600">${p.price.toFixed(2)}</p>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Precio</p>
+                          <p className="text-xl font-black text-emerald-600 leading-none">${p.price.toFixed(2)}</p>
                         </div>
                       </div>
+
                     </div>
                   </div>
                 ))}
@@ -224,7 +250,15 @@ export default function InventarioGerenciaPage() {
 
                     <div>
                       <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Categoría</label>
-                      <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value, is_rental: e.target.value === 'alquiler_pala'})} className="w-full p-3 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-blue-500">
+                      <select value={formData.category} onChange={e => {
+                        const esAlquiler = e.target.value === 'alquiler_pala';
+                        setFormData({
+                          ...formData, 
+                          category: e.target.value, 
+                          is_rental: esAlquiler,
+                          stock: esAlquiler ? "999" : formData.stock 
+                        });
+                      }} className="w-full p-3 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-blue-500">
                         <option value="pelotas">Pelotas</option>
                         <option value="grips">Overgrips / Accesorios</option>
                         <option value="alquiler_pala">Alquiler de Pala</option>
@@ -236,10 +270,12 @@ export default function InventarioGerenciaPage() {
                       <input required type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} placeholder="0.00" className="w-full p-3 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-blue-500" />
                     </div>
 
-                    <div>
-                      <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Stock Inicial</label>
-                      <input required type="number" value={formData.stock} onChange={e => setFormData({...formData, stock: e.target.value})} placeholder="0" className="w-full p-3 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-blue-500" />
-                    </div>
+                    {!formData.is_rental && (
+                      <div>
+                        <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Stock Inicial</label>
+                        <input required type="number" value={formData.stock} onChange={e => setFormData({...formData, stock: e.target.value})} placeholder="0" className="w-full p-3 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-blue-500" />
+                      </div>
+                    )}
 
                     <div className="col-span-2">
                       <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">URL de la Imagen (Opcional)</label>
@@ -260,35 +296,34 @@ export default function InventarioGerenciaPage() {
             </div>
           )}
 
-          {/* MODAL DE ACTUALIZAR STOCK (SUMAR) */}
+          {/* MODAL DE AJUSTAR STOCK */}
           {modalStockOpen && productoSeleccionado && (
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
               <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-black text-slate-900">Sumar Stock</h2>
+                  <h2 className="text-xl font-black text-slate-900">Ajustar Stock</h2>
                   <button onClick={() => setModalStockOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold">✕</button>
                 </div>
                 
                 <p className="text-sm font-medium text-slate-500 mb-4">
-                  ¿Cuántas unidades nuevas llegaron de <span className="font-bold text-slate-900">{productoSeleccionado.name}</span>?
+                  Ingresa el número real de unidades de <span className="font-bold text-slate-900">{productoSeleccionado.name}</span> que hay en existencia.
                 </p>
 
                 <form onSubmit={actualizarStock}>
                   <div className="mb-4">
-                    <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Unidades a sumar</label>
+                    <label className="text-[10px] font-black uppercase text-slate-500 block mb-1">Stock Real Actual</label>
                     <input 
                       required 
                       type="number" 
-                      min="1"
-                      value={cantidadASumar} 
-                      onChange={e => setCantidadASumar(e.target.value)} 
-                      placeholder="Ej: 20" 
+                      min="0"
+                      value={nuevoStockExacto} 
+                      onChange={e => setNuevoStockExacto(e.target.value)} 
                       className="w-full p-3 rounded-xl border border-slate-200 text-lg font-black text-center outline-none focus:border-blue-500" 
                     />
                   </div>
 
-                  <button disabled={guardando} type="submit" className="w-full bg-blue-600 text-white font-black uppercase py-4 rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-70">
-                    {guardando ? "Actualizando..." : "Sumar al Inventario"}
+                  <button disabled={guardando} type="submit" className="w-full bg-slate-900 text-white font-black uppercase py-4 rounded-xl hover:bg-slate-800 transition-colors disabled:opacity-70">
+                    {guardando ? "Guardando..." : "Guardar Ajuste"}
                   </button>
                 </form>
               </div>
