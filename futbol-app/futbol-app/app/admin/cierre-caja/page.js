@@ -28,9 +28,11 @@ export default function CierreCajaPage() {
       if (res.ok) {
         const data = await res.json();
         setTasaBcv(data.usdRate);
+      } else {
+        console.error("La API de BCV respondió con error:", res.status);
       }
     } catch (error) {
-      console.error("Error obteniendo tasa BCV:", error);
+      console.error("Error catcheado obteniendo tasa BCV:", error);
     }
   };
 
@@ -38,7 +40,10 @@ export default function CierreCajaPage() {
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        setLoading(false);
+        return;
+      }
 
       const { data: profile } = await supabase
         .from("profiles")
@@ -56,8 +61,8 @@ export default function CierreCajaPage() {
       const startOfDay = new Date(`${fechaSeleccionada}T00:00:00`).toISOString();
       const endOfDay = new Date(`${fechaSeleccionada}T23:59:59`).toISOString();
 
-      // 1. Traer Reservas de Canchas
-      const { data: matches } = await supabase
+      // Traer Reservas de Canchas
+      const { data: matches, error: matchesError } = await supabase
         .from("padel_matches")
         .select(`
           id, total_price, scheduled_at, payment_method, payment_status,
@@ -67,9 +72,11 @@ export default function CierreCajaPage() {
         .gte("scheduled_at", startOfDay)
         .lte("scheduled_at", endOfDay)
         .neq("status", "cancelado");
+        
+      if (matchesError) console.error("Error cargando matches:", matchesError);
 
-      // 2. Traer Ventas de POS + Sus Ítems (AHORA CON SALES_ITEMS)
-      const { data: sales } = await supabase
+      // Traer Ventas de POS + Sus Ítems
+      const { data: sales, error: salesError } = await supabase
         .from("sales")
         .select(`
           id, total_amount, payment_method, created_at,
@@ -78,6 +85,8 @@ export default function CierreCajaPage() {
         .eq("club_id", clubId)
         .gte("created_at", startOfDay)
         .lte("created_at", endOfDay);
+        
+      if (salesError) console.error("Error cargando sales:", salesError);
 
       setCanchasReservadas(matches || []);
       setVentasTienda(sales || []);
@@ -217,7 +226,7 @@ export default function CierreCajaPage() {
               </div>
             </div>
 
-            {/* TABLA TIENDA (ACTUALIZADA CON ITEMS) */}
+            {/* TABLA TIENDA */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
                 <h3 className="text-sm font-black text-slate-800 uppercase">Detalle de Tienda (POS)</h3>
@@ -233,12 +242,11 @@ export default function CierreCajaPage() {
                       <div key={venta.id} className="p-4 hover:bg-slate-50 flex justify-between items-start">
                         <div>
                           <div className="space-y-1 mb-2">
-                            {/* AQUÍ RECORREMOS LOS ITEMS DE LA VENTA */}
                             {venta.sales_items?.map((item) => (
                               <p key={item.id} className="font-bold text-slate-800 text-sm flex items-center gap-2">
                                 <span className="bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded text-[10px]">{item.quantity}x</span>
                                 {item.item_name} 
-                                <span className="text-slate-400 font-normal text-xs">(${(item.price_unit).toFixed(2)} c/u)</span>
+                                <span className="text-slate-400 font-normal text-xs">(${(Number(item.price_unit) || 0).toFixed(2)} c/u)</span>
                               </p>
                             ))}
                           </div>
