@@ -33,13 +33,11 @@ export default function CierreCajaPage() {
         const startOfDay = new Date(`${hoy}T00:00:00`).toISOString();
         const endOfDay = new Date(`${hoy}T23:59:59`).toISOString();
 
-        setDebugLog("Consultando Canchas...");
+        setDebugLog("Consultando Canchas (Sin relaciones complejas)...");
+        // Quitamos la relación a padel_courts a ver si eso era lo que causaba el bloqueo
         const { data: matches, error: matchesError } = await supabase
           .from("padel_matches")
-          .select(`
-            id, total_price, scheduled_at, payment_method, payment_status,
-            padel_courts ( name )
-          `)
+          .select(`id, total_price, scheduled_at, payment_method, payment_status`)
           .eq("club_id", clubId)
           .gte("scheduled_at", startOfDay)
           .lte("scheduled_at", endOfDay);
@@ -49,23 +47,21 @@ export default function CierreCajaPage() {
           return;
         }
 
-        setDebugLog("Consultando Tienda y relaciones...");
+        setDebugLog("Consultando Tienda (Sin relaciones complejas)...");
+        // Quitamos la relación a sales_items a ver si eso era lo que causaba el bloqueo
         const { data: sales, error: salesError } = await supabase
           .from("sales")
-          .select(`
-            id, total_amount, payment_method, created_at,
-            sales_items ( id, item_name, quantity, price_unit )
-          `)
+          .select(`id, total_amount, payment_method, created_at`)
           .eq("club_id", clubId)
           .gte("created_at", startOfDay)
           .lte("created_at", endOfDay);
 
         if (salesError) {
-          setDebugLog("ERROR EN TIENDA (posible problema de relación de tablas): " + JSON.stringify(salesError));
+          setDebugLog("ERROR EN TIENDA: " + JSON.stringify(salesError));
           return;
         }
 
-        setDebugLog("TODO EXITOSO. Datos obtenidos:\n\nCanchas: " + JSON.stringify(matches) + "\n\nVentas: " + JSON.stringify(sales));
+        setDebugLog("TODO EXITOSO. Las tablas base funcionan.\n\nCanchas encontradas: " + matches.length + "\nVentas POS encontradas: " + sales.length);
 
       } catch (error) {
         setDebugLog("ERROR CATCH (Sintaxis o Red): " + error.message);
