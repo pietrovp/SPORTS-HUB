@@ -6,17 +6,16 @@ import { supabase } from "@/lib/supabaseClient";
 export default function CierreCajaPage() {
   const [loading, setLoading] = useState(true);
   const [tasaBcv, setTasaBcv] = useState(null);
-
-  const [fecha, setFecha] = useState(() =>
-    new Date().toISOString().split("T")[0]
-  );
-
+  
+  // Fecha seleccionada (por defecto hoy)
+  const [fecha, setFecha] = useState(() => new Date().toISOString().split("T")[0]);
+  
+  // Datos traídos de Supabase
   const [canchasReservadas, setCanchasReservadas] = useState([]);
   const [ventasTienda, setVentasTienda] = useState([]);
-
+  
+  // Para la declaración de caja
   const [efectivoDeclarado, setEfectivoDeclarado] = useState("");
-  const [cerrando, setCerrando] = useState(false);
-  const [mensajeCierre, setMensajeCierre] = useState("");
 
   useEffect(() => {
     cargarDatos(fecha);
@@ -25,35 +24,18 @@ export default function CierreCajaPage() {
 
   const obtenerTasaBcv = async () => {
     try {
-      const res = await fetch("/api/bcv", { cache: "no-store" });
-
-      if (!res.ok) {
-        console.error("BCV respondió mal:", res.status);
-        setTasaBcv(null);
-        return;
+      const res = await fetch("/api/bcv");
+      if (res.ok) {
+        const data = await res.json();
+        setTasaBcv(data.usdRate);
       }
-
-      const data = await res.json();
-      console.log("BCV data en cliente:", data);
-
-      const rate =
-        data.usdRate ??
-        data.rate ??
-        data.valor ??
-        data.promedio ??
-        null;
-
-      setTasaBcv(rate ? Number(rate) : null);
     } catch (error) {
-      console.error("Error obteniendo tasa BCV:", error);
-      setTasaBcv(null);
+      console.error("Error catcheado obteniendo tasa BCV:", error);
     }
   };
 
   const cargarDatos = async (fechaSeleccionada) => {
     setLoading(true);
-    setMensajeCierre("");
-
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -76,7 +58,7 @@ export default function CierreCajaPage() {
       const startOfDay = new Date(`${fechaSeleccionada}T00:00:00`).toISOString();
       const endOfDay = new Date(`${fechaSeleccionada}T23:59:59`).toISOString();
 
-      // Reservas de canchas (sin cancelados)
+      // Traer Reservas de Canchas (excluyendo cancelados)
       const { data: matches } = await supabase
         .from("padel_matches")
         .select(`
@@ -89,7 +71,7 @@ export default function CierreCajaPage() {
         .neq("status", "cancelado")
         .neq("payment_status", "cancelado");
 
-      // Ventas POS + ítems
+      // Traer Ventas de POS + Sus Ítems
       const { data: sales } = await supabase
         .from("sales")
         .select(`
@@ -108,7 +90,7 @@ export default function CierreCajaPage() {
     setLoading(false);
   };
 
-  // Cálculos
+  // Cálculos automáticos
   const totalCanchas = canchasReservadas.reduce(
     (acc, curr) => acc + (Number(curr.total_price) || 0),
     0
@@ -119,7 +101,7 @@ export default function CierreCajaPage() {
   );
 
   const totalSistema = totalCanchas + totalTienda;
-  const comisionSportsHub = totalCanchas * 0.10; // 10% solo sobre canchas
+  const comisionSportsHub = totalCanchas * 0.10; // 10% solo a canchas
 
   const declarado = Number(efectivoDeclarado) || 0;
   const diferencia = declarado - totalSistema;
@@ -129,61 +111,9 @@ export default function CierreCajaPage() {
       ? "text-rose-500 bg-rose-500/10 border-rose-500/30"
       : "text-emerald-500 bg-emerald-500/10 border-emerald-500/30";
 
-  const handleCerrarDia = async () => {
-    setMensajeCierre("");
-    if (!efectivoDeclarado) {
-      setMensajeCierre("⚠️ Primero declara el efectivo/total en caja.");
-      return;
-    }
-
-    setCerrando(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setMensajeCierre("No hay usuario autenticado.");
-        setCerrando(false);
-        return;
-      }
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("club_id")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      const clubId = profile?.club_id;
-      if (!clubId) {
-        setMensajeCierre("Este usuario no tiene club asignado.");
-        setCerrando(false);
-        return;
-      }
-
-      const { error } = await supabase.from("cash_registers").insert({
-        opened_by: user.id,
-        closed_by: user.id,
-        club_id: clubId,
-        initial_cash: 0,
-        expected_cash: totalSistema,
-        real_cash: declarado,
-        status: "closed",
-      });
-
-      if (error) {
-        console.error("Error cerrando día:", error);
-        setMensajeCierre("❌ Error registrando el cierre de caja.");
-      } else {
-        setMensajeCierre("✅ Cierre de caja registrado correctamente.");
-      }
-    } catch (error) {
-      console.error(error);
-      setMensajeCierre("❌ Error inesperado cerrando el día.");
-    }
-    setCerrando(false);
-  };
-
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
-      {/* CABECERA / FILTROS */}
+      {/* CABECERA Y FILTROS */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
         <div>
           <h1 className="text-3xl font-black text-slate-900 tracking-tighter">
@@ -215,7 +145,7 @@ export default function CierreCajaPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* RESUMEN IZQUIERDA */}
+          {/* COLUMNA IZQUIERDA: RESUMEN FINANCIERO */}
           <div className="lg:col-span-1 space-y-4">
             <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
               <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">
@@ -224,9 +154,7 @@ export default function CierreCajaPage() {
 
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                  <span className="font-semibold text-slate-600">
-                    🎾 Canchas
-                  </span>
+                  <span className="font-semibold text-slate-600">🎾 Canchas</span>
                   <span className="font-black text-slate-900">
                     ${totalCanchas.toFixed(2)}
                   </span>
@@ -273,21 +201,20 @@ export default function CierreCajaPage() {
               </p>
             </div>
 
-            {/* DECLARAR CAJA + CERRAR DÍA */}
-            <div className="bg-indigo-50 p-5 rounded-2xl border border-indigo-100 space-y-3">
-              <h2 className="text-xs font-black text-indigo-800 uppercase tracking-widest">
+            {/* CUADRE DE CAJA */}
+            <div className="bg-indigo-50 p-5 rounded-2xl border border-indigo-100">
+              <h2 className="text-xs font-black text-indigo-800 uppercase tracking-widest mb-3">
                 Declarar Caja
               </h2>
-              <p className="text-xs text-indigo-600 font-medium">
-                Ingresa el total de dinero físico y transferencias que tienes en
-                mano.
+              <p className="text-xs text-indigo-600 mb-3 font-medium">
+                Ingresa el total de dinero físico y transferencias que tienes en mano.
               </p>
               <input
                 type="number"
                 placeholder="Ej. 480"
                 value={efectivoDeclarado}
                 onChange={(e) => setEfectivoDeclarado(e.target.value)}
-                className="w-full px-4 py-3 bg-white border border-indigo-200 rounded-xl font-black text-xl text-slate-900 text-center outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full px-4 py-3 bg-white border border-indigo-200 rounded-xl font-black text-xl text-slate-900 text-center mb-3 outline-none focus:ring-2 focus:ring-indigo-400"
               />
 
               {efectivoDeclarado !== "" && (
@@ -298,31 +225,17 @@ export default function CierreCajaPage() {
                     {diferencia < 0 ? "Faltante" : "Sobrante / Cuadrado"}
                   </span>
                   <span className="text-lg font-black">
-                    {diferencia < 0 ? "" : "+"}${diferencia.toFixed(2)}
+                    {diferencia < 0 ? "" : "+"}
+                    {diferencia.toFixed(2)}
                   </span>
                 </div>
-              )}
-
-              <button
-                type="button"
-                onClick={handleCerrarDia}
-                disabled={cerrando}
-                className="w-full mt-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {cerrando ? "Cerrando día..." : "✅ Cerrar día y guardar cierre"}
-              </button>
-
-              {mensajeCierre && (
-                <p className="text-[11px] font-bold mt-2 text-slate-700">
-                  {mensajeCierre}
-                </p>
               )}
             </div>
           </div>
 
-          {/* DETALLE DERECHA */}
+          {/* COLUMNA DERECHA: DETALLE */}
           <div className="lg:col-span-2 space-y-6">
-            {/* CANCHAS */}
+            {/* TABLA CANCHAS */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
                 <h3 className="text-sm font-black text-slate-800 uppercase">
@@ -378,10 +291,10 @@ export default function CierreCajaPage() {
               </div>
             </div>
 
-            {/* TIENDA / POS */}
+            {/* TABLA TIENDA (POS) */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items.center">
-                <h3 className="text-sm font.black text.slate-800 uppercase">
+              <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
+                <h3 className="text-sm font-black text-slate-800 uppercase">
                   Detalle de Tienda (POS)
                 </h3>
                 <span className="text-xs font-bold bg-white px-2 py-1 rounded-lg border text-slate-500">
