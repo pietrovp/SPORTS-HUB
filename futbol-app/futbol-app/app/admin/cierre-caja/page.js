@@ -6,16 +6,17 @@ import { supabase } from "@/lib/supabaseClient";
 export default function CierreCajaPage() {
   const [loading, setLoading] = useState(true);
   const [tasaBcv, setTasaBcv] = useState(null);
-  
-  // Fecha seleccionada (por defecto hoy)
-  const [fecha, setFecha] = useState(() => new Date().toISOString().split("T")[0]);
-  
-  // Datos traídos de Supabase
+
+  const [fecha, setFecha] = useState(() =>
+    new Date().toISOString().split("T")[0]
+  );
+
   const [canchasReservadas, setCanchasReservadas] = useState([]);
   const [ventasTienda, setVentasTienda] = useState([]);
-  
-  // Para la declaración de caja
+
   const [efectivoDeclarado, setEfectivoDeclarado] = useState("");
+  const [cerrando, setCerrando] = useState(false);
+  const [mensajeCierre, setMensajeCierre] = useState("");
 
   useEffect(() => {
     cargarDatos(fecha);
@@ -36,6 +37,8 @@ export default function CierreCajaPage() {
 
   const cargarDatos = async (fechaSeleccionada) => {
     setLoading(true);
+    setMensajeCierre("");
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -110,6 +113,60 @@ export default function CierreCajaPage() {
     diferencia < 0
       ? "text-rose-500 bg-rose-500/10 border-rose-500/30"
       : "text-emerald-500 bg-emerald-500/10 border-emerald-500/30";
+
+  const handleCerrarDia = async () => {
+    setMensajeCierre("");
+    if (!efectivoDeclarado) {
+      setMensajeCierre("⚠️ Primero declara el efectivo/total en caja.");
+      return;
+    }
+
+    setCerrando(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setMensajeCierre("No hay usuario autenticado.");
+        setCerrando(false);
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("club_id")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const clubId = profile?.club_id;
+      if (!clubId) {
+        setMensajeCierre("Este usuario no tiene club asignado.");
+        setCerrando(false);
+        return;
+      }
+
+      // Creamos un registro de cierre en cash_registers
+      const { error } = await supabase.from("cash_registers").insert({
+        opened_by: user.id,          // opcional: el mismo usuario abre/cierra
+        closed_by: user.id,
+        club_id: clubId,
+        initial_cash: 0,             // si luego manejas apertura del turno, aquí cambias
+        expected_cash: totalSistema, // lo que el sistema dice que debería haber
+        real_cash: declarado,        // lo que declaró el recepcionista
+        status: "closed"
+        // opening_time y closing_time se llenan solos con default
+      });
+
+      if (error) {
+        console.error("Error cerrando día:", error);
+        setMensajeCierre("❌ Error registrando el cierre de caja.");
+      } else {
+        setMensajeCierre("✅ Cierre de caja registrado correctamente.");
+      }
+    } catch (error) {
+      console.error(error);
+      setMensajeCierre("❌ Error inesperado cerrando el día.");
+    }
+    setCerrando(false);
+  };
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -203,12 +260,12 @@ export default function CierreCajaPage() {
               </p>
             </div>
 
-            {/* DECLARAR CAJA */}
-            <div className="bg-indigo-50 p-5 rounded-2xl border border-indigo-100">
-              <h2 className="text-xs font-black text-indigo-800 uppercase tracking-widest mb-3">
+            {/* DECLARAR CAJA + CERRAR DÍA */}
+            <div className="bg-indigo-50 p-5 rounded-2xl border border-indigo-100 space-y-3">
+              <h2 className="text-xs font-black text-indigo-800 uppercase tracking-widest">
                 Declarar Caja
               </h2>
-              <p className="text-xs text-indigo-600 mb-3 font-medium">
+              <p className="text-xs text-indigo-600 font-medium">
                 Ingresa el total de dinero físico y transferencias que tienes en
                 mano.
               </p>
@@ -217,7 +274,7 @@ export default function CierreCajaPage() {
                 placeholder="Ej. 480"
                 value={efectivoDeclarado}
                 onChange={(e) => setEfectivoDeclarado(e.target.value)}
-                className="w-full px-4 py-3 bg-white border border-indigo-200 rounded-xl font-black text-xl text-slate-900 text-center mb-3 outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full px-4 py-3 bg-white border border-indigo-200 rounded-xl font-black text-xl text-slate-900 text-center outline-none focus:ring-2 focus:ring-indigo-400"
               />
 
               {efectivoDeclarado !== "" && (
@@ -231,6 +288,21 @@ export default function CierreCajaPage() {
                     {diferencia < 0 ? "" : "+"}${diferencia.toFixed(2)}
                   </span>
                 </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleCerrarDia}
+                disabled={cerrando}
+                className="w-full mt-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cerrando ? "Cerrando día..." : "✅ Cerrar día y guardar cierre"}
+              </button>
+
+              {mensajeCierre && (
+                <p className="text-[11px] font-bold mt-2 text-slate-700">
+                  {mensajeCierre}
+                </p>
               )}
             </div>
           </div>
