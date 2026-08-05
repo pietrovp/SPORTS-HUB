@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { supabase } from "../../../lib/supabaseClient";
-import PartidoPadelCard from "../../../components/padel/PartidoPadelCard";
+import { supabase } from "@/lib/supabaseClient";
+import PartidoPadelCard from "@/components/padel/PartidoPadelCard";
 
 const TODAS_CATEGORIAS = [
   { value: "rookies", label: "Rookies" },

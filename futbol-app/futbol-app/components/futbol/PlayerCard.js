@@ -1,6 +1,6 @@
 "use client";
 
-import { getFlagEmoji } from "../../lib/countries";
+import { getFlagEmoji } from "@/lib/countries";
 
 const TIERS = [
   {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function EstadoMiPartido({ partidoId, golesEquipo1, golesEquipo2, estado }) {
   const [resultado, setResultado] = useState(null);

@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../../../../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 import {
   formatCurrency,
   getMetodoLabel,
   getStatusLabel,
-} from "../../../../lib/futbol/paymentHelpers";
+} from "@/lib/futbol/paymentHelpers";
 
 const getBadgeStyle = (status) => {
   switch (status) {

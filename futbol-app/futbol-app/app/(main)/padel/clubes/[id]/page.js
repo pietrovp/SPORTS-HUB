@@ -3,344 +3,445 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { supabase } from "../../../../../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
-// Categorías ordenadas
-const CATEGORIAS_ORDENADAS = [
-  { value: "rookies", label: "Rookies" },
-  { value: "7ma", label: "7ma Categoría" },
-  { value: "6ta", label: "6ta Categoría" },
-  { value: "5ta", label: "5ta Categoría" },
-  { value: "4ta", label: "4ta Categoría" },
-  { value: "3era", label: "3era Categoría" },
-  { value: "2da", label: "2da Categoría" },
-  { value: "open", label: "Open" },
-];
+const AMENIDADES_MAP = {
+  equipment_rental: { label: "Alquiler de Equipo", icon: "🎾" },
+  free_parking: { label: "Estacionamiento Gratis", icon: "🚗" },
+  store: { label: "Tienda Deportiva", icon: "🛍️" },
+  restaurant: { label: "Restaurante", icon: "🍽️" },
+  cafeteria: { label: "Cafetería", icon: "☕" },
+  changing_room: { label: "Vestuarios y Duchas", icon: "🚿" },
+  wifi: { label: "WiFi Gratis", icon: "📶" },
+  lockers: { label: "Lockers / Casilleros", icon: "🔒" },
+};
 
-const PREFERENCIA_GENERO = [
-  { value: "todos", label: "🌐 Todos" },
-  { value: "masculino", label: "👨 Masculino" },
-  { value: "femenino", label: "👩 Femenino" },
-  { value: "mixto", label: "👫 Mixto" },
-];
-
-// 🧠 Cálculo automático del Rango Competitivo
-function getRangoCompetitivoAutomático(userCatValue) {
-  const idx = CATEGORIAS_ORDENADAS.findIndex((c) => c.value === userCatValue);
-  const safeIdx = idx === -1 ? 0 : idx;
-  const minIdx = Math.max(0, safeIdx - 1);
-  const maxIdx = Math.min(CATEGORIAS_ORDENADAS.length - 1, safeIdx + 1);
-  const permitidas = CATEGORIAS_ORDENADAS.slice(minIdx, maxIdx + 1);
-
-  return {
-    min: CATEGORIAS_ORDENADAS[minIdx],
-    actual: CATEGORIAS_ORDENADAS[safeIdx],
-    max: CATEGORIAS_ORDENADAS[maxIdx],
-    permitidas,
-    etiquetaRango: permitidas.map((c) => c.label).join(" • "),
-    etiquetaCorta: permitidas.map((c) => c.value).join(" • "),
-  };
+function parsearFechaBD(fechaStr) {
+  if (!fechaStr) return new Date();
+  const str = fechaStr.replace(" ", "T");
+  return new Date(str.endsWith("Z") || str.includes("+") ? str : `${str}Z`);
 }
 
-// 🧠 Función para generar horarios dinámicos según el club
-function generarHorariosClub(openTime, closeTime, durationMin) {
-  const horarios = [];
-  const [openH, openM] = openTime.split(':').map(Number);
-  const [closeH, closeM] = closeTime.split(':').map(Number);
-  
-  let currentMin = (openH * 60) + openM;
-  const endMin = (closeH * 60) + closeM;
-
-  while (currentMin + durationMin <= endMin) {
-    const h = Math.floor(currentMin / 60);
-    const m = currentMin % 60;
-    
-    const isPM = h >= 12;
-    const displayH = h > 12 ? h - 12 : (h === 0 ? 12 : h);
-    const ampm = isPM ? "PM" : "AM";
-    
-    const timeStr = `${displayH.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
-    const precio = (h >= 17 && h < 21) ? 25.00 : 15.00; // Lógica básica de precio
-    
-    horarios.push({ timeStr, precio });
-    currentMin += durationMin;
-  }
-  
-  return horarios;
-}
-
-export default function ClubDetallePage() {
+export default function PublicClubDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const clubParam = params?.id;
+  const clubId = params.id;
 
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
-  const [userCategoria, setUserCategoria] = useState("rookies");
+  const [userPadelProfile, setUserPadelProfile] = useState(null);
 
   const [club, setClub] = useState(null);
-  const [pistas, setPistas] = useState([]);
-  const [partidosFecha, setPartidosFecha] = useState([]);
-  const [horariosDisponibles, setHorariosDisponibles] = useState([]);
-  const [pistasColapsadas, setPistasColapsadas] = useState({});
+  const [canchas, setCanchas] = useState([]);
+  const [partidosClub, setPartidosClub] = useState([]);
 
-  const [fechaSeleccionada, setFiltroFecha] = useState(() => {
-    return new Date().toISOString().split("T")[0];
-  });
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
 
-  // Modal Reserva
+  // Modal Pasarela de Pago Inicial
   const [modalReservaOpen, setModalReservaOpen] = useState(false);
-  const [pasoModal, setPasoModal] = useState(1); 
-  const [slotSeleccionado, setSlotSeleccionado] = useState(null);
+  const [pasoModal, setPasoModal] = useState(1);
+  const [bloqueSeleccionado, setBloqueSeleccionado] = useState(null);
+  const [procesandoReserva, setProcesandoReserva] = useState(false);
+  
+  // Formulario Reserva Inicial
+  const [tipoReserva, setTipoReserva] = useState("abierto");
+  const [modoCompetitivo, setModoCompetitivo] = useState(true);
+  const [metodoPago, setMetodoPago] = useState("pago_movil");
+  const [montoAbono, setMontoAbono] = useState("");
+  const [numReferencia, setNumReferencia] = useState("");
+  const [previewComprobante, setPreviewComprobante] = useState("");
 
-  // Formulario y Pagos
-  const [modoPago, setModoPago] = useState("cuota");
-  const [tipoJuego, setTipoJuego] = useState("competitivo");
-  const [catMaximaAmistoso, setCatMaximaAmistoso] = useState("open");
-  const [prefGenero, setPrefGenero] = useState("todos");
-  const [metodoPagoElegido, setMetodoPagoElegido] = useState("efectivo"); 
-  const [referenciaPago, setReferenciaPago] = useState(""); // NUEVO ESTADO PARA LA REFERENCIA
-  const [procesandoPago, setProcesandoPago] = useState(false);
-  const [errorReserva, setErrorReserva] = useState("");
-
-  // NEGOCIO Y TASAS
-  const TASA_COMISION = 0.10; // 10%
-  const [tasaBcv, setTasaBcv] = useState(0);
+  // Modal Ver/Gestionar "Mi Reserva"
+  const [modalMiReservaOpen, setModalMiReservaOpen] = useState(false);
+  const [matchMiReservaSel, setMatchMiReservaSel] = useState(null);
+  const [formPagoExtra, setFormPagoExtra] = useState({
+    monto: "",
+    metodoPago: "pago_movil",
+    numReferencia: "",
+    previewComprobante: "",
+  });
+  const [enviandoPagoExtra, setEnviandoPagoExtra] = useState(false);
 
   useEffect(() => {
-    if (clubParam) cargarClubYHorarios();
-  }, [clubParam, fechaSeleccionada]);
+    if (clubId) {
+      cargarDetalleClub();
+    }
+  }, [clubId]);
 
-  useEffect(() => {
-    if (modoPago === "completa") setTipoJuego("amistoso");
-  }, [modoPago]);
-
-  function toggleColapsarPista(pistaId) {
-    setPistasColapsadas((prev) => ({ ...prev, [pistaId]: !prev[pistaId] }));
-  }
-
-  async function cargarClubYHorarios() {
+  async function cargarDetalleClub() {
     try {
       setLoading(true);
-      setErrorReserva("");
-
-      // 0. Obtener tasa BCV
-      try {
-        const resBcv = await fetch("/api/futbol/bcv-rate");
-        if (resBcv.ok) {
-          const dataBcv = await resBcv.json();
-          if (dataBcv.usdRate) setTasaBcv(dataBcv.usdRate);
-        }
-      } catch (errBcv) {
-        console.error("Error obteniendo tasa BCV:", errBcv);
-      }
 
       const { data: { user: authUser } } = await supabase.auth.getUser();
       setUser(authUser);
 
       if (authUser) {
-        const { data: pProfile } = await supabase
+        const { data: padelProf } = await supabase
           .from("padel_profiles")
-          .select("categoria_oficial")
+          .select("*")
           .eq("cuenta_id", authUser.id)
           .maybeSingle();
-        setUserCategoria(pProfile?.categoria_oficial || "rookies");
+
+        setUserPadelProfile(padelProf || null);
       }
 
-      // 1. Datos del Club
-      let targetClub = null;
-      const { data: clubBySlug } = await supabase.from("padel_clubs").select("*").eq("slug", clubParam).maybeSingle();
+      const { data: clubData, error: cErr } = await supabase
+        .from("padel_clubs")
+        .select("*")
+        .eq("id", clubId)
+        .maybeSingle();
 
-      if (clubBySlug) {
-        targetClub = clubBySlug;
-      } else {
-        const { data: clubById } = await supabase.from("padel_clubs").select("*").eq("id", clubParam).maybeSingle();
-        targetClub = clubById;
-      }
+      if (cErr || !clubData) throw new Error("Club no encontrado.");
+      setClub(clubData);
 
-      if (!targetClub) throw new Error("No se encontró el club.");
-      setClub(targetClub);
-
-      // 2. Horarios Dinámicos
-      const duration = targetClub.slot_duration_minutes || 60;
-      const openTime = targetClub.open_time || '07:00:00';
-      const closeTime = targetClub.close_time || '23:00:00';
-      setHorariosDisponibles(generarHorariosClub(openTime, closeTime, duration));
-
-      // 3. Canchas
-      let { data: courtsData } = await supabase
+      const { data: courtsData } = await supabase
         .from("padel_courts")
         .select("*")
-        .eq("club_id", targetClub.id)
+        .eq("club_id", clubId)
         .eq("is_active", true)
-        .order('court_number', { ascending: true });
-      setPistas(courtsData || []);
+        .order("court_number", { ascending: true });
 
-      // 4. Partidos programados
-      const inicioDia = new Date(`${fechaSeleccionada}T00:00:00`).toISOString();
-      const finDia = new Date(`${fechaSeleccionada}T23:59:59`).toISOString();
-      const { data: matches } = await supabase
+      setCanchas(courtsData || []);
+
+      const { data: matchesData, error: matchesErr } = await supabase
         .from("padel_matches")
-        .select(`
-          id, court_id, scheduled_at, status, is_private, match_type, price_per_player, category_restriction, is_competitive,
-          players:padel_match_players ( user_id, team )
-        `)
-        .eq("club_id", targetClub.id)
+        .select("*, court:padel_courts(name)")
+        .eq("club_id", clubId)
         .neq("status", "cancelado")
-        .gte("scheduled_at", inicioDia)
-        .lte("scheduled_at", finDia);
+        .order("scheduled_at", { ascending: true });
 
-      setPartidosFecha(matches || []);
+      if (matchesErr) {
+        console.error("Error al obtener partidos del club:", matchesErr);
+      }
+
+      const matchIds = (matchesData || []).map((m) => m.id);
+
+      if (matchIds.length > 0) {
+        const { data: playersData } = await supabase
+          .from("padel_match_players")
+          .select("id, match_id, user_id, team")
+          .in("match_id", matchIds);
+
+        const allUserIds = Array.from(new Set((playersData || []).map((p) => p.user_id).filter(Boolean)));
+
+        let profilesMap = {};
+        let padelProfilesMap = {};
+
+        if (allUserIds.length > 0) {
+          const [{ data: profsData }, { data: padelProfsData }] = await Promise.all([
+            supabase.from("profiles").select("id, nombre, apellido, avatar_url, telefono").in("id", allUserIds),
+            supabase.from("padel_profiles").select("cuenta_id, rating, categoria_oficial").in("cuenta_id", allUserIds),
+          ]);
+
+          (profsData || []).forEach((p) => { profilesMap[p.id] = p; });
+          (padelProfsData || []).forEach((pp) => { padelProfilesMap[pp.cuenta_id] = pp; });
+        }
+
+        const playersByMatch = {};
+        (playersData || []).forEach((p) => {
+          if (!playersByMatch[p.match_id]) playersByMatch[p.match_id] = [];
+          playersByMatch[p.match_id].push({
+            ...p,
+            profile: profilesMap[p.user_id] || null,
+            padel_profile: padelProfilesMap[p.user_id] || null,
+          });
+        });
+
+        const partidosFinales = (matchesData || []).map((m) => ({
+          ...m,
+          players: playersByMatch[m.id] || [],
+        }));
+
+        setPartidosClub(partidosFinales);
+
+        if (matchMiReservaSel) {
+          const actualizado = partidosFinales.find(m => m.id === matchMiReservaSel.id);
+          if (actualizado) setMatchMiReservaSel(actualizado);
+        }
+      } else {
+        setPartidosClub(matchesData || []);
+      }
     } catch (err) {
-      console.error("Error cargando club:", err);
+      console.error("Error cargando detalle del club:", err);
     } finally {
       setLoading(false);
     }
   }
 
-  const diasCarrusel = useMemo(() => {
-    const dias = [];
-    const hoy = new Date();
+  const diasSiguientes = useMemo(() => {
+    const list = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date();
-      d.setDate(hoy.getDate() + i);
-      const iso = d.toISOString().split("T")[0];
-      const diaNum = d.getDate();
-      const mesNombre = d.toLocaleDateString("es-ES", { month: "short" }).toUpperCase();
-      const diaNombre = i === 0 ? "HOY" : i === 1 ? "MAÑANA" : d.toLocaleDateString("es-ES", { weekday: "short" }).substring(0,3).toUpperCase();
-      dias.push({ iso, diaNum, mesNombre, diaNombre });
+      d.setDate(d.getDate() + i);
+      list.push(d);
     }
-    return dias;
+    return list;
   }, []);
 
-  function abrirModalReserva(court, slot) {
+  const bloquesHorarios = useMemo(() => {
+    if (!club) return [];
+    const duracion = club.slot_duration_minutes || 60;
+    const horaApertura = parseInt((club.open_time || "07:00:00").split(":")[0], 10);
+    const horaCierre = parseInt((club.close_time || "23:00:00").split(":")[0], 10);
+
+    const bloques = [];
+    let cur = new Date(fechaSeleccionada);
+    cur.setHours(horaApertura, 0, 0, 0);
+
+    const end = new Date(fechaSeleccionada);
+    end.setHours(horaCierre, 0, 0, 0);
+
+    while (cur <= end) {
+      if (cur.getHours() === horaCierre && cur.getMinutes() > 0) break;
+      const hStr = cur.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: true });
+      bloques.push({
+        etiqueta: hStr,
+        horaInt: cur.getHours(),
+        minutosInt: cur.getMinutes(),
+        dateObj: new Date(cur),
+      });
+      cur.setMinutes(cur.getMinutes() + duracion);
+    }
+    return bloques;
+  }, [club, fechaSeleccionada]);
+
+  const abrirModalTurno = (cancha, bloque) => {
     if (!user) {
+      alert("Debes iniciar sesión para reservar una pista.");
       router.push("/login");
       return;
     }
-    
-    const precioClub = slot.precio;
-    const comisionApp = precioClub * TASA_COMISION;
-    const precioTotal = precioClub + comisionApp;
 
-    setSlotSeleccionado({ 
-      court, 
-      hora: slot.timeStr, 
-      precioClub,
-      comisionApp,
-      precioTotal
+    const precioBaseTotal = cancha.price_credits || 16;
+    const precioBaseInd = precioBaseTotal / 4;
+
+    setBloqueSeleccionado({
+      cancha,
+      dateObj: bloque.dateObj,
+      horaLabel: bloque.etiqueta,
+      precioBaseTotal,
+      precioBaseInd,
     });
-    
-    setModoPago("cuota");
-    setTipoJuego("competitivo");
-    setMetodoPagoElegido("efectivo");
-    setReferenciaPago("");
+
+    setTipoReserva("abierto");
+    setMetodoPago("pago_movil");
+    setMontoAbono((precioBaseInd * 1.10).toFixed(2));
+    setNumReferencia("");
+    setPreviewComprobante("");
     setPasoModal(1);
-    setErrorReserva("");
     setModalReservaOpen(true);
-  }
+  };
 
-  const rangoCompetitivo = useMemo(() => getRangoCompetitivoAutomático(userCategoria), [userCategoria]);
+  const handleCambioTipoReserva = (tipo) => {
+    setTipoReserva(tipo);
+    if (!bloqueSeleccionado) return;
+    const base = tipo === "privado" ? bloqueSeleccionado.precioBaseTotal : bloqueSeleccionado.precioBaseInd;
+    setMontoAbono((base * 1.10).toFixed(2));
+  };
 
-  // VALIDACIÓN DE PAGO
-  const puedePagar = metodoPagoElegido === "efectivo" || (referenciaPago.trim().length > 3);
+  const handleSeleccionarImagen = (e, setPreview) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-  // PROCESAR RESERVA
-  async function confirmarCreacionPartido() {
-    if (!user || !slotSeleccionado || !club) return;
-    if (!puedePagar) {
-      setErrorReserva("Por favor ingresa el número de referencia del pago.");
+    if (!file.type.startsWith("image/")) {
+      alert("Por favor selecciona una imagen válida (JPG, PNG).");
       return;
     }
 
-    const esPrivado = modoPago === "completa";
-    
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setPreview(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const calculosPrecio = useMemo(() => {
+    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, ingresado: 0 };
+    const base = tipoReserva === "privado" ? bloqueSeleccionado.precioBaseTotal : bloqueSeleccionado.precioBaseInd;
+    const fee = base * 0.10;
+    const totalSug = base + fee;
+    const ingresado = parseFloat(montoAbono) || 0;
+    return { base, fee, totalSug, ingresado };
+  }, [bloqueSeleccionado, tipoReserva, montoAbono]);
+
+  async function confirmarReservaYPago() {
+    if (!user || !bloqueSeleccionado) return;
+
+    const montoValido = parseFloat(montoAbono);
+    if (isNaN(montoValido) || montoValido <= 0) {
+      alert("Por favor ingresa un monto válido a abonar.");
+      return;
+    }
+
+    if (metodoPago !== "efectivo" && !previewComprobante && !numReferencia.trim()) {
+      alert("Por favor adjunta la captura de tu comprobante de pago o ingresa el número de referencia.");
+      return;
+    }
+
+    const esPrivado = tipoReserva === "privado";
+
     try {
-      setProcesandoPago(true);
-      setErrorReserva("");
+      setProcesandoReserva(true);
 
-      const isPM = slotSeleccionado.hora.includes("PM");
-      let [h, m] = slotSeleccionado.hora.split(" ")[0].split(":");
-      let horasNumericas = parseInt(h, 10);
-      if (isPM && horasNumericas !== 12) horasNumericas += 12;
-      if (!isPM && horasNumericas === 12) horasNumericas = 0;
-      const horaReal24 = `${horasNumericas.toString().padStart(2, "0")}:${m}:00`;
+      const { data: userProf } = await supabase
+        .from("profiles")
+        .select("nombre, apellido, telefono")
+        .eq("id", user.id)
+        .maybeSingle();
 
-      const matchTimestamp = `${fechaSeleccionada}T${horaReal24}`;
+      const nombreUsuarioCompleto = userProf ? `${userProf.nombre || ""} ${userProf.apellido || ""}`.trim() : user.email;
+      const telefonoUsuario = userProf?.telefono || "Sin teléfono";
 
-      const restriccionCategoriaFinal = esPrivado
-        ? "Libre"
-        : tipoJuego === "competitivo"
-        ? rangoCompetitivo.etiquetaCorta
-        : catMaximaAmistoso;
+      const miCat = userPadelProfile?.categoria_oficial || "rookies";
+      const estadoPagoFinal = metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion";
 
-      const { data: nuevoPartido, error: matchError } = await supabase
+      const nuevoAbono = {
+        id: `pay-${Date.now()}`,
+        user_id: user.id,
+        user_name: nombreUsuarioCompleto,
+        user_phone: telefonoUsuario,
+        amount: montoValido,
+        method: metodoPago,
+        reference: numReferencia.trim() || "S/R",
+        receipt_url: previewComprobante || null,
+        status: metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
+        created_at: new Date().toISOString(),
+      };
+
+      const { data: newMatch, error: matchErr } = await supabase
         .from("padel_matches")
         .insert({
-          club_id: club.id,
-          court_id: slotSeleccionado.court.id,
-          scheduled_at: new Date(matchTimestamp).toISOString(),
-          status: metodoPagoElegido === "efectivo" ? "programado" : "pendiente_verificacion",
-          is_private: esPrivado,
+          club_id: clubId,
+          court_id: bloqueSeleccionado.cancha.id,
+          scheduled_at: bloqueSeleccionado.dateObj.toISOString(),
+          total_price: bloqueSeleccionado.precioBaseTotal,
+          price_per_player: bloqueSeleccionado.precioBaseInd,
+          app_fee: calculosPrecio.fee,
           match_type: esPrivado ? "privado" : "abierto",
-          category_restriction: restriccionCategoriaFinal,
-          gender_restriction: prefGenero,
-          is_competitive: !esPrivado && tipoJuego === "competitivo",
-          price_per_player: (slotSeleccionado.precioTotal / 4),
-          total_price: slotSeleccionado.precioTotal,
-          created_by: user.id
+          is_private: esPrivado,
+          is_competitive: modoCompetitivo,
+          category_restriction: miCat,
+          status: "programado",
+          payment_status: estadoPagoFinal,
+          payment_method: metodoPago,
+          payment_proof_urls: previewComprobante ? [previewComprobante] : [],
+          payments_history: [nuevoAbono],
+          created_by: user.id,
         })
         .select()
         .single();
 
-      if (matchError) throw new Error(matchError.message);
+      if (matchErr) throw new Error(matchErr.message || "Error guardando la reserva");
 
-      // Inscribimos al jugador Y guardamos su método de pago y referencia
-      const { error: playerErr } = await supabase.from("padel_match_players").insert({
-        match_id: nuevoPartido.id,
+      await supabase.from("padel_match_players").insert({
+        match_id: newMatch.id,
         user_id: user.id,
         team: "A",
-        payment_method: metodoPagoElegido,
-        payment_reference: metodoPagoElegido === "efectivo" ? "En Taquilla" : referenciaPago
       });
 
-      if (playerErr) throw new Error(playerErr.message);
-
       setModalReservaOpen(false);
-      router.push(`/padel/partidos`);
+      alert(
+        metodoPago === "efectivo"
+          ? "🎉 ¡Reserva registrada! Pagará el monto restante directamente en recepción."
+          : "📩 ¡Comprobante enviado! La reserva queda en estado 'RESERVA PENDIENTE' hasta que el gerente apruebe tu pago en el POS."
+      );
+
+      await cargarDetalleClub();
     } catch (err) {
-      console.error("Error al reservar:", err);
-      setErrorReserva(`Error de BD: ${err.message}`);
+      console.error("Error al procesar reserva:", err);
+      alert("Error al enviar la reserva: " + (err.message || "Verifica los datos e inténtalo de nuevo."));
     } finally {
-      setProcesandoPago(false);
+      setProcesandoReserva(false);
     }
   }
 
-  // UNIRSE A PARTIDO
-  async function unirseAPartido(match) {
-    if (!user) return router.push("/login");
+  const abrirModalMiReserva = (match) => {
+    setMatchMiReservaSel(match);
 
-    const inscritos = match.players?.length || 0;
-    if (inscritos >= 4) return alert("Este partido ya está lleno (4/4).");
-    if (match.players?.some((p) => p.user_id === user.id)) return alert("Ya estás inscrito.");
+    const historial = Array.isArray(match.payments_history) ? match.payments_history : [];
+    const totalAbonado = historial
+      .filter((a) => a.status === "aprobado" || a.status === "pendiente")
+      .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+
+    const totalCancha = (match.total_price || 15) + (match.app_fee || 1.50);
+    const restante = Math.max(0, totalCancha - totalAbonado);
+
+    setFormPagoExtra({
+      monto: restante > 0 ? restante.toFixed(2) : "",
+      metodoPago: "pago_movil",
+      numReferencia: "",
+      previewComprobante: "",
+    });
+
+    setModalMiReservaOpen(true);
+  };
+
+  async function agregarComprobanteExtraUser() {
+    if (!matchMiReservaSel || !user) return;
+
+    const montoValido = parseFloat(formPagoExtra.monto);
+    if (isNaN(montoValido) || montoValido <= 0) {
+      alert("Por favor ingresa un monto válido a abonar.");
+      return;
+    }
+
+    if (formPagoExtra.metodoPago !== "efectivo" && !formPagoExtra.previewComprobante && !formPagoExtra.numReferencia.trim()) {
+      alert("Por favor adjunta la captura del comprobante o ingresa el número de referencia.");
+      return;
+    }
 
     try {
-      setLoading(true);
+      setEnviandoPagoExtra(true);
 
-      const teamAsignado = match.players?.filter((p) => p.team === "A").length < 2 ? "A" : "B";
-      const { error: playerErr } = await supabase.from("padel_match_players").insert({
-        match_id: match.id,
+      const { data: userProf } = await supabase
+        .from("profiles")
+        .select("nombre, apellido, telefono")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const nombreUsuarioCompleto = userProf ? `${userProf.nombre || ""} ${userProf.apellido || ""}`.trim() : user.email;
+      const telefonoUsuario = userProf?.telefono || "Sin teléfono";
+
+      const nuevoAbono = {
+        id: `pay-${Date.now()}`,
         user_id: user.id,
-        team: teamAsignado
-      });
+        user_name: nombreUsuarioCompleto,
+        user_phone: telefonoUsuario,
+        amount: montoValido,
+        method: formPagoExtra.metodoPago,
+        reference: formPagoExtra.numReferencia.trim() || "S/R",
+        receipt_url: formPagoExtra.previewComprobante || null,
+        status: formPagoExtra.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
+        created_at: new Date().toISOString(),
+      };
 
-      if (playerErr) throw playerErr;
-      router.push("/padel/partidos");
-    } catch (error) {
-      console.error("Error uniéndose:", error);
-      alert(`No se pudo completar la inscripción: ${error.message}`);
+      const historialActual = Array.isArray(matchMiReservaSel.payments_history) ? matchMiReservaSel.payments_history : [];
+      const historialNuevo = [...historialActual, nuevoAbono];
+
+      const proofUrlsActuales = Array.isArray(matchMiReservaSel.payment_proof_urls) ? matchMiReservaSel.payment_proof_urls : [];
+      const proofUrlsNuevas = formPagoExtra.previewComprobante
+        ? [...proofUrlsActuales, formPagoExtra.previewComprobante]
+        : proofUrlsActuales;
+
+      const { error: updateErr } = await supabase
+        .from("padel_matches")
+        .update({
+          payments_history: historialNuevo,
+          payment_proof_urls: proofUrlsNuevas,
+          payment_status: "pendiente_aprobacion",
+        })
+        .eq("id", matchMiReservaSel.id);
+
+      if (updateErr) throw updateErr;
+
+      alert("✅ ¡Nuevo comprobante enviado con éxito! El gerente del club lo revisará en la recepción.");
+      setModalMiReservaOpen(false);
+      await cargarDetalleClub();
+    } catch (err) {
+      console.error("Error al enviar pago extra:", err);
+      alert("Error al adjuntar el nuevo comprobante.");
     } finally {
-      setLoading(false);
+      setEnviandoPagoExtra(false);
     }
   }
 
@@ -352,328 +453,600 @@ export default function ClubDetallePage() {
     );
   }
 
-  const imagenClubFallback = "https://images.unsplash.com/photo-1626248801379-51a0748a5f96?auto=format&fit=crop&w=1200&q=80";
+  if (!club) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-8 text-center space-y-4">
+        <h2 className="text-xl font-black text-slate-900">Complejo no encontrado</h2>
+        <Link href="/padel/clubes" className="px-5 py-2.5 bg-slate-900 text-white font-bold rounded-xl text-xs inline-block">
+          Volver al directorio
+        </Link>
+      </div>
+    );
+  }
+
+  const listAmenidades = Array.isArray(club.amenities) ? club.amenities : ["wifi", "free_parking", "changing_room"];
 
   return (
-    <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 pb-36">
-      <div className="mx-auto max-w-6xl space-y-6">
+    <div className="min-h-screen bg-slate-50/50 px-2 py-4 sm:px-6 md:px-8 space-y-6 sm:space-y-8">
+      <div className="mx-auto max-w-7xl space-y-6 sm:space-y-8">
 
-        {/* 🏟️ HEADER DEL CLUB */}
-        <div className="relative bg-white rounded-3xl p-5 sm:p-7 border border-slate-200 shadow-sm overflow-hidden min-h-[140px] flex items-center">
-          <div className="absolute inset-0 z-0 pointer-events-none">
-            <img src={club?.image_url || club?.banner_url || imagenClubFallback} alt={club?.name} className="w-full h-full object-cover object-right opacity-20" />
-            <div className="absolute inset-0 bg-gradient-to-r from-white via-white/80 to-transparent" />
-          </div>
-          <div className="relative z-10 space-y-1.5 max-w-sm sm:max-w-md">
-            <Link href="/padel/clubes" className="text-xs font-black uppercase tracking-widest text-blue-600 hover:underline inline-block">← Volver a Clubes</Link>
-            <h1 className="text-2xl sm:text-4xl font-black text-slate-900 tracking-tight leading-tight">{club?.name || "Club de Pádel"}</h1>
-            <p className="text-xs sm:text-sm text-slate-500 font-bold flex items-center gap-1">📍 {club?.address || club?.city}</p>
-          </div>
-        </div>
-
-        {/* CARRUSEL HORIZONTAL DE DÍAS */}
-        <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm">
-          <p className="text-[10px] font-black uppercase text-slate-400 mb-2 px-1">Selecciona el día</p>
-          <div className="flex gap-2 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
-            {diasCarrusel.map((d) => {
-              const esActivo = fechaSeleccionada === d.iso;
-              return (
-                <button key={d.iso} onClick={() => setFiltroFecha(d.iso)} className={`flex flex-col items-center min-w-[72px] py-2.5 px-3 rounded-2xl border transition-all shrink-0 ${esActivo ? "bg-blue-600 text-white border-blue-600 shadow-md scale-105" : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"}`}>
-                  <span className={`text-[10px] font-black uppercase ${esActivo ? "text-blue-100" : "text-slate-400"}`}>{d.diaNombre}</span>
-                  <span className="text-lg font-black my-0.5">{d.diaNum}</span>
-                  <span className={`text-[9px] font-extrabold ${esActivo ? "text-blue-200" : "text-slate-400"}`}>{d.mesNombre}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* PARRILLA DE PISTAS Y HORARIOS */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-black text-slate-900 px-1">Disponibilidad de Pistas</h2>
-
-          {pistas.length === 0 ? (
-            <div className="bg-white rounded-3xl p-8 text-center border border-dashed border-slate-200">
-              <span className="text-3xl block mb-2">🎾</span>
-              <p className="text-sm font-bold text-slate-700">No hay pistas registradas para este club.</p>
-            </div>
+        {/* HERO BANNER */}
+        <div className="relative w-full h-52 sm:h-80 bg-slate-900 rounded-3xl sm:rounded-[2.5rem] overflow-hidden shadow-xl border border-slate-200">
+          {club.image_url ? (
+            <img src={club.image_url} alt={club.name} className="w-full h-full object-cover" />
           ) : (
-            pistas.map((pista) => {
-              const estaColapsada = !!pistasColapsadas[pista.id];
+            <div className="w-full h-full bg-gradient-to-r from-[#0B0C2A] to-[#161848]" />
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
 
-              return (
-                <div key={pista.id} className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-3 transition-all">
-                  <div onClick={() => toggleColapsarPista(pista.id)} className="flex items-center justify-between cursor-pointer select-none border-b border-slate-100 pb-3 group">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xl">🎾</span>
-                      <h3 className="text-base font-black text-slate-900 group-hover:text-blue-600 transition-colors">{pista.name}</h3>
-                    </div>
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-3 py-1 border border-blue-200 rounded-full uppercase">
-                        {pista.surface_type || "Cristal"} - {pista.court_type || "Indoor"}
+          <div className="absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-6 text-white flex flex-col md:flex-row md:items-end justify-between gap-3">
+            <div className="space-y-1 max-w-2xl">
+              <span className="bg-[#00FF9D] text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-full shadow-sm">
+                Complejo Verificado
+              </span>
+              <h1 className="text-xl sm:text-4xl font-black">{club.name}</h1>
+              <p className="text-[11px] sm:text-sm text-slate-300 font-medium">
+                📍 {club.address || "Cabudare"}, {club.city}
+              </p>
+            </div>
+
+            <a
+              href="#reserva-pistas"
+              className="px-5 py-2.5 sm:px-6 sm:py-3 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl sm:rounded-2xl shadow-lg transition-all text-center"
+            >
+              ⚡ Reservar Pista
+            </a>
+          </div>
+        </div>
+
+        {/* LAYOUT 2 COLUMNAS */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
+          <div className="lg:col-span-4 space-y-6">
+            <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-3">
+              <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-tight">Amenidades</h3>
+              <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                {listAmenidades.map((key) => {
+                  const am = AMENIDADES_MAP[key] || { label: key, icon: "✨" };
+                  return (
+                    <span key={key} className="inline-flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full bg-slate-100 text-slate-800 text-[11px] sm:text-xs font-bold">
+                      <span>{am.icon}</span>
+                      <span>{am.label}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-8 space-y-6" id="reserva-pistas">
+            <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-6 border border-slate-200 shadow-sm space-y-4 sm:space-y-5">
+              <div className="flex justify-between items-center border-b pb-3">
+                <h2 className="text-base sm:text-lg font-black text-slate-900">Reserva tu Pista en Tiempo Real</h2>
+                <span className="text-[11px] sm:text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">{canchas.length} pistas</span>
+              </div>
+
+              {/* Selector de Días */}
+              <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-2">
+                {diasSiguientes.map((d, i) => {
+                  const isSel = fechaSeleccionada.toDateString() === d.toDateString();
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setFechaSeleccionada(d)}
+                      className={`shrink-0 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-center border transition-all ${
+                        isSel ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md" : "bg-slate-50 text-slate-600 border-slate-200"
+                      }`}
+                    >
+                      <span className="text-[9px] sm:text-[10px] font-black uppercase block opacity-60">
+                        {i === 0 ? "Hoy" : d.toLocaleDateString("es-ES", { weekday: "short" })}
                       </span>
-                      <button className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition-all shrink-0">
-                        <svg className={`w-4 h-4 transition-transform duration-300 ${estaColapsada ? "rotate-180" : "rotate-0"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" /></svg>
-                      </button>
+                      <span className="text-xs sm:text-sm font-black block mt-0.5">
+                        {d.getDate()} {d.toLocaleDateString("es-ES", { month: "short" })}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* 🔴 GRILLA DE CANCHAS RESPONSIVE CON HORA STICKY A LA IZQUIERDA */}
+              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
+                <div className="inline-min-w-full min-w-[500px] w-full">
+                  
+                  {/* CABECERA PISTAS */}
+                  <div className="flex bg-slate-950 text-white border-b-2 border-slate-800 sticky top-0 z-30">
+                    <div className="w-16 sm:w-24 shrink-0 p-2 sm:p-3 font-black text-[10px] sm:text-[11px] text-slate-300 text-center uppercase tracking-wider border-r border-slate-800 bg-slate-950 sticky left-0 z-40 shadow-xs">
+                      Hora
                     </div>
+                    {canchas.map((c) => (
+                      <div key={c.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-2 sm:p-3 text-center border-l border-slate-800 font-black text-[11px] sm:text-xs uppercase tracking-tight">
+                        {c.name}
+                      </div>
+                    ))}
                   </div>
 
-                  {!estaColapsada && (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5 pt-1 animate-in fade-in duration-200">
-                      {horariosDisponibles.map((slot) => {
-                        const isPM = slot.timeStr.includes("PM");
-                        let [h, m] = slot.timeStr.split(" ")[0].split(":");
-                        let hrsNum = parseInt(h, 10);
-                        if (isPM && hrsNum !== 12) hrsNum += 12;
-                        if (!isPM && hrsNum === 12) hrsNum = 0;
-                        const hora24 = `${hrsNum.toString().padStart(2, "0")}:${m}:00`;
-                        const targetTimeMs = new Date(`${fechaSeleccionada}T${hora24}`).getTime();
+                  {/* FILAS DE HORARIOS */}
+                  {bloquesHorarios.map((bloque, idx) => (
+                    <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
+                      
+                      {/* COLUMNA DE HORA STICKY - NO SE PIERDE AL DESLIZAR */}
+                      <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center sticky left-0 z-20 shadow-xs">
+                        <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
+                        <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
+                      </div>
 
-                        const partidoOcupado = partidosFecha.find((m) => m.court_id === pista.id && new Date(m.scheduled_at).getTime() === targetTimeMs);
-                        const inscritos = partidoOcupado?.players?.length || 0;
-                        const esAbierto = partidoOcupado && !partidoOcupado.is_private && inscritos < 4;
-
-                        if (partidoOcupado && !esAbierto) {
+                      {/* CELDAS PISTAS */}
+                      {canchas.map((cancha) => {
+                        const partidoOcupado = partidosClub.find((m) => {
+                          if (m.court_id !== cancha.id) return false;
+                          const t = parsearFechaBD(m.scheduled_at);
                           return (
-                            <div key={slot.timeStr} className="bg-slate-100 border border-slate-200 rounded-2xl py-2.5 text-center opacity-60">
-                              <span className="text-xs font-bold text-slate-400 block">{slot.timeStr}</span>
-                              <span className="text-[9px] font-black text-rose-500 uppercase block mt-0.5">Reservado</span>
+                            t.getFullYear() === fechaSeleccionada.getFullYear() &&
+                            t.getMonth() === fechaSeleccionada.getMonth() &&
+                            t.getDate() === fechaSeleccionada.getDate() &&
+                            t.getHours() === bloque.horaInt &&
+                            t.getMinutes() === bloque.minutosInt
+                          );
+                        });
+
+                        if (partidoOcupado) {
+                          const esPrivado = partidoOcupado.is_private || partidoOcupado.match_type === "privado";
+                          
+                          const totalAbonado = (Array.isArray(partidoOcupado.payments_history) ? partidoOcupado.payments_history : [])
+                            .filter(a => a.status === "aprobado")
+                            .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+                          const canchaBaseFee = (partidoOcupado.total_price || 15) + (partidoOcupado.app_fee || 1.50);
+                          
+                          const canchaTotalmentePagada = partidoOcupado.payment_status === "aprobado" || totalAbonado >= canchaBaseFee - 0.50;
+                          const esPendiente = !canchaTotalmentePagada && (partidoOcupado.payment_status === "pendiente_aprobacion" || partidoOcupado.payment_status === "pago_en_sitio");
+
+                          const esMiReserva = user && (
+                            partidoOcupado.created_by === user.id || 
+                            partidoOcupado.players?.some(p => p.user_id === user.id)
+                          );
+
+                          // ES MI RESERVA
+                          if (esMiReserva) {
+                            return (
+                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <button
+                                  onClick={() => abrirModalMiReserva(partidoOcupado)}
+                                  className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+                                    esPendiente
+                                      ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400"
+                                      : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
+                                  }`}
+                                >
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
+                                      ⭐ MI RESERVA
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <p className="text-[11px] sm:text-xs font-black truncate text-white">👁️ Ver / Agregar Pago</p>
+                                    <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
+                                  </div>
+                                </button>
+                              </div>
+                            );
+                          }
+
+                          // RESERVA PRIVADA DE OTRO USUARIO
+                          if (esPrivado) {
+                            return (
+                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
+                                      🔒 PRIVADO
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] sm:text-xs font-black text-slate-400">Pista Reservada</p>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          // PARTIDO ABIERTO PÚBLICO
+                          return (
+                            <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                              <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
+                                <div className={`h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+                                  esPendiente
+                                    ? "bg-amber-500 text-slate-950 border-amber-600"
+                                    : "bg-slate-900 text-white border-slate-800 hover:border-blue-500"
+                                }`}>
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">
+                                      🌐 ABIERTO
+                                    </span>
+                                    <span className="text-[9px] font-black px-1 py-0.5 bg-white/10 rounded">
+                                      {partidoOcupado.players?.length || 1}/4
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] sm:text-xs font-black truncate">Cat. {partidoOcupado.category_restriction || "Libre"}</p>
+                                </div>
+                              </Link>
                             </div>
                           );
                         }
 
-                        if (esAbierto) {
-                          return (
-                            <button key={slot.timeStr} onClick={() => unirseAPartido(partidoOcupado)} className="bg-amber-50 border border-amber-300 hover:bg-amber-100 rounded-2xl py-2.5 text-center transition-all shadow-sm">
-                              <span className="text-xs font-black text-amber-900 block">{slot.timeStr}</span>
-                              <span className="text-[9px] font-black text-amber-700 uppercase block mt-0.5">Unirse ({inscritos}/4)</span>
-                            </button>
-                          );
-                        }
-
+                        // TURNOS LIBRES
                         return (
-                          <button key={slot.timeStr} onClick={() => abrirModalReserva(pista, slot)} className="bg-emerald-50/80 border border-emerald-300/80 hover:bg-emerald-400 hover:text-slate-950 rounded-2xl py-2.5 text-center transition-all shadow-sm group">
-                            <span className="text-xs font-black text-emerald-950 group-hover:text-slate-950 block">{slot.timeStr}</span>
-                            <span className="text-[9px] font-extrabold text-emerald-700 group-hover:text-slate-950 uppercase block mt-0.5">${slot.precio.toFixed(2)}</span>
-                          </button>
+                          <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                            <button
+                              onClick={() => abrirModalTurno(cancha, bloque)}
+                              className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs"
+                            >
+                              <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">+ Agendar</span>
+                              <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${cancha.price_credits || 16}</span>
+                            </button>
+                          </div>
                         );
                       })}
                     </div>
-                  )}
+                  ))}
                 </div>
-              );
-            })
-          )}
+              </div>
+            </div>
+          </div>
         </div>
+
       </div>
 
-      {/* 🟢 POP-UP INFERIOR DE RESERVA ESTILO PLAYTOMIC (2 PASOS) */}
-      {modalReservaOpen && slotSeleccionado && (
-        <div className="fixed inset-0 z-[10000] flex flex-col justify-end bg-black/50 backdrop-blur-xs transition-opacity" onClick={() => setModalReservaOpen(false)}>
-          <div className="w-full max-w-2xl mx-auto bg-white rounded-t-[2.5rem] p-5 sm:p-7 shadow-[0_-15px_40px_rgba(0,0,0,0.15)] border-t border-slate-100 space-y-4 max-h-[88vh] overflow-y-auto animate-in slide-in-from-bottom duration-200" onClick={(e) => e.stopPropagation()}>
-            
-            <div className="flex justify-between items-start border-b border-slate-100 pb-3">
-              <div>
-                {pasoModal === 1 && <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Reservar Pista</h2>}
-                {pasoModal === 2 && (
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setPasoModal(1)} className="text-slate-400 hover:text-slate-900 transition-colors">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" /></svg>
-                    </button>
-                    <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Método de Pago</h2>
+      {/* MODAL MI RESERVA */}
+      {modalMiReservaOpen && matchMiReservaSel && (() => {
+        const precioBase = matchMiReservaSel.total_price || 16;
+        const feeApp = matchMiReservaSel.app_fee || (matchMiReservaSel.is_private ? 0 : precioBase * 0.10);
+        const totalCancha = precioBase + feeApp;
+
+        const historialAbonos = Array.isArray(matchMiReservaSel.payments_history) ? matchMiReservaSel.payments_history : [];
+        const totalAbonado = historialAbonos
+          .filter((a) => a.status === "aprobado" || a.status === "pendiente")
+          .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+
+        const restante = Math.max(0, totalCancha - totalAbonado);
+        const pagadoTotal = restante <= 0.05;
+
+        return (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4" onClick={() => setModalMiReservaOpen(false)}>
+            <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-lg w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              
+              <div className="flex justify-between items-start border-b pb-3">
+                <div>
+                  <span className={`text-[9px] sm:text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                    pagadoTotal ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"
+                  }`}>
+                    {pagadoTotal ? "✅ Reserva Cubierta / Pagada" : `⚠️ Saldo Pendiente: $${restante.toFixed(2)}`}
+                  </span>
+                  <h3 className="text-lg sm:text-xl font-black text-slate-900 mt-1">{matchMiReservaSel.court?.name || "Pista"}</h3>
+                  <p className="text-xs font-bold text-slate-500">
+                    📅 {new Date(matchMiReservaSel.scheduled_at).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+                <button onClick={() => setModalMiReservaOpen(false)} className="text-slate-400 font-bold text-lg">✕</button>
+              </div>
+
+              <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold">
+                <div className="flex justify-between text-slate-400">
+                  <span>Tarifa Cancha Base:</span>
+                  <span className="text-white">${precioBase.toFixed(2)}</span>
+                </div>
+                {feeApp > 0 && (
+                  <div className="flex justify-between text-[#00FF9D]">
+                    <span>Comisión App (+10%):</span>
+                    <span>+${feeApp.toFixed(2)}</span>
                   </div>
                 )}
-                <p className="text-xs font-bold text-slate-400 mt-0.5">{slotSeleccionado.court.name} • {slotSeleccionado.hora}</p>
+                <div className="flex justify-between text-sm font-black border-t border-slate-800 pt-2 text-white">
+                  <span>Total Pista:</span>
+                  <span className="text-[#00FF9D]">${totalCancha.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xs pt-1 border-t border-slate-800/60">
+                  <span className="text-emerald-400">Abonado: ${totalAbonado.toFixed(2)}</span>
+                  <span className={restante > 0 ? "text-amber-400 font-black" : "text-slate-400"}>
+                    Restante: ${restante.toFixed(2)}
+                  </span>
+                </div>
               </div>
-              <button onClick={() => setModalReservaOpen(false)} className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 font-bold flex items-center justify-center hover:bg-slate-200 transition-colors">✕</button>
+
+              <div className="space-y-2">
+                <h4 className="text-xs font-black uppercase text-slate-900 tracking-wider">
+                  Comprobantes Enviados ({historialAbonos.length}):
+                </h4>
+                {historialAbonos.length === 0 ? (
+                  <p className="text-xs font-bold text-slate-400 bg-slate-50 p-3 rounded-xl text-center">Aún no hay comprobantes registrados.</p>
+                ) : (
+                  <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                    {historialAbonos.map((ab, idx) => (
+                      <div key={ab.id || idx} className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl flex justify-between items-center text-xs">
+                        <div>
+                          <p className="font-black text-slate-900">{ab.user_name || "Comprobante"}</p>
+                          <p className="text-[10px] font-bold text-slate-500 uppercase">{ab.method} • Ref: {ab.reference}</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-black text-slate-900 block">${parseFloat(ab.amount || 0).toFixed(2)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-blue-50/70 border border-blue-200 p-3.5 sm:p-4 rounded-2xl space-y-3">
+                <h4 className="text-xs font-black text-blue-950 uppercase tracking-wide">
+                  + Adjuntar Nuevo Pago / Comprobante Extra
+                </h4>
+
+                <div className="space-y-3 text-xs font-bold text-slate-700">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Monto que Pagas ($)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={formPagoExtra.monto}
+                      onChange={(e) => setFormPagoExtra({ ...formPagoExtra, monto: e.target.value })}
+                      className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-black text-slate-900 outline-none"
+                      placeholder="Ej. 5.00"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Método de Pago</label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {[
+                        { id: "pago_movil", label: "📱 Pago Móvil" },
+                        { id: "zelle", label: "🇺🇸 Zelle" },
+                        { id: "efectivo", label: "💵 En Sitio" },
+                      ].map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setFormPagoExtra({ ...formPagoExtra, metodoPago: m.id })}
+                          className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all ${
+                            formPagoExtra.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-white text-slate-600 border-slate-200"
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {formPagoExtra.metodoPago !== "efectivo" && (
+                    <>
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Número de Referencia</label>
+                        <input
+                          type="text"
+                          placeholder="Ej. #123456"
+                          value={formPagoExtra.numReferencia}
+                          onChange={(e) => setFormPagoExtra({ ...formPagoExtra, numReferencia: e.target.value })}
+                          className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Foto / Captura del Comprobante</label>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleSeleccionarImagen(e, (res) => setFormPagoExtra({ ...formPagoExtra, previewComprobante: res }))}
+                          className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-slate-900 file:text-[#00FF9D]"
+                        />
+
+                        {formPagoExtra.previewComprobante && (
+                          <div className="mt-2 relative rounded-xl overflow-hidden border border-slate-200 max-h-28 bg-slate-950 flex items-center justify-center">
+                            <img src={formPagoExtra.previewComprobante} alt="Preview Comprobante" className="max-h-28 object-contain" />
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={agregarComprobanteExtraUser}
+                    disabled={enviandoPagoExtra}
+                    className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-xl shadow-md mt-1"
+                  >
+                    {enviandoPagoExtra ? "Enviando Comprobante..." : "+ Enviar Comprobante Adicional"}
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL PASARELA DE PAGO CLIENTE (NUEVA RESERVA) */}
+      {modalReservaOpen && bloqueSeleccionado && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4" onClick={() => setModalReservaOpen(false)}>
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 sm:space-y-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            
+            <div className="flex justify-between items-start border-b pb-3">
+              <div>
+                <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider">
+                  Paso {pasoModal} de 2 • {pasoModal === 1 ? "Modalidad de Juego" : "Abono / Pago"}
+                </span>
+                <h3 className="text-lg font-black text-slate-900">{bloqueSeleccionado.cancha.name}</h3>
+                <p className="text-xs font-bold text-slate-400">
+                  {fechaSeleccionada.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })} @ {bloqueSeleccionado.horaLabel}
+                </p>
+              </div>
+              <button onClick={() => setModalReservaOpen(false)} className="text-slate-400 font-bold">✕</button>
             </div>
 
-            {/* ====== PASO 1: RESUMEN ====== */}
+            {/* PASO 1 */}
             {pasoModal === 1 && (
-              <div className="animate-in fade-in duration-200 space-y-4">
-                <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-bold text-slate-500 block">Costo de Pista (Club)</span>
-                      {tasaBcv > 0 && <span className="text-[9px] font-medium text-slate-400">Ref: Bs {(slotSeleccionado.precioClub * tasaBcv).toFixed(2)}</span>}
-                    </div>
-                    <span className="text-sm font-bold text-slate-500">${slotSeleccionado.precioClub.toFixed(2)}</span>
+              <div className="space-y-4">
+                <div
+                  onClick={() => handleCambioTipoReserva("abierto")}
+                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex justify-between gap-3 ${
+                    tipoReserva === "abierto" ? "border-[#00FF9D] bg-emerald-50/50" : "border-slate-100 bg-slate-50"
+                  }`}
+                >
+                  <div>
+                    <p className="font-black text-slate-900 text-sm">🌐 Abrir Partido Público</p>
+                    <p className="text-[11px] text-slate-500 font-medium">Creas el partido abierto. Puedes pagar tu cuota o abonar un monto libre.</p>
                   </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-bold text-blue-600 block">Service Fee (App)</span>
-                      {tasaBcv > 0 && <span className="text-[9px] font-medium text-blue-400">Ref: Bs {(slotSeleccionado.comisionApp * tasaBcv).toFixed(2)}</span>}
-                    </div>
-                    <span className="text-sm font-bold text-blue-600">${slotSeleccionado.comisionApp.toFixed(2)}</span>
-                  </div>
-                  
-                  <div className="border-t border-slate-200 pt-3 flex items-end justify-between">
-                    <span className="text-sm font-black text-slate-900">Total a Pagar</span>
-                    <div className="text-right">
-                      <span className="text-lg font-black text-slate-900 block">${slotSeleccionado.precioTotal.toFixed(2)}</span>
-                      {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Ref: Bs {(slotSeleccionado.precioTotal * tasaBcv).toFixed(2)}</span>}
-                    </div>
-                  </div>
+                  <span className="text-sm font-black text-emerald-700">${bloqueSeleccionado.precioBaseInd.toFixed(2)}</span>
                 </div>
 
-                <div className="space-y-2">
-                  <div onClick={() => setModoPago("cuota")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${modoPago === "cuota" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "cuota" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "cuota" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
-                      <div>
-                        <p className="font-black text-slate-900 text-sm">Pagas tu parte</p>
-                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Partido público (1/4 del total)</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
-                        ${(slotSeleccionado.precioTotal / 4).toFixed(2)} <span className="text-[10px] text-slate-400 font-bold">c/u</span>
-                      </span>
-                      {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Bs {((slotSeleccionado.precioTotal / 4) * tasaBcv).toFixed(2)}</span>}
-                    </div>
+                <div
+                  onClick={() => handleCambioTipoReserva("privado")}
+                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex justify-between gap-3 ${
+                    tipoReserva === "privado" ? "border-[#00FF9D] bg-emerald-50/50" : "border-slate-100 bg-slate-50"
+                  }`}
+                >
+                  <div>
+                    <p className="font-black text-slate-900 text-sm">🔒 Reservar Pista Completa</p>
+                    <p className="text-[11px] text-slate-500 font-medium">Reservas el turno completo para tu grupo exclusivo.</p>
                   </div>
-
-                  <div onClick={() => setModoPago("completa")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${modoPago === "completa" ? "border-[#00FF9D] bg-[#00FF9D]/5 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${modoPago === "completa" ? "border-[#00FF9D]" : "border-slate-300"}`}>{modoPago === "completa" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full" />}</div>
-                      <div>
-                        <p className="font-black text-slate-900 text-sm flex items-center gap-1.5">Reserva Completa 🔒</p>
-                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Pagas el total, cancha privada</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <span className="font-black text-base sm:text-lg text-slate-900 whitespace-nowrap block">
-                        ${slotSeleccionado.precioTotal.toFixed(2)}
-                      </span>
-                      {tasaBcv > 0 && <span className="text-[10px] font-bold text-slate-500 block">Bs {(slotSeleccionado.precioTotal * tasaBcv).toFixed(2)}</span>}
-                    </div>
-                  </div>
+                  <span className="text-sm font-black text-slate-900">${bloqueSeleccionado.precioBaseTotal.toFixed(2)}</span>
                 </div>
 
-                <div className="border-t border-slate-100 pt-3 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <button type="button" disabled={modoPago === "completa"} onClick={() => setTipoJuego("competitivo")} className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${modoPago === "completa" ? "opacity-40 cursor-not-allowed bg-slate-100 text-slate-400" : tipoJuego === "competitivo" ? "bg-[#0B1120] text-[#00FF9D] shadow-md" : "bg-slate-50 border border-slate-200 text-slate-600"}`}>⚡ Comp.</button>
-                    <button type="button" onClick={() => setTipoJuego("amistoso")} className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all ${tipoJuego === "amistoso" ? "bg-[#0B1120] text-white shadow-md" : "bg-slate-50 border border-slate-200 text-slate-600"}`}>🤝 Amistoso</button>
-                  </div>
-                </div>
-
-                <button onClick={() => setPasoModal(2)} className="w-full bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors shadow-lg shadow-gray-900/20">
-                  Continuar al Pago
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+                <button
+                  onClick={() => setPasoModal(2)}
+                  className="w-full py-4 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md"
+                >
+                  Continuar a Datos de Pago →
                 </button>
               </div>
             )}
 
-            {/* ====== PASO 2: MÉTODO DE PAGO ====== */}
+            {/* PASO 2 */}
             {pasoModal === 2 && (
-              <div className="animate-in slide-in-from-right-4 duration-200 space-y-4">
-                
-                <div className="space-y-3">
-                  {/* Zelle */}
-                  <div className={`p-4 rounded-2xl border-2 transition-all ${metodoPagoElegido === "zelle" ? "border-purple-500 bg-purple-50/50 shadow-sm" : "border-slate-100 bg-white"}`}>
-                    <div onClick={() => setMetodoPagoElegido("zelle")} className="flex items-center justify-between cursor-pointer">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center font-bold text-lg">🇺🇸</div>
-                        <div>
-                          <p className="font-black text-slate-900 text-sm">Zelle</p>
-                          <p className="text-xs font-semibold text-slate-400 mt-0.5">Transferencia en divisas</p>
-                        </div>
-                      </div>
-                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "zelle" ? "border-purple-500" : "border-slate-300"}`}>
-                        {metodoPagoElegido === "zelle" && <div className="w-2.5 h-2.5 bg-purple-500 rounded-full" />}
-                      </div>
-                    </div>
-                    {metodoPagoElegido === "zelle" && (
-                      <div className="mt-4 pt-4 border-t border-purple-100 animate-in fade-in">
-                        <div className="bg-white p-3 rounded-xl border border-purple-100 mb-3">
-                          <p className="text-[10px] uppercase font-black text-purple-400 mb-1">Datos de Transferencia:</p>
-                          <p className="text-sm font-black text-slate-900">pagos@elitepadel.com</p>
-                          <p className="text-xs text-slate-500 font-medium">Elite Padel Center LLC</p>
-                        </div>
-                        <input 
-                          type="text" 
-                          placeholder="Número de Confirmación Zelle" 
-                          value={referenciaPago}
-                          onChange={(e) => setReferenciaPago(e.target.value)}
-                          className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10 transition-all"
-                        />
-                      </div>
-                    )}
+              <div className="space-y-4 text-xs font-bold text-slate-700">
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] font-black uppercase text-slate-500">Monto a Abonar Hoy ($):</label>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full font-black">Libre y Editable</span>
                   </div>
+                  
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    value={montoAbono}
+                    onChange={(e) => setMontoAbono(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded-xl p-3 text-lg font-black text-slate-900 outline-none focus:border-blue-500"
+                    placeholder="Ej. 4.40 o 17.60"
+                  />
 
-                  {/* Pago Móvil */}
-                  <div className={`p-4 rounded-2xl border-2 transition-all ${metodoPagoElegido === "pago_movil" ? "border-sky-500 bg-sky-50/50 shadow-sm" : "border-slate-100 bg-white"}`}>
-                    <div onClick={() => setMetodoPagoElegido("pago_movil")} className="flex items-center justify-between cursor-pointer">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center font-bold text-lg">📱</div>
-                        <div>
-                          <p className="font-black text-slate-900 text-sm">Pago Móvil</p>
-                          <p className="text-xs font-semibold text-slate-400 mt-0.5">Transferencia en Bolívares</p>
-                        </div>
-                      </div>
-                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "pago_movil" ? "border-sky-500" : "border-slate-300"}`}>
-                        {metodoPagoElegido === "pago_movil" && <div className="w-2.5 h-2.5 bg-sky-500 rounded-full" />}
-                      </div>
-                    </div>
-                    {metodoPagoElegido === "pago_movil" && (
-                      <div className="mt-4 pt-4 border-t border-sky-100 animate-in fade-in">
-                        <div className="bg-white p-3 rounded-xl border border-sky-100 mb-3 grid grid-cols-2 gap-2">
-                          <div className="col-span-2"><p className="text-[10px] uppercase font-black text-sky-400 mb-1">Datos Pago Móvil:</p></div>
-                          <div>
-                            <p className="text-xs text-slate-400 font-bold">Banco</p>
-                            <p className="text-sm font-black text-slate-900">Banesco (0134)</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-slate-400 font-bold">Teléfono</p>
-                            <p className="text-sm font-black text-slate-900">0414-1234567</p>
-                          </div>
-                          <div className="col-span-2 mt-1">
-                            <p className="text-xs text-slate-400 font-bold">RIF</p>
-                            <p className="text-sm font-black text-slate-900">J-50000000-0</p>
-                          </div>
-                        </div>
-                        <input 
-                          type="text" 
-                          placeholder="Últimos 4 dígitos de Referencia" 
-                          value={referenciaPago}
-                          onChange={(e) => setReferenciaPago(e.target.value)}
-                          className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-medium outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10 transition-all"
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Efectivo */}
-                  <div onClick={() => setMetodoPagoElegido("efectivo")} className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${metodoPagoElegido === "efectivo" ? "border-emerald-500 bg-emerald-50 shadow-xs" : "border-slate-100 bg-white hover:bg-slate-50"}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-lg">💵</div>
-                      <div>
-                        <p className="font-black text-slate-900 text-sm">Efectivo en el Club</p>
-                        <p className="text-xs font-semibold text-slate-400 mt-0.5">Pagas al llegar a recepción</p>
-                      </div>
-                    </div>
-                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${metodoPagoElegido === "efectivo" ? "border-emerald-500" : "border-slate-300"}`}>
-                      {metodoPagoElegido === "efectivo" && <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full" />}
-                    </div>
+                  <div className="flex gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setMontoAbono((bloqueSeleccionado.precioBaseInd * 1.10).toFixed(2))}
+                      className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold hover:bg-slate-100"
+                    >
+                      Cuota 1/4 (${(bloqueSeleccionado.precioBaseInd * 1.10).toFixed(2)})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMontoAbono((bloqueSeleccionado.precioBaseTotal * 1.10).toFixed(2))}
+                      className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold hover:bg-slate-100"
+                    >
+                      Total Cancha (${(bloqueSeleccionado.precioBaseTotal * 1.10).toFixed(2)})
+                    </button>
                   </div>
                 </div>
 
-                {errorReserva && <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl text-xs font-bold text-rose-800 text-center"><p>{errorReserva}</p></div>}
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">Método de Pago</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { id: "pago_movil", label: "📱 Pago Móvil" },
+                      { id: "zelle", label: "🇺🇸 Zelle" },
+                      { id: "efectivo", label: "💵 En Sitio" },
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setMetodoPago(m.id)}
+                        className={`py-3 px-2 rounded-xl text-[10px] font-black uppercase border transition-all ${
+                          metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-slate-50 text-slate-600 border-slate-200"
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-                <button 
-                  onClick={confirmarCreacionPartido} 
-                  disabled={procesandoPago || !puedePagar} 
-                  className="w-full mt-2 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-gray-900/20"
-                >
-                  {procesandoPago ? "Procesando..." : "Confirmar y Finalizar"}
-                </button>
+                {metodoPago === "pago_movil" && (
+                  <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl text-[11px] text-blue-900 space-y-1">
+                    <p className="font-black">🏦 Datos Pago Móvil:</p>
+                    <p>Banco: Banesco (0134) • C.I: V-12345678 • Tel: 0414-1234567</p>
+                  </div>
+                )}
+
+                {metodoPago === "zelle" && (
+                  <div className="bg-purple-50 border border-purple-200 p-3 rounded-2xl text-[11px] text-purple-900 space-y-1">
+                    <p className="font-black">🇺🇸 Datos Zelle:</p>
+                    <p>Correo: pagos@sportshub.com • Titular: Sports Hub LLC</p>
+                  </div>
+                )}
+
+                {metodoPago !== "efectivo" && (
+                  <>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
+                        Número de Referencia de Transacción
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej. #123456"
+                        value={numReferencia}
+                        onChange={(e) => setNumReferencia(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
+                        Adjuntar Captura / Foto del Comprobante (Imagen)
+                      </label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSeleccionarImagen(e, setPreviewComprobante)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold outline-none file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-slate-900 file:text-[#00FF9D]"
+                      />
+
+                      {previewComprobante && (
+                        <div className="mt-2 relative rounded-2xl overflow-hidden border border-slate-200 max-h-36 bg-slate-950 flex items-center justify-center">
+                          <img src={previewComprobante} alt="Preview Comprobante" className="max-h-36 object-contain" />
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setPasoModal(1)}
+                    className="w-1/3 py-3.5 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl"
+                  >
+                    ← Volver
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmarReservaYPago}
+                    disabled={procesandoReserva}
+                    className="w-2/3 py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md"
+                  >
+                    {procesandoReserva ? "Enviando..." : "Confirmar y Enviar Abono"}
+                  </button>
+                </div>
               </div>
             )}
 
           </div>
         </div>
       )}
+
     </div>
   );
 }

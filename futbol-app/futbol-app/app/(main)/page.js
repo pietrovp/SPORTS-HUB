@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { supabase } from "../../lib/supabaseClient";
-import PartidoPadelCard from "../../components/padel/PartidoPadelCard";
+import { supabase } from "@/lib/supabaseClient";
+import PartidoPadelCard from "@/components/padel/PartidoPadelCard";
 
 const LABELS_CAT = {
   rookies: "Rookies",

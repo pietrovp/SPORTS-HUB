@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { supabase } from "../../../lib/supabaseClient";
-import PlayerCard from "../../../components/futbol/PlayerCard";
-import PartidoCard from "../../../components/futbol/PartidoCard";
-import LogroBadge from "../../../components/futbol/LogroBadge";
-import { bonusLabel } from "../../../lib/futbol/logros";
+import { supabase } from "@/lib/supabaseClient";
+import PlayerCard from "@/components/futbol/PlayerCard";
+import PartidoCard from "@/components/futbol/PartidoCard";
+import LogroBadge from "@/components/futbol/LogroBadge";
+import { bonusLabel } from "@/lib/futbol/logros";
 import Link from "next/link";
 import Cropper from "react-easy-crop";
 

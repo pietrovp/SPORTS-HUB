@@ -2,9 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { supabase } from "../../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
-// JERARQUÍA OFICIAL DE NIVELES DE PÁDEL
 const CATEGORIA_NIVEL = {
   rookies: 1,
   "7ma": 2,
@@ -28,11 +27,10 @@ function formatFechaLarga(fechaStr) {
   });
 }
 
-export default function PartidoPadelCard({ match, currentUser, userCreditos, onUpdate }) {
+export default function PartidoPadelCard({ match, currentUser, onUpdate }) {
   const [procesando, setProcesando] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Modal Cancelación
   const [modalCancelOpen, setModalCancelOpen] = useState(false);
 
   const players = match.players || [];
@@ -46,12 +44,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
   const esPropuesto = match.score_status === "propuesto";
 
   const slots = [0, 1, 2, 3].map((index) => players[index] || null);
-
-  // Cálculo de horas faltantes
-  const matchTime = match?.scheduled_at ? new Date(match.scheduled_at).getTime() : 0;
-  const nowTime = new Date().getTime();
-  const horasFaltantes = (matchTime - nowTime) / (1000 * 60 * 60);
-  const esReembolsable = horasFaltantes > 10;
 
   async function unirse() {
     if (!currentUser) {
@@ -75,7 +67,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
       setProcesando(true);
       setErrorMsg("");
 
-      // 1. Obtener perfil
       const { data: userPadelProfile } = await supabase
         .from("padel_profiles")
         .select("categoria_oficial, rating")
@@ -85,7 +76,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
       const userCatKey = (userPadelProfile?.categoria_oficial || "rookies").toLowerCase();
       const matchCatKey = (match.category_restriction || "open").toLowerCase();
 
-      // 2. Validar categoría
       const userLevel = CATEGORIA_NIVEL[userCatKey] || 1;
       const matchMaxLevel = CATEGORIA_NIVEL[matchCatKey] || 8;
 
@@ -97,21 +87,9 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
         return;
       }
 
-      // 3. Validar créditos
-      const costo = match.price_per_player || 4;
-      if (userCreditos < costo) {
-        const errorSaldo = `⚠️ Saldo insuficiente. Necesitas ${costo} créditos y tienes ${userCreditos}.`;
-        setErrorMsg(errorSaldo);
-        alert(errorSaldo);
-        setProcesando(false);
-        return;
-      }
-
-      // 4. Asignar equipo
       const equipoACount = players.filter((p) => p.team === "A").length;
       const teamAsignado = equipoACount < 2 ? "A" : "B";
 
-      // 5. Inscribir
       const { error: playerErr } = await supabase.from("padel_match_players").insert({
         match_id: match.id,
         user_id: currentUser.id,
@@ -119,18 +97,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
       });
 
       if (playerErr) throw playerErr;
-
-      // 6. Descontar saldo
-      const nuevoSaldo = userCreditos - costo;
-      await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", currentUser.id);
-
-      await supabase.from("credit_ledger").insert({
-        user_id: currentUser.id,
-        match_id: match.id,
-        delta: -costo,
-        reason: "unirse_partido_feed_padel",
-        balance_after: nuevoSaldo,
-      });
 
       if (onUpdate) onUpdate();
     } catch (err) {
@@ -141,15 +107,11 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
     }
   }
 
-  // 🚪 CANCELACIÓN SEGÚN REGLA DE 10 HORAS
   async function confirmarCancelacion() {
     if (!currentUser) return;
 
     try {
       setProcesando(true);
-
-      const costoIndividual = match.price_per_player || 4;
-      const costoTotalCancha = match.total_price || 16;
 
       if (soyCreador || esPrivado) {
         const { error: errMatch } = await supabase
@@ -158,33 +120,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
           .eq("id", match.id);
 
         if (errMatch) throw errMatch;
-
-        if (esReembolsable) {
-          for (const p of players) {
-            if (!p.user_id) continue;
-            
-            const montoDevolver = esPrivado && p.user_id === currentUser.id ? costoTotalCancha : costoIndividual;
-
-            const { data: pProfile } = await supabase
-              .from("profiles")
-              .select("creditos")
-              .eq("id", p.user_id)
-              .maybeSingle();
-
-            const saldoActual = pProfile?.creditos || 0;
-            const nuevoSaldo = saldoActual + montoDevolver;
-
-            await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", p.user_id);
-
-            await supabase.from("credit_ledger").insert({
-              user_id: p.user_id,
-              match_id: match.id,
-              delta: montoDevolver,
-              reason: "reembolso_cancelacion_partido_padel",
-              balance_after: nuevoSaldo,
-            });
-          }
-        }
       } else {
         const { error: errDel } = await supabase
           .from("padel_match_players")
@@ -193,19 +128,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
           .eq("user_id", currentUser.id);
 
         if (errDel) throw errDel;
-
-        if (esReembolsable) {
-          const nuevoSaldo = userCreditos + costoIndividual;
-          await supabase.from("profiles").update({ creditos: nuevoSaldo }).eq("id", currentUser.id);
-
-          await supabase.from("credit_ledger").insert({
-            user_id: currentUser.id,
-            match_id: match.id,
-            delta: costoIndividual,
-            reason: "reembolso_salida_partido_padel",
-            balance_after: nuevoSaldo,
-          });
-        }
       }
 
       setModalCancelOpen(false);
@@ -221,7 +143,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
   return (
     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between p-5 space-y-4">
       
-      {/* 1. HEADER FECHA & ESTADO */}
       <div>
         <div className="flex flex-wrap justify-between items-center gap-2 mb-2">
           <span className="text-xs sm:text-sm font-black text-slate-900 capitalize flex items-center gap-1.5">
@@ -262,7 +183,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
         </div>
       </div>
 
-      {/* 2. GRILLA DE 4 JUGADORES */}
       <div className="bg-slate-50/80 border border-slate-100 rounded-2xl p-3.5">
         <div className="grid grid-cols-4 gap-2 items-center text-center relative">
           <div className="absolute left-1/2 top-2 bottom-2 w-[1px] bg-slate-200 -translate-x-1/2 hidden sm:block" />
@@ -331,7 +251,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
         </div>
       </div>
 
-      {/* 3. FOOTER CLUB + BOTONES DINÁMICOS */}
       <div className="space-y-3 pt-1">
         <div className="flex justify-between items-end">
           <div>
@@ -351,7 +270,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
                 <span className="text-xs font-black text-slate-700">Reserva Completa</span>
               ) : (
                 <>
-                  {match.price_per_player || 4} <span className="text-[10px] text-slate-400">créditos</span>
+                  ${match.price_per_player || 4} <span className="text-[10px] text-slate-400">/jugador</span>
                 </>
               )}
             </span>
@@ -364,10 +283,8 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
           </p>
         )}
 
-        {/* FILA DE BOTONES PRINCIPALES */}
         <div className="flex gap-2">
           {esJugado ? (
-            /* 🟢 SI EL PARTIDO ESTÁ FINALIZADO */
             <Link
               href={`/padel/partidos/${match.id}`}
               className="flex-1 py-3 bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 font-black text-xs uppercase tracking-wider rounded-2xl text-center block transition-colors shadow-xs"
@@ -375,7 +292,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
               🏆 Ver Resultado / Evaluación
             </Link>
           ) : esPropuesto && yaInscrito ? (
-            /* ⏳ SI HAY MARCADOR PROPUESTO PENDIENTE DE APROBACIÓN */
             <Link
               href={`/padel/partidos/${match.id}`}
               className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl text-center block transition-all shadow-md active:scale-98"
@@ -409,7 +325,7 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
               disabled={procesando}
               className="flex-1 py-3 bg-[#0B1120] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl transition-all shadow-md active:scale-[0.98] flex items-center justify-center gap-2"
             >
-              <span>{procesando ? "PROCESANDO..." : `UNIRME (+${match.price_per_player || 4} CR)`}</span>
+              <span>{procesando ? "PROCESANDO..." : `UNIRME ($${match.price_per_player || 4})`}</span>
               {!procesando && <span>→</span>}
             </button>
           )}
@@ -423,7 +339,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
           </Link>
         </div>
 
-        {/* 🔻 CANCELAR MI RESERVA (SÓLO PARA PARTIDOS PROGRAMADOS Y NO FINALIZADOS) */}
         {!esJugado && match.status === "programado" && (yaInscrito || soyCreador) && (
           <div className="text-center pt-1">
             <button
@@ -437,7 +352,6 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
 
       </div>
 
-      {/* ⚠️ MODAL REGLA DE CANCELACIÓN (10 HORAS) */}
       {modalCancelOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" onClick={() => setModalCancelOpen(false)}>
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4 text-center border border-slate-100" onClick={(e) => e.stopPropagation()}>
@@ -454,26 +368,10 @@ export default function PartidoPadelCard({ match, currentUser, userCreditos, onU
               </p>
             </div>
 
-            {/* Aviso de Política 10 Horas */}
-            <div className={`p-3.5 rounded-2xl text-xs font-bold text-left space-y-1 ${
-              esReembolsable ? "bg-emerald-50 border border-emerald-200 text-emerald-900" : "bg-amber-50 border border-amber-200 text-amber-900"
-            }`}>
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-black tracking-wider">Política de Cancelación</span>
-                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${esReembolsable ? "bg-emerald-200 text-emerald-950" : "bg-amber-200 text-amber-950"}`}>
-                  Faltan {horasFaltantes.toFixed(1)}h
-                </span>
-              </div>
-
-              {esReembolsable ? (
-                <p className="normal-case text-[11px]">
-                  ✅ <strong>Faltan más de 10 horas.</strong> Tus créditos invertidos serán devueltos a tu saldo inmediatamente.
-                </p>
-              ) : (
-                <p className="normal-case text-[11px]">
-                  ⚠️ <strong>Faltan menos de 10 horas.</strong> La plaza/partido se liberará pero <u>tus créditos no serán reembolsados</u>.
-                </p>
-              )}
+            <div className="p-3.5 rounded-2xl text-xs font-bold text-left bg-slate-50 border border-slate-200 text-slate-700">
+              <p className="normal-case text-[11px]">
+                ¿Estás seguro de cancelar? El cupo o partido quedará liberado.
+              </p>
             </div>
 
             <div className="flex gap-2 pt-2">

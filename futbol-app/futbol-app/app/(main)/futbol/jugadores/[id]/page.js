@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../../../../lib/supabaseClient";
-import PlayerCard from "../../../../components/futbol/PlayerCard";
-import LogroBadge from "../../../../components/futbol/LogroBadge";
-import { bonusLabel } from "../../../../lib/futbol/logros";
+import { supabase } from "@/lib/supabaseClient";
+import PlayerCard from "@/components/futbol/PlayerCard";
+import LogroBadge from "@/components/futbol/LogroBadge";
+import { bonusLabel } from "@/lib/futbol/logros";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 

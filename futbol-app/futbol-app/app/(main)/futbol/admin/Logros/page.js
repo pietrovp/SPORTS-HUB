@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../../../../lib/supabaseClient";
-import { STAT_OPCIONES, REQUISITO_OPCIONES, requisitoLabel, bonusLabel } from "../../../../lib/futbol/logros";
+import { supabase } from "@/lib/supabaseClient";
+import { STAT_OPCIONES, REQUISITO_OPCIONES, requisitoLabel, bonusLabel } from "@/lib/futbol/logros";
 
 export default function AdminLogros() {
   const [verificando, setVerificando] = useState(true);

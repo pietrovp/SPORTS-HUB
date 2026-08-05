@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { supabase } from "../../../lib/supabaseClient";
+import React, { useEffect, useState, useMemo } from "react";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function HistorialVentasPage() {
   const [loading, setLoading] = useState(true);
@@ -11,8 +11,9 @@ export default function HistorialVentasPage() {
   
   const [ventaExpandida, setVentaExpandida] = useState(null);
   const [diasExpandidos, setDiasExpandidos] = useState([]);
+  const [inicializado, setInicializado] = useState(false);
 
-  // Calculamos cómo se llama "Hoy" para compararlo luego
+  // Nombre formateado del día de hoy
   const hoyStr = new Date().toLocaleDateString("es-VE", { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const hoyFormateado = hoyStr.charAt(0).toUpperCase() + hoyStr.slice(1);
 
@@ -100,32 +101,35 @@ export default function HistorialVentasPage() {
     );
   };
 
-  const ventasAgrupadas = ventas.reduce((acc, venta) => {
-    const fechaObj = new Date(venta.created_at);
-    const fechaString = fechaObj.toLocaleDateString("es-VE", { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    const fechaMayus = fechaString.charAt(0).toUpperCase() + fechaString.slice(1);
-    
-    const grupo = acc.find(g => g.fecha === fechaMayus);
-    if (grupo) {
-      grupo.tickets.push(venta);
-    } else {
-      acc.push({ fecha: fechaMayus, tickets: [venta] });
-    }
-    return acc;
-  }, []);
+  // Agrupación memorizada para evitar cálculos y renders innecesarios
+  const ventasAgrupadas = useMemo(() => {
+    return ventas.reduce((acc, venta) => {
+      const fechaObj = new Date(venta.created_at);
+      const fechaString = fechaObj.toLocaleDateString("es-VE", { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      const fechaMayus = fechaString.charAt(0).toUpperCase() + fechaString.slice(1);
+      
+      const grupo = acc.find(g => g.fecha === fechaMayus);
+      if (grupo) {
+        grupo.tickets.push(venta);
+      } else {
+        acc.push({ fecha: fechaMayus, tickets: [venta] });
+      }
+      return acc;
+    }, []);
+  }, [ventas]);
 
+  // Expande automáticamente solo el primer día al cargar por primera vez
   useEffect(() => {
-    if (ventasAgrupadas.length > 0 && diasExpandidos.length === 0) {
+    if (ventasAgrupadas.length > 0 && !inicializado) {
       setDiasExpandidos([ventasAgrupadas[0].fecha]);
+      setInicializado(true);
     }
-  }, [ventasAgrupadas, diasExpandidos.length]);
+  }, [ventasAgrupadas, inicializado]);
 
-  // 🔴 LÓGICA DINÁMICA: Calcula cuántos tickets hay en los días que el usuario tiene abiertos
   const ticketsVisibles = ventasAgrupadas
     .filter(grupo => diasExpandidos.includes(grupo.fecha))
     .reduce((total, grupo) => total + grupo.tickets.length, 0);
 
-  // Textito dinámico para el cuadrito negro
   const textoTickets = diasExpandidos.length === 1 && diasExpandidos[0] === hoyFormateado 
     ? "Tickets de Hoy" 
     : "Tickets Visibles";
@@ -135,72 +139,157 @@ export default function HistorialVentasPage() {
   }
 
   return (
-    <div className="p-6 bg-slate-50 min-h-screen">
-      <div className="max-w-6xl mx-auto space-y-6">
+    <div className="p-3 sm:p-6 bg-slate-50 min-h-screen">
+      <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
         
-        {/* HEADER */}
-        <div className="flex justify-between items-end bg-white p-6 rounded-3xl border border-slate-200 shadow-sm mb-6">
+        {/* HEADER ADAPTABLE A MÓVIL */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm gap-4">
           <div>
-            <h1 className="text-2xl font-black text-slate-900">🧾 Historial de Tickets</h1>
-            <p className="text-sm text-slate-500 font-medium">Revisa todos los cobros realizados en Recepción agrupados por día.</p>
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900">🧾 Historial de Tickets</h1>
+            <p className="text-xs sm:text-sm text-slate-500 font-medium">Revisa todos los cobros realizados en Recepción agrupados por día.</p>
           </div>
-          <div className="flex gap-4">
+          
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-4 w-full md:w-auto">
             {tasaBCV && (
-              <div className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl text-center shadow-sm border border-slate-200 flex flex-col justify-center">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tasa de Hoy</p>
-                <p className="text-sm font-black">Bs. {tasaBCV.toFixed(2)}</p>
+              <div className="bg-slate-100 text-slate-600 px-3 py-2 sm:px-4 sm:py-2 rounded-xl text-center shadow-sm border border-slate-200 flex flex-col justify-center">
+                <p className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tasa de Hoy</p>
+                <p className="text-xs sm:text-sm font-black">Bs. {tasaBCV.toFixed(2)}</p>
               </div>
             )}
-            {/* CUADRO NEGRO DINÁMICO */}
-            <div className="bg-slate-900 text-white px-4 py-2 rounded-xl text-center shadow-lg flex flex-col justify-center transition-all duration-300 min-w-[130px]">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{textoTickets}</p>
-              <p className="text-lg font-black text-[#00FF9D]">{ticketsVisibles}</p>
+            <div className="bg-slate-900 text-white px-3 py-2 sm:px-4 sm:py-2 rounded-xl text-center shadow-lg flex flex-col justify-center min-w-[110px] sm:min-w-[130px]">
+              <p className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-widest">{textoTickets}</p>
+              <p className="text-base sm:text-lg font-black text-[#00FF9D]">{ticketsVisibles}</p>
             </div>
           </div>
         </div>
 
         {/* LISTA DE HISTORIAL AGRUPADO */}
         {ventasAgrupadas.length === 0 ? (
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-16 text-center">
-            <span className="text-5xl block mb-4">📭</span>
-            <p className="text-slate-500 font-bold text-lg">Aún no hay tickets registrados.</p>
+          <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm p-10 sm:p-16 text-center">
+            <span className="text-4xl sm:text-5xl block mb-3">📭</span>
+            <p className="text-slate-500 font-bold text-sm sm:text-lg">Aún no hay tickets registrados.</p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3 sm:space-y-4">
             {ventasAgrupadas.map((grupo) => {
               const estaAbierto = diasExpandidos.includes(grupo.fecha);
               const totalDia = grupo.tickets.reduce((sum, t) => sum + parseFloat(t.total_amount), 0);
               const esHoy = grupo.fecha === hoyFormateado;
 
               return (
-                <div key={grupo.fecha} className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+                <div key={grupo.fecha} className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden transition-all">
                   
+                  {/* CABECERA DEL DÍA (MÓVIL Y DESKTOP) */}
                   <button 
+                    type="button"
                     onClick={() => toggleDia(grupo.fecha)}
-                    className="w-full flex items-center justify-between p-5 bg-white hover:bg-slate-50 transition-colors"
+                    className="w-full flex flex-col sm:flex-row sm:items-center justify-between p-3.5 sm:p-5 bg-white hover:bg-slate-50 transition-colors gap-2 sm:gap-4 text-left cursor-pointer"
                   >
-                    <div className="flex items-center gap-4">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${estaAbierto ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center shrink-0 transition-colors text-xs ${estaAbierto ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-400'}`}>
                         {estaAbierto ? '▼' : '▶'}
                       </div>
-                      <div className="text-left">
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-black text-slate-900 leading-none mb-1">📅 {grupo.fecha}</h3>
+                      <div className="text-left min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm sm:text-lg font-black text-slate-900 leading-tight">📅 {grupo.fecha}</h3>
                           {esHoy && <span className="bg-[#00FF9D]/20 text-emerald-700 text-[9px] font-black px-2 py-0.5 rounded-full uppercase">Hoy</span>}
                         </div>
-                        <p className="text-xs font-bold text-slate-400">{grupo.tickets.length} tickets registrados</p>
+                        <p className="text-[11px] sm:text-xs font-bold text-slate-400">{grupo.tickets.length} tickets registrados</p>
                       </div>
                     </div>
                     
-                    <div className="text-right">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Venta Neta del Día</p>
-                      <p className="text-lg font-black text-emerald-600 leading-none">${totalDia.toFixed(2)}</p>
+                    <div className="flex sm:flex-col justify-between items-center sm:items-end border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 w-full sm:w-auto">
+                      <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400">Venta Neta</p>
+                      <p className="text-base sm:text-lg font-black text-emerald-600 leading-none">${totalDia.toFixed(2)}</p>
                     </div>
                   </button>
 
+                  {/* CONTENIDO DESPLEGABLE DEL DÍA */}
                   {estaAbierto && (
-                    <div className="border-t border-slate-100 bg-slate-50 p-4">
-                      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                    <div className="border-t border-slate-100 bg-slate-50 p-2.5 sm:p-4">
+                      
+                      {/* VISTA MÓVIL: TARJETAS APILADAS (< 640px) */}
+                      <div className="block sm:hidden space-y-2.5">
+                        {grupo.tickets.map((venta) => {
+                          const tasaAplicar = venta.exchange_rate ? venta.exchange_rate : (esHoy ? tasaBCV : null);
+                          const esExpandido = ventaExpandida === venta.id;
+
+                          return (
+                            <div 
+                              key={venta.id}
+                              className="bg-white rounded-xl border border-slate-200 p-3 shadow-2xs space-y-2.5"
+                            >
+                              <div 
+                                onClick={() => toggleExpandirTicket(venta.id)}
+                                className="flex items-center justify-between cursor-pointer"
+                              >
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="bg-slate-900 text-[#00FF9D] text-[9px] font-mono font-black px-2 py-0.5 rounded-md">
+                                      #{venta.id.split("-")[0].toUpperCase()}
+                                    </span>
+                                    <span className="text-xs font-bold text-slate-600">
+                                      {new Date(venta.created_at).toLocaleTimeString("es-VE", { hour: '2-digit', minute: '2-digit', hour12: true })}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] font-black text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                                      {iconPago(venta.payment_method)}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="text-right flex items-center gap-2">
+                                  <div>
+                                    <span className="text-sm font-black text-slate-900 block">
+                                      ${parseFloat(venta.total_amount).toFixed(2)}
+                                    </span>
+                                    {tasaAplicar && (
+                                      <span className="text-[9px] font-bold text-slate-400 block">
+                                        Bs. {(parseFloat(venta.total_amount) * tasaAplicar).toFixed(2)}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-xs text-slate-400 font-bold">{esExpandido ? '▼' : '▶'}</span>
+                                </div>
+                              </div>
+
+                              {/* DETALLE EXPANDIDO MÓVIL */}
+                              {esExpandido && (
+                                <div className="pt-2 border-t border-slate-100 space-y-2">
+                                  <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                                    Detalle del Ticket
+                                  </p>
+                                  {(!venta.sales_items || venta.sales_items.length === 0) ? (
+                                    <p className="text-xs text-slate-500 italic">Sin detalles.</p>
+                                  ) : (
+                                    <div className="space-y-1.5">
+                                      {venta.sales_items.map(item => (
+                                        <div key={item.id} className="bg-slate-50 p-2 rounded-lg border border-slate-100 flex justify-between items-center text-xs">
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <span>{item.item_type === 'cancha' ? '🎾' : '🛍️'}</span>
+                                            <div className="truncate">
+                                              <p className="font-bold text-slate-900 truncate">{item.item_name}</p>
+                                              <p className="text-[9px] text-slate-400 uppercase truncate">{item.item_detail}</p>
+                                            </div>
+                                          </div>
+                                          <div className="text-right shrink-0">
+                                            <p className="font-black text-emerald-600">${(item.quantity * item.price_unit).toFixed(2)}</p>
+                                            <p className="text-[8px] text-slate-400">{item.quantity} x ${parseFloat(item.price_unit).toFixed(2)}</p>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* VISTA DESKTOP: TABLA TRADICIONAL (>= 640px) */}
+                      <div className="hidden sm:block bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
                         <div className="overflow-x-auto">
                           <table className="w-full text-left border-collapse">
                             <thead>

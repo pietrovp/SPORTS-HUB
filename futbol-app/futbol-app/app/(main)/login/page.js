@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "../../../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
 // Catálogo estandarizado de Ciudades para garantizar Rankings sin typos
 const CIUDADES_POR_PAIS = {

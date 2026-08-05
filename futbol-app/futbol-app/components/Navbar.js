@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { supabase } from "../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
-// 1. CONFIGURACIÓN DE RUTAS Y MENÚS
 const NAV_POR_DEPORTE = {
   home: {
     icono: "🏟️",
@@ -56,12 +55,9 @@ export default function Navbar() {
   const [cuenta, setCuenta] = useState(null);
   const [esAdmin, setEsAdmin] = useState(false);
   const [esGerente, setEsGerente] = useState(false);
-  const [esDuenoCancha, setEsDuenoCancha] = useState(false);
-  const [creditos, setCreditos] = useState(0);
   
   const [menuOpen, setMenuOpen] = useState(false);
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
-  const [duenoMenuOpen, setDuenoMenuOpen] = useState(false);
   
   const [confirmandoSalir, setConfirmandoSalir] = useState(false);
   const [cerrandoSesion, setCerrandoSesion] = useState(false);
@@ -69,7 +65,6 @@ export default function Navbar() {
   const mobileNavRef = useRef(null);
   const userMenuRef = useRef(null);
 
-  // Cerrar menú de usuario al hacer clic afuera
   useEffect(() => {
     function handleClickOutside(event) {
       if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
@@ -90,14 +85,12 @@ export default function Navbar() {
         setCuenta(null);
         setEsAdmin(false);
         setEsGerente(false);
-        setEsDuenoCancha(false);
-        setCreditos(0);
         return;
       }
 
       const { data: cuentaData } = await supabase
         .from("profiles")
-        .select("nombre, avatar_url, email, is_admin, is_gerente, creditos")
+        .select("nombre, avatar_url, email, is_admin, is_gerente, club_id")
         .eq("id", userId)
         .maybeSingle();
 
@@ -105,22 +98,7 @@ export default function Navbar() {
       
       setCuenta(cuentaData || null);
       setEsAdmin(!!cuentaData?.is_admin);
-      setEsGerente(!!cuentaData?.is_gerente);
-      setCreditos(cuentaData?.creditos ?? 0);
-
-      if (cuentaData?.is_gerente) {
-        const { data: sedeData } = await supabase
-          .from("sedes")
-          .select("id")
-          .eq("owner_id", userId)
-          .limit(1);
-          
-        if (activo && sedeData && sedeData.length > 0) {
-          setEsDuenoCancha(true);
-        } else {
-          setEsDuenoCancha(false);
-        }
-      }
+      setEsGerente(!!cuentaData?.is_gerente || !!cuentaData?.club_id);
     }
 
     async function iniciar() {
@@ -145,11 +123,9 @@ export default function Navbar() {
     };
   }, [seccion]);
 
-  // Auto-scroll al cambiar de pestaña
   useEffect(() => {
     setMenuOpen(false);
     setAdminMenuOpen(false);
-    setDuenoMenuOpen(false);
 
     if (mobileNavRef.current) {
       const elActivo = mobileNavRef.current.querySelector('[data-active="true"]');
@@ -168,8 +144,6 @@ export default function Navbar() {
       setCuenta(null);
       setEsAdmin(false);
       setEsGerente(false);
-      setEsDuenoCancha(false);
-      setCreditos(0);
       setConfirmandoSalir(false);
       setMenuOpen(false);
       router.push("/");
@@ -197,7 +171,6 @@ export default function Navbar() {
               </span>
             </Link>
 
-            {/* Selector Desktop de Deporte */}
             <div className="relative group hidden lg:block">
               <button className="flex items-center gap-1 text-sm font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 hover:text-gray-900 px-3 py-1.5 rounded-full transition-colors border border-gray-200 whitespace-nowrap">
                 <span>{config.icono}</span>
@@ -218,7 +191,6 @@ export default function Navbar() {
             </div>
           </div>
 
-          {/* Menú Principal Desktop */}
           {mainNav.length > 0 && (
             <div className="hidden md:flex items-center p-1 bg-gray-100/80 rounded-full border border-gray-200/80 shrink-0">
               {mainNav.map(({ href, label }) => {
@@ -242,10 +214,8 @@ export default function Navbar() {
             </div>
           )}
 
-          {/* Iconos a la derecha: RANKING 🏆 + CRÉDITOS + PERFIL */}
           <div className="flex items-center gap-2 shrink-0">
             
-            {/* BOTÓN DE RANKING DESTACADO EN CABECERA SUPERIOR */}
             {seccion === "padel" && (
               <Link
                 href="/padel/ranking"
@@ -261,49 +231,21 @@ export default function Navbar() {
               </Link>
             )}
 
-            {/* Mi Cancha solo en Fútbol */}
-            {usuario && seccion === "futbol" && esGerente && (
-              <div className="relative hidden md:block">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (esDuenoCancha) {
-                      setDuenoMenuOpen(!duenoMenuOpen);
-                      setAdminMenuOpen(false);
-                    } else {
-                      router.push("/futbol/admin-canchas");
-                    }
-                  }}
-                  className={`whitespace-nowrap px-3 lg:px-4 py-1.5 rounded-full border text-xs font-bold flex items-center gap-1 transition-colors ${
-                    esDuenoCancha 
-                    ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
-                    : "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-                  }`}
-                >
-                  {esDuenoCancha ? "Mi Cancha" : "+ Registrar Cancha"}
-                  {esDuenoCancha && (
-                    <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <path d="M6 9l6 6 6-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  )}
-                </button>
-
-                {duenoMenuOpen && esDuenoCancha && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-lg text-xs z-50 overflow-hidden">
-                    <Link href="/futbol/admin-canchas" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700" onClick={() => setDuenoMenuOpen(false)}>
-                      Gestión de Horarios
-                    </Link>
-                  </div>
-                )}
-              </div>
+            {usuario && (esGerente || esAdmin) && (
+              <Link
+                href="/admin/recepcion"
+                className="hidden md:flex items-center gap-1.5 whitespace-nowrap px-3.5 py-1.5 rounded-full bg-slate-900 text-[#00FF9D] text-xs font-black hover:bg-slate-800 transition-colors shadow-sm"
+              >
+                <span>🛒</span>
+                <span>Sistema POS</span>
+              </Link>
             )}
 
-            {/* Admin global */}
             {esAdmin && (
               <div className="relative hidden md:block">
                 <button
                   type="button"
-                  onClick={() => {setAdminMenuOpen(!adminMenuOpen); setDuenoMenuOpen(false);}}
+                  onClick={() => setAdminMenuOpen(!adminMenuOpen)}
                   className="whitespace-nowrap px-3 lg:px-4 py-1.5 rounded-full bg-violet-50 border border-violet-200 text-violet-700 text-xs font-bold hover:bg-violet-100 flex items-center gap-1 transition-colors"
                 >
                   Admin
@@ -312,7 +254,10 @@ export default function Navbar() {
                   </svg>
                 </button>
                 {adminMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-lg text-xs z-50 overflow-hidden">
+                  <div className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-xl shadow-lg text-xs z-50 overflow-hidden">
+                    <Link href="/admin/gerentes" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700 border-b border-gray-100" onClick={() => setAdminMenuOpen(false)}>
+                      👥 Gestión Gerentes POS
+                    </Link>
                     {seccion === "padel" ? (
                       <Link href="/padel/admin/categorias" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700" onClick={() => setAdminMenuOpen(false)}>
                         Revisión Categorías
@@ -320,7 +265,6 @@ export default function Navbar() {
                     ) : (
                       <>
                         <Link href="/futbol/admin" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700" onClick={() => setAdminMenuOpen(false)}>Crear partido</Link>
-                        <Link href="/futbol/admin/pagos" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700 border-t border-gray-100" onClick={() => setAdminMenuOpen(false)}>Pagos</Link>
                         <Link href="/futbol/admin/Logros" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700 border-t border-gray-100" onClick={() => setAdminMenuOpen(false)}>Crear logros</Link>
                       </>
                     )}
@@ -331,18 +275,6 @@ export default function Navbar() {
 
             {usuario ? (
               <>
-                <Link
-                  href={seccion === "padel" ? "/padel" : "/futbol/creditos"}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-xs font-black hover:bg-amber-100 transition-colors whitespace-nowrap shrink-0 shadow-sm"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 shrink-0 text-amber-500 drop-shadow-sm">
-                    <path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2m0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8" />
-                    <path d="m16.6 11.39-2.77-1.23-1.23-2.77a.68.68 0 0 0-.6-.4c-.27-.02-.5.15-.61.39l-1.23 2.67-2.78 1.34c-.23.11-.38.35-.38.61s.16.49.4.6l2.77 1.23 1.23 2.77a.663.663 0 0 0 1.22 0l1.23-2.77 2.77-1.23c.24-.11.4-.35.4-.61s-.16-.5-.4-.61Z" />
-                  </svg>
-                  <span>{creditos}</span>
-                </Link>
-
-                {/* BOTÓN CON MENÚ DESPLEGABLE RESTRUCTURADO (SOLUCIÓN 1) */}
                 <div className="relative" ref={userMenuRef}>
                   <button
                     onClick={() => setMenuOpen(!menuOpen)}
@@ -363,7 +295,6 @@ export default function Navbar() {
                     <span className="text-[10px] text-gray-400">▼</span>
                   </button>
 
-                  {/* DESPLEGABLE INTELEVENTE DE PERFILES */}
                   {menuOpen && (
                     <div className="absolute right-0 mt-2 w-60 bg-white border border-gray-200 rounded-2xl shadow-xl z-[110] overflow-hidden text-xs font-bold p-1.5 space-y-1 animate-in fade-in slide-in-from-top-2 duration-150">
                       
@@ -376,11 +307,23 @@ export default function Navbar() {
                         </p>
                       </div>
 
+                      {(esGerente || esAdmin) && (
+                        <Link
+                          href="/admin/recepcion"
+                          onClick={() => setMenuOpen(false)}
+                          className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-900 text-[#00FF9D] font-black mb-1"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span>🛒</span>
+                            <span>Sistema POS (Gerencia)</span>
+                          </span>
+                        </Link>
+                      )}
+
                       <div className="px-3 pt-1 pb-0.5 text-[9px] font-black uppercase tracking-wider text-gray-400">
                         Mis Fichas Deportivas
                       </div>
 
-                      {/* Opción Pádel */}
                       <Link
                         href="/padel/perfil"
                         onClick={() => setMenuOpen(false)}
@@ -401,7 +344,6 @@ export default function Navbar() {
                         )}
                       </Link>
 
-                      {/* Opción Fútbol */}
                       <Link
                         href="/futbol/perfil"
                         onClick={() => setMenuOpen(false)}
@@ -424,35 +366,21 @@ export default function Navbar() {
 
                       <div className="border-t border-gray-100 my-1" />
 
-                      {/* Opciones Móvil Admin/Gerente */}
-                      {seccion === "futbol" && esGerente && (
-                        <div className="md:hidden border-b border-gray-100 pb-1">
-                          <Link 
-                            href="/futbol/admin-canchas"
-                            className="block px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-xl" 
-                            onClick={() => setMenuOpen(false)}
-                          >
-                            {esDuenoCancha ? "🏟️ Gestión de Horarios" : "🏟️ Registrar Cancha"}
-                          </Link>
-                        </div>
-                      )}
-
                       {esAdmin && (
                         <div className="md:hidden border-b border-gray-100 pb-1 bg-violet-50/30 rounded-xl p-1">
                           <p className="px-2 pt-1 text-[9px] font-black text-violet-400 uppercase tracking-widest">Admin</p>
+                          <Link href="/admin/gerentes" className="block px-2 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>👥 Gestión Gerentes POS</Link>
                           {seccion === "padel" ? (
                             <Link href="/padel/admin/categorias" className="block px-2 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Revisión Categorías</Link>
                           ) : (
                             <>
                               <Link href="/futbol/admin" className="block px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Crear partido</Link>
-                              <Link href="/futbol/admin/pagos" className="block px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Pagos</Link>
                               <Link href="/futbol/admin/Logros" className="block px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Crear logros</Link>
                             </>
                           )}
                         </div>
                       )}
 
-                      {/* Ajustes Globales de Cuenta */}
                       <Link 
                         href="/perfil" 
                         className="flex items-center gap-2 px-3 py-2.5 text-gray-600 hover:bg-gray-50 rounded-xl transition-all" 
@@ -464,7 +392,6 @@ export default function Navbar() {
                       
                       <div className="border-t border-gray-100 my-1" />
 
-                      {/* Salir */}
                       <button 
                         onClick={() => { setConfirmandoSalir(true); setMenuOpen(false); }} 
                         className="w-full text-left flex items-center gap-2 px-3 py-2.5 text-rose-600 hover:bg-rose-50 rounded-xl transition-all font-black"
@@ -508,7 +435,6 @@ export default function Navbar() {
           </div>
         </div>
 
-        {/* SUB-MENÚ MÓVIL */}
         {mainNav.length > 0 && (
           <div
             ref={mobileNavRef}
@@ -537,7 +463,6 @@ export default function Navbar() {
         )}
       </nav>
 
-      {/* MODAL CERRAR SESIÓN */}
       {confirmandoSalir && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4" onClick={() => !cerrandoSesion && setConfirmandoSalir(false)}>
           <div className="bg-white rounded-3xl shadow-xl max-w-sm w-full p-6 flex flex-col gap-5 border border-gray-100" onClick={(e) => e.stopPropagation()}>

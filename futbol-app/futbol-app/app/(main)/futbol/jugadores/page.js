@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../../../lib/supabaseClient";
-import PlayerCard from "../../../components/futbol/PlayerCard";
+import { supabase } from "@/lib/supabaseClient";
+import PlayerCard from "@/components/futbol/PlayerCard";
 import Link from "next/link";
 
 export default function Jugadores() {

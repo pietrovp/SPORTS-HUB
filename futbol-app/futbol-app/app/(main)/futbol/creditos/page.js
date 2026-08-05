@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../../lib/supabaseClient";
-import { formatCurrency, getMetodoLabel } from "../../../lib/futbol/paymentHelpers";
+import { supabase } from "@/lib/supabaseClient";
+import { formatCurrency, getMetodoLabel } from "@/lib/futbol/paymentHelpers";
 
 function formatBs(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "";

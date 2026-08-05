@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { COUNTRIES, getFlagEmoji } from "../lib/countries";
+import { COUNTRIES, getFlagEmoji } from "@/lib/countries";
 
 export default function CountrySelect({ value, onChange }) {
   const [open, setOpen] = useState(false);
