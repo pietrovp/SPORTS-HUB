@@ -85,12 +85,14 @@ export default function GerenciaLayout({ children }) {
     );
   }
 
+  // AQUÍ SE AGREGÓ "Cierre de Caja"
   const baseMenuItems = (hasClub || isAdmin) ? [
     { name: "Recepción (POS)", path: "/admin/recepcion", icon: "🎾" },
     { name: "Mi Complejo", path: "/admin/mi-club", icon: "🏟️" },
     { name: "Inventario", path: "/admin/inventario", icon: "📦" },
     { name: "Promociones", path: "/admin/promociones", icon: "🎁" },
     { name: "Historial Ventas", path: "/admin/historial", icon: "🧾" },
+    { name: "Cierre de Caja", path: "/admin/cierre-caja", icon: "📠" },
   ] : [
     { name: "Configurar Mi Complejo", path: "/admin/mi-club", icon: "🏟️", badge: "Obligatorio" }
   ];
