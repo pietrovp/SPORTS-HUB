@@ -25,13 +25,28 @@ export default function CierreCajaPage() {
 
   const obtenerTasaBcv = async () => {
     try {
-      const res = await fetch("/api/bcv");
-      if (res.ok) {
-        const data = await res.json();
-        setTasaBcv(data.usdRate);
+      const res = await fetch("/api/bcv", { cache: "no-store" });
+
+      if (!res.ok) {
+        console.error("BCV respondió mal:", res.status);
+        setTasaBcv(null);
+        return;
       }
+
+      const data = await res.json();
+      console.log("BCV data en cliente:", data);
+
+      const rate =
+        data.usdRate ??
+        data.rate ??
+        data.valor ??
+        data.promedio ??
+        null;
+
+      setTasaBcv(rate ? Number(rate) : null);
     } catch (error) {
       console.error("Error obteniendo tasa BCV:", error);
+      setTasaBcv(null);
     }
   };
 
@@ -143,16 +158,14 @@ export default function CierreCajaPage() {
         return;
       }
 
-      // Creamos un registro de cierre en cash_registers
       const { error } = await supabase.from("cash_registers").insert({
-        opened_by: user.id,          // opcional: el mismo usuario abre/cierra
+        opened_by: user.id,
         closed_by: user.id,
         club_id: clubId,
-        initial_cash: 0,             // si luego manejas apertura del turno, aquí cambias
-        expected_cash: totalSistema, // lo que el sistema dice que debería haber
-        real_cash: declarado,        // lo que declaró el recepcionista
-        status: "closed"
-        // opening_time y closing_time se llenan solos con default
+        initial_cash: 0,
+        expected_cash: totalSistema,
+        real_cash: declarado,
+        status: "closed",
       });
 
       if (error) {
@@ -367,8 +380,8 @@ export default function CierreCajaPage() {
 
             {/* TIENDA / POS */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
-                <h3 className="text-sm font-black text-slate-800 uppercase">
+              <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items.center">
+                <h3 className="text-sm font.black text.slate-800 uppercase">
                   Detalle de Tienda (POS)
                 </h3>
                 <span className="text-xs font-bold bg-white px-2 py-1 rounded-lg border text-slate-500">
