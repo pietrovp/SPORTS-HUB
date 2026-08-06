@@ -1052,32 +1052,37 @@ async function chequearPromocion(clubIdActual, fechaActual) {
       {/* CONTENEDOR PRINCIPAL POS */}
       <div className="w-full flex flex-col flex-1 min-w-0 bg-white rounded-2xl sm:rounded-3xl shadow-sm border border-slate-300 overflow-hidden">
         
-        {/* BARRA SUPERIOR POS */}
+           {/* --- BARRA SUPERIOR POS --- */}
         <div className="p-3 sm:p-4 border-b border-slate-200 flex flex-wrap justify-between items-center bg-white gap-2 sm:gap-3">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <button onClick={() => setFechaBase(new Date())} className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl border border-slate-300 text-xs font-black text-slate-800 hover:bg-slate-100">
-              Hoy
-            </button>
-            <div className="flex items-center gap-1">
-              <button onClick={() => { const d = new Date(fechaBase); d.setDate(d.getDate() - 1); setFechaBase(d); }} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 font-black text-slate-800 flex items-center justify-center">‹</button>
-              <button onClick={() => { const d = new Date(fechaBase); d.setDate(d.getDate() + 1); setFechaBase(d); }} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 font-black text-slate-800 flex items-center justify-center">›</button>
-            </div>
-            <h2 className="text-xs sm:text-base font-black text-slate-900 capitalize">
-              {fechaBase.toLocaleDateString("es-ES", { month: "long", year: "numeric", day: "numeric" })}
-            </h2>
-          </div>
-
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className="bg-emerald-50 border border-emerald-300 text-emerald-950 px-2.5 py-1 sm:px-3.5 sm:py-1.5 rounded-xl flex items-center gap-1.5 shadow-2xs">
-              <span className="text-[10px] sm:text-xs font-black">🇻🇪 BCV:</span>
-              <span className="text-xs sm:text-sm font-black text-emerald-700">Bs. {tasaBCV.toFixed(2)}</span>
-            </div>
-
-            <button onClick={() => cargarPartidosPeriodo()} className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black">
-              🔄 Sincronizar
-            </button>
-          </div>
+            {/* ... los botones de fecha, Sincronizar, etc ... */}
         </div>
+
+        {/* --- BANNER DE PROMOCIÓN EN EL POS --- */}
+        {promocionHoy && (
+          <div className="bg-rose-50 border-b border-rose-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-inner">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl animate-bounce">🎁</span>
+              <div>
+                <h4 className="text-xs font-black text-rose-900 uppercase tracking-tight">
+                  TARIFA PROMOCIONAL: {promocionHoy.name}
+                </h4>
+                <p className="text-[10px] font-bold text-rose-700">
+                  Precios reducidos aplicados automáticamente a las canchas en la fecha mostrada.
+                </p>
+              </div>
+            </div>
+            <div className="bg-rose-100 border border-rose-200 px-3 py-1.5 rounded-xl flex items-center gap-4 text-xs font-black text-rose-800">
+                <div className="text-center">
+                    <span className="block text-[9px] uppercase opacity-70">Normal</span>
+                    ${promocionHoy.price_normal.toFixed(2)}
+                </div>
+                <div className="text-center border-l border-rose-300 pl-4">
+                    <span className="block text-[9px] uppercase opacity-70">Hora Pico</span>
+                    ${promocionHoy.price_peak.toFixed(2)}
+                </div>
+            </div>
+          </div>
+        )}
 
         {/* GRILLA RESPONSIVE CON COLUMNA DE HORA STICKY */}
         <div className="flex-1 overflow-auto p-2 sm:p-4 bg-slate-100/70">
@@ -1114,17 +1119,13 @@ async function chequearPromocion(clubIdActual, fechaActual) {
                     {canchas.map((cancha) => {
                      const reservado = obtenerReserva(cancha.id, dateObjSlot);
 const esPico = chequearSiEsPico(dateObjSlot);
+const precioOriginal = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12); // <--- NUEVA LÍNEA
 
-// [REEMPLAZA ESTO]
-// const precioUSD = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
-// const precioBs = precioUSD * tasaBCV;
-
-// [POR ESTO]
 let precioUSD = 0;
 if (promocionHoy) {
   precioUSD = esPico ? promocionHoy.price_peak : promocionHoy.price_normal;
 } else {
-  precioUSD = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
+  precioUSD = precioOriginal; // <--- MODIFICADO
 }
 const precioBs = precioUSD * tasaBCV;
 
@@ -1197,19 +1198,44 @@ const precioBs = precioUSD * tasaBCV;
                               </button>
                             );
                           })() : (
-                            <button
-                              onClick={() => abrirModalAgendarPOS(cancha, dateObjSlot, bloque.etiqueta, precioUSD)}
-                              className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
-                            >
-                              {esPico && (
-                                <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
-                                  Pico
-                                </span>
-                              )}
-                              
-                              <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">+ Agendar</span>
-                              <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD} • Bs. {precioBs.toFixed(2)}</span>
-                            </button>
+                          <button
+  onClick={() => abrirModalAgendarPOS(cancha, dateObjSlot, bloque.etiqueta, precioUSD)}
+  className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
+>
+  {/* BADGE PICO */}
+  {esPico && (
+    <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
+      Pico
+    </span>
+  )}
+
+  {/* BADGE PROMO */}
+  {promocionHoy && (
+    <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
+      Promo
+    </span>
+  )}
+
+  <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
+    + Agendar
+  </span>
+
+  {/* PRECIOS TACHADOS O NORMALES */}
+  {promocionHoy ? (
+    <div className="flex flex-col items-center mt-0.5">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal}</span>
+        <span className="text-[10px] font-black text-rose-500">${precioUSD}</span>
+      </div>
+      <span className="text-[8px] font-bold text-slate-400">Bs. {precioBs.toFixed(2)}</span>
+    </div>
+  ) : (
+    <div className="flex flex-col items-center mt-0.5">
+      <span className="text-[9px] sm:text-[10px] font-bold text-slate-500">${precioUSD}</span>
+      <span className="text-[8px] font-bold text-slate-400">Bs. {precioBs.toFixed(2)}</span>
+    </div>
+  )}
+</button>
                           )}
                         </div>
                       );
