@@ -674,152 +674,221 @@ export default function PublicClubDetailPage() {
                         <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
                       </div>
 
-                      {/* CELDAS PISTAS */}
-                      {canchas.map((cancha) => {
-                        const partidoOcupado = partidosClub.find((m) => {
-                          if (m.court_id !== cancha.id) return false;
-                          const t = parsearFechaBD(m.scheduled_at);
-                          return (
-                            t.getFullYear() === fechaSeleccionada.getFullYear() &&
-                            t.getMonth() === fechaSeleccionada.getMonth() &&
-                            t.getDate() === fechaSeleccionada.getDate() &&
-                            t.getHours() === bloque.horaInt &&
-                            t.getMinutes() === bloque.minutosInt
-                          );
-                        });
+                     {/* CELDAS PISTAS */}
+{canchas.map((cancha) => {
+  // ¿Hay un partido ocupando este bloque?
+  const partidoOcupado = partidosClub.find((m) => {
+    if (m.court_id !== cancha.id) return false;
+    const t = parsearFechaBD(m.scheduled_at);
+    return (
+      t.getFullYear() === fechaSeleccionada.getFullYear() &&
+      t.getMonth() === fechaSeleccionada.getMonth() &&
+      t.getDate() === fechaSeleccionada.getDate() &&
+      t.getHours() === bloque.horaInt &&
+      t.getMinutes() === bloque.minutosInt
+    );
+  });
 
-                         const esPico = chequearSiEsPico(bloque.dateObj);
+  // --- LÓGICA NUEVA DE PRECIOS (PROMO + BLOQUES) ---
+  const esPico = chequearSiEsPico(bloque.dateObj);
+  const precioOriginal =
+    esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
+  let precioUSD = precioOriginal;
 
-// --- CÓDIGO NUEVO ---
-const precioOriginal = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
-let precioUSD = 0;
+  if (promocionHoy) {
+    const hasBlocks =
+      promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
 
-if (promocionHoy) {
-  precioUSD = esPico ? promocionHoy.price_peak : promocionHoy.price_normal;
-} else {
-  precioUSD = precioOriginal;
-}
+    if (hasBlocks) {
+      // Hora del bloque en formato HH:MM (ej: "07:00", "14:30")
+      const horaBotonStr = `${String(bloque.horaInt).padStart(2, "0")}:${String(
+        bloque.minutosInt
+      ).padStart(2, "0")}`;
 
-                        if (partidoOcupado) {
-                          const esPrivado = partidoOcupado.is_private || partidoOcupado.match_type === "privado";
-                          
-                          const totalAbonado = (Array.isArray(partidoOcupado.payments_history) ? partidoOcupado.payments_history : [])
-                            .filter(a => a.status === "aprobado")
-                            .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
-                          const canchaBaseFee = (partidoOcupado.total_price || 15) + (partidoOcupado.app_fee || 1.50);
-                          
-                          const canchaTotalmentePagada = partidoOcupado.payment_status === "aprobado" || totalAbonado >= canchaBaseFee - 0.50;
-                          const esPendiente = !canchaTotalmentePagada && (partidoOcupado.payment_status === "pendiente_aprobacion" || partidoOcupado.payment_status === "pago_en_sitio");
+      const bloqueAplicable = promocionHoy.time_blocks.find((b) => {
+        return (
+          horaBotonStr >= b.start_time &&
+          horaBotonStr < b.end_time
+        );
+      });
 
-                          const esMiReserva = user && (
-                            partidoOcupado.created_by === user.id || 
-                            partidoOcupado.players?.some(p => p.user_id === user.id)
-                          );
+      if (bloqueAplicable) {
+        precioUSD = bloqueAplicable.price; // Precio del bloque, ej: 5.00
+      } else {
+        // Fuera de los bloques, usamos el precio original de la cancha
+        precioUSD = precioOriginal;
+      }
+    } else {
+      // Promo sin bloques: modo todo el día (Precio Promo / Hora Pico Promo)
+      precioUSD = esPico
+        ? promocionHoy.price_peak
+        : promocionHoy.price_normal;
+    }
+  }
 
-                          // ES MI RESERVA
-                          if (esMiReserva) {
-                            return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                <button
-                                  onClick={() => abrirModalMiReserva(partidoOcupado)}
-                                  className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-                                    esPendiente
-                                      ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400"
-                                      : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
-                                  }`}
-                                >
-                                  <div className="flex justify-between items-center w-full">
-                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
-                                      ⭐ MI RESERVA
-                                    </span>
-                                  </div>
-                                  <div>
-                                    <p className="text-[11px] sm:text-xs font-black truncate text-white">👁️ Ver / Agregar Pago</p>
-                                    <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
-                                  </div>
-                                </button>
-                              </div>
-                            );
-                          }
+  const precioBs = precioUSD * tasaBCV;
+  // --- FIN LÓGICA NUEVA DE PRECIOS ---
 
-                          // RESERVA PRIVADA DE OTRO USUARIO
-                          if (esPrivado) {
-                            return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
-                                  <div className="flex justify-between items-center w-full">
-                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
-                                      🔒 PRIVADO
-                                    </span>
-                                  </div>
-                                  <p className="text-[11px] sm:text-xs font-black text-slate-400">Pista Reservada</p>
-                                </div>
-                              </div>
-                            );
-                          }
+  // Si hay partido, se pinta MI RESERVA / PRIVADO / ABIERTO
+  if (partidoOcupado) {
+    const esPrivado =
+      partidoOcupado.is_private || partidoOcupado.match_type === "privado";
+    const totalAbonado = Array.isArray(partidoOcupado.payments_history)
+      ? partidoOcupado.payments_history
+          .filter((a) => a.status === "aprobado")
+          .reduce((sum, a) => sum + parseFloat(a.amount || 0), 0)
+      : 0;
 
-                          // PARTIDO ABIERTO PÚBLICO
-                          return (
-                            <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                              <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
-                                <div className={`h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-                                  esPendiente
-                                    ? "bg-amber-500 text-slate-950 border-amber-600"
-                                    : "bg-slate-900 text-white border-slate-800 hover:border-blue-500"
-                                }`}>
-                                  <div className="flex justify-between items-center w-full">
-                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">
-                                      🌐 ABIERTO
-                                    </span>
-                                    <span className="text-[9px] font-black px-1 py-0.5 bg-white/10 rounded">
-                                      {partidoOcupado.players?.length || 1}/4
-                                    </span>
-                                  </div>
-                                  <p className="text-[11px] sm:text-xs font-black truncate">Cat. {partidoOcupado.category_restriction || "Libre"}</p>
-                                </div>
-                              </Link>
-                            </div>
-                          );
-                        }
+    const canchaBaseFee =
+      (partidoOcupado.total_price || 15) +
+      (partidoOcupado.app_fee || (partidoOcupado.total_price || 15) * 0.1);
 
-                        
-                      // TURNOS LIBRES
-return (
-  <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-    <button
-      onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
-      className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
-    >
-      {/* Etiqueta de Hora Pico (Esquina Superior Derecha) */}
-      {esPico && (
-        <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
-          Pico
-        </span>
-      )}
+    const canchaTotalmentePagada =
+      partidoOcupado.payment_status === "aprobado" ||
+      totalAbonado >= canchaBaseFee - 0.5;
 
-      {/* Etiqueta de Promo (Esquina Superior Izquierda) */}
-      {promocionHoy && (
-        <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
-          Promo
-        </span>
-      )}
-      
-      <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
-        + Agendar
-      </span>
-      
-      {promocionHoy ? (
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal}</span>
-          <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD}</span>
+    const esPendiente =
+      !canchaTotalmentePagada &&
+      (partidoOcupado.payment_status === "pendiente_aprobacion" ||
+        partidoOcupado.payment_status === "pago_en_sitio");
+
+    const esMiReserva =
+      !!user &&
+      (partidoOcupado.created_by === user.id ||
+        (Array.isArray(partidoOcupado.players) &&
+          partidoOcupado.players.some((p) => p.user_id === user.id)));
+
+    // MI RESERVA
+    if (esMiReserva) {
+      return (
+        <div
+          key={cancha.id}
+          className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
+        >
+          <button
+            onClick={() => abrirModalMiReserva(partidoOcupado)}
+            className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+              esPendiente
+                ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400"
+                : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
+            }`}
+          >
+            <div className="flex justify-between items-center w-full">
+              <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
+                MI RESERVA
+              </span>
+            </div>
+            <div className="my-0.5">
+              <p className="text-[11px] sm:text-[12px] font-black truncate text-white">
+                Ver / Agregar Pago
+              </p>
+              <p className="text-[8px] text-slate-300 font-bold">
+                Haz clic para gestionar
+              </p>
+            </div>
+          </button>
         </div>
-      ) : (
-        <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD}</span>
-      )}
-    </button>
-  </div>
-);
-                      })}
+      );
+    }
+
+    // RESERVA PRIVADA DE OTRO USUARIO
+    if (esPrivado) {
+      return (
+        <div
+          key={cancha.id}
+          className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
+        >
+          <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
+            <div className="flex justify-between items-center w-full">
+              <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
+                PRIVADO
+              </span>
+            </div>
+            <p className="text-[11px] sm:text-[12px] font-black text-slate-400">
+              Pista Reservada
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // PARTIDO ABIERTO PÚBLICO
+    return (
+      <div
+        key={cancha.id}
+        className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
+      >
+        <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
+          <div
+            className={`h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+              esPendiente
+                ? "bg-amber-500 text-slate-950 border-amber-600"
+                : "bg-slate-900 text-white border-slate-800 hover:border-blue-500"
+            }`}
+          >
+            <div className="flex justify-between items-center w-full">
+              <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">
+                ABIERTO
+              </span>
+              <span className="text-[9px] font-black px-1 py-0.5 bg-white/10 rounded">
+                {partidoOcupado.players?.length || 1} / 4
+              </span>
+            </div>
+            <p className="text-[11px] sm:text-xs font-black truncate">
+              Cat. {partidoOcupado.category_restriction || "Libre"}
+            </p>
+          </div>
+        </Link>
+      </div>
+    );
+  }
+
+  // --- TURNOS LIBRES (NO HAY PARTIDO EN ESTE BLOQUE) ---
+  return (
+    <div
+      key={cancha.id}
+      className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
+    >
+      <button
+        onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
+        className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
+      >
+        {/* BADGE PICO */}
+        {esPico && (
+          <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
+            Pico
+          </span>
+        )}
+
+        {/* BADGE PROMO */}
+        {promocionHoy && (
+          <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
+            Promo
+          </span>
+        )}
+
+        <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
+          + Agendar
+        </span>
+
+        {promocionHoy ? (
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className="text-[8px] font-bold text-slate-400 line-through">
+              ${precioOriginal}
+            </span>
+            <span className="text-[10px] sm:text-[11px] font-black text-rose-500">
+              ${precioUSD}
+            </span>
+          </div>
+        ) : (
+          <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">
+            ${precioUSD}
+          </span>
+        )}
+      </button>
+    </div>
+  );
+})}
                     </div>
                   ))}
                 </div>
