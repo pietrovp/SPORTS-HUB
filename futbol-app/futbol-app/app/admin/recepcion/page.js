@@ -1116,18 +1116,35 @@ async function chequearPromocion(clubIdActual, fechaActual) {
                     </div>
 
                     {/* PISTAS CON NUEVAS REGLAS DE ESTADO VISUAL */}
-                    {canchas.map((cancha) => {
-                     const reservado = obtenerReserva(cancha.id, dateObjSlot);
-const esPico = chequearSiEsPico(dateObjSlot);
-const precioOriginal = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12); // <--- NUEVA LÍNEA
+{canchas.map((cancha) => {
+  const reservado = obtenerReserva(cancha.id, dateObjSlot);
+  
+  // --- INICIO DE LÓGICA DE PRECIOS ACTUALIZADA ---
+  const esPico = chequearSiEsPico(dateObjSlot);
+  const precioOriginal = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
+  let precioUSD = precioOriginal;
 
-let precioUSD = 0;
-if (promocionHoy) {
-  precioUSD = esPico ? promocionHoy.price_peak : promocionHoy.price_normal;
-} else {
-  precioUSD = precioOriginal; // <--- MODIFICADO
-}
-const precioBs = precioUSD * tasaBCV;
+  if (promocionHoy) {
+    const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
+    
+    if (hasBlocks) {
+      // Obtenemos la hora en formato "HH:MM" (ej: "07:00", "14:00")
+      const horaBotonStr = `${String(bloque.horaInt).padStart(2, '0')}:${String(bloque.minutosInt).padStart(2, '0')}`;
+      
+      const bloqueAplicable = promocionHoy.time_blocks.find(b => {
+        return horaBotonStr >= b.start_time && horaBotonStr < b.end_time;
+      });
+
+      if (bloqueAplicable) {
+        precioUSD = bloqueAplicable.price; 
+      }
+    } else {
+      // Promo de todo el día
+      precioUSD = esPico ? promocionHoy.price_peak : promocionHoy.price_normal;
+    }
+  }
+
+  const precioBs = precioUSD * tasaBCV;
 
                       return (
                         <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200 relative">
