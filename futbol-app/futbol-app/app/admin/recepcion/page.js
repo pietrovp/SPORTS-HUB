@@ -580,12 +580,17 @@ async function chequearPromocion(clubIdActual, fechaActual) {
         .single();
 
       if (errVenta) throw errVenta;
+      // Determinamos el nombre del ítem dependiendo de si hay promo
+      let nombreItemCancha = `Reserva Completa: ${match.court?.name || "Pista"}`;
+      if (promocionHoy) {
+        nombreItemCancha = `Reserva (Promo ${promocionHoy.name}): ${match.court?.name || "Pista"}`;
+      }
 
       const itemsAInsertar = [
         {
           sale_id: ventaCaja.id,
           item_type: "cancha",
-          item_name: `Reserva Completa: ${match.court?.name || "Pista"}`,
+          item_name: nombreItemCancha,
           item_detail: `Cliente: ${obtenerNombreCliente(match)}`,
           quantity: 1,
           price_unit: precioBase,
