@@ -78,7 +78,7 @@ export default function PublicClubDetailPage() {
       cargarDetalleClub();
       obtenerTasaBCV();
     }
-  }, [clubId]);
+  }, [clubId, fechaSeleccionada]);// <--- AÑADE fechaSeleccionada AQUÍ
 
   const mostrarNotificacion = (title, message, type = "info") => {
     setPopupNotif({ open: true, title, message, type });
@@ -632,9 +632,25 @@ export default function PublicClubDetailPage() {
                 })}
               </div>
 
-              {/* GRILLA DE CANCHAS CON PRECIOS Y HORA PICO DINÁMICOS */}
-              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
-                <div className="inline-min-w-full min-w-[500px] w-full">
+                 {/* --- AVISO DE PROMOCIÓN --- */}
+        {promocionHoy && (
+          <div className="bg-rose-50 border border-rose-200 p-3 sm:p-4 rounded-2xl flex items-center gap-3 shadow-sm my-4">
+            <span className="text-3xl animate-bounce">🎁</span>
+            <div>
+              <h4 className="text-xs sm:text-sm font-black text-rose-900 uppercase tracking-tight">
+                {promocionHoy.name}
+              </h4>
+              <p className="text-[10px] sm:text-xs font-bold text-rose-700">
+                ¡Aprovecha! Precios especiales aplicados en las tarifas de hoy.
+              </p>
+            </div>
+          </div>
+        )}
+        {/* -------------------------- */}
+
+        {/* GRILLA DE CANCHAS CON PRECIOS Y HORA PICO DINÁMICOS */}
+        <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
+          <div className="inline-min-w-full min-w-[500px] w-full">
                   
                   {/* CABECERA PISTAS */}
                   <div className="flex bg-slate-950 text-white border-b-2 border-slate-800 sticky top-0 z-30">
@@ -674,12 +690,14 @@ export default function PublicClubDetailPage() {
 
                          const esPico = chequearSiEsPico(bloque.dateObj);
 
-// --- AQUÍ PEGAS EL CÓDIGO NUEVO ---
+// --- CÓDIGO NUEVO ---
+const precioOriginal = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
 let precioUSD = 0;
+
 if (promocionHoy) {
   precioUSD = esPico ? promocionHoy.price_peak : promocionHoy.price_normal;
 } else {
-  precioUSD = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
+  precioUSD = precioOriginal;
 }
 
                         if (partidoOcupado) {
@@ -764,24 +782,43 @@ if (promocionHoy) {
                           );
                         }
 
-                        // TURNOS LIBRES
-                        return (
-                          <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                            <button
-                              onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
-                              className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
-                            >
-                              {esPico && (
-                                <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
-                                  Pico
-                                </span>
-                              )}
-                              
-                              <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">+ Agendar</span>
-                              <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD}</span>
-                            </button>
-                          </div>
-                        );
+                        
+                      // TURNOS LIBRES
+return (
+  <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+    <button
+      onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
+      className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
+    >
+      {/* Etiqueta de Hora Pico (Esquina Superior Derecha) */}
+      {esPico && (
+        <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
+          Pico
+        </span>
+      )}
+
+      {/* Etiqueta de Promo (Esquina Superior Izquierda) */}
+      {promocionHoy && (
+        <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
+          Promo
+        </span>
+      )}
+      
+      <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
+        + Agendar
+      </span>
+      
+      {promocionHoy ? (
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal}</span>
+          <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD}</span>
+        </div>
+      ) : (
+        <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD}</span>
+      )}
+    </button>
+  </div>
+);
                       })}
                     </div>
                   ))}
