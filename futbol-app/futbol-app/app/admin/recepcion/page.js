@@ -290,6 +290,28 @@ export default function RecepcionElite() {
     return "Cliente Mostrador";
   };
 
+      // NUEVO: Función para chequear si un bloque cae en Hora Pico
+  const chequearSiEsPico = (dateObj) => {
+    // Si por alguna razón el club no tiene horario pico, asumimos que de 17:00 a 22:00 es pico por defecto.
+    const startStr = clubInfo?.peak_start_time || "17:00:00"; 
+    const endStr = clubInfo?.peak_end_time || "22:00:00";
+    
+    const slotMins = dateObj.getHours() * 60 + dateObj.getMinutes();
+    
+    const [startH, startM] = startStr.split(':').map(Number);
+    const [endH, endM] = endStr.split(':').map(Number);
+    
+    const startMins = startH * 60 + (startM || 0);
+    const endMins = endH * 60 + (endM || 0);
+
+    if (startMins <= endMins) {
+      return slotMins >= startMins && slotMins < endMins;
+    } else {
+      // Caso en que la hora pico cruza la medianoche (ej. 18:00 a 02:00)
+      return slotMins >= startMins || slotMins < endMins;
+    }
+  };
+
   const bloquesHorarios = useMemo(() => {
     const duracion = clubInfo?.slot_duration_minutes || 60;
     const horaApertura = parseInt((clubInfo?.open_time || "07:00:00").split(":")[0], 10);
@@ -329,8 +351,8 @@ export default function RecepcionElite() {
     });
   };
 
-  const abrirModalAgendarPOS = (cancha, dateObj, horaLabel) => {
-    const precioBaseTotal = cancha.price_credits || 15;
+    const abrirModalAgendarPOS = (cancha, dateObj, horaLabel, precioCalculado) => {
+    const precioBaseTotal = precioCalculado || cancha.price_credits || 15;
     const feeSugerido = precioBaseTotal * 0.10;
     const totalSugerido = precioBaseTotal + feeSugerido;
 
@@ -460,7 +482,7 @@ export default function RecepcionElite() {
     return extras.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
   };
 
-  // LIQUIDAR RESERVA
+   // LIQUIDAR RESERVA
   async function cerrarTicketYLiquidarReserva(match) {
     if (match.payment_status === "liquidado") {
       return mostrarNotificacion("Ya Liquidado", "Esta reserva ya fue liquidada e ingresada al historial de ventas.", "info");
@@ -536,7 +558,11 @@ export default function RecepcionElite() {
         });
       }
 
+      // 🔴 AQUÍ OCURRE LA MAGIA DEL INVENTARIO 🔴
+      // Agrupamos los extras para saber exactamente cuántas unidades de cada producto descontar
       const extrasList = Array.isArray(match.extra_items) ? match.extra_items : [];
+      const productosVendidos = {}; // Para agrupar por ID de producto
+
       extrasList.forEach((ex) => {
         itemsAInsertar.push({
           sale_id: ventaCaja.id,
@@ -546,9 +572,46 @@ export default function RecepcionElite() {
           quantity: 1,
           price_unit: parseFloat(ex.price) || 0,
         });
+
+        // Agrupamos cantidades vendidas por ID de producto
+        if (ex.id) {
+          if (!productosVendidos[ex.id]) {
+            productosVendidos[ex.id] = 0;
+          }
+          productosVendidos[ex.id] += 1;
+        }
       });
 
       await supabase.from("sales_items").insert(itemsAInsertar);
+
+      // 🔴 EJECUTAR DESCUENTO DE STOCK EN BASE DE DATOS 🔴
+      // Obtenemos los productos actuales del club para restarles la cantidad vendida
+      if (Object.keys(productosVendidos).length > 0) {
+        const { data: currentProducts } = await supabase
+          .from("products")
+          .select("id, stock, is_rental")
+          .in("id", Object.keys(productosVendidos));
+
+        if (currentProducts) {
+          // Preparamos las actualizaciones masivas (solo para productos físicos, ignoramos los alquileres ilimitados)
+          const updates = currentProducts
+            .filter(p => !p.is_rental) // No descontamos el stock 999 de las palas de alquiler
+            .map(p => {
+              const cantidadVendida = productosVendidos[p.id] || 0;
+              const nuevoStock = Math.max(0, p.stock - cantidadVendida); // Evita números negativos
+              
+              return supabase
+                .from("products")
+                .update({ stock: nuevoStock })
+                .eq("id", p.id);
+            });
+          
+          // Ejecutamos todos los updates en paralelo
+          if (updates.length > 0) {
+            await Promise.all(updates);
+          }
+        }
+      }
 
       await supabase
         .from("padel_matches")
@@ -561,10 +624,14 @@ export default function RecepcionElite() {
       setModalDetalleMatch(false);
       mostrarNotificacion(
         "Ticket Liquidado",
-        `🔒 ¡RESERVA CONFIRMADA! Se registraron $${totalGranEsperado.toFixed(2)} (Bs. ${(totalGranEsperado * tasaBCV).toFixed(2)}) en el historial de ventas.`,
+        `🔒 ¡RESERVA CONFIRMADA! Se registraron $${totalGranEsperado.toFixed(2)} (Bs. ${(totalGranEsperado * tasaBCV).toFixed(2)}) en el historial y se descontó el inventario.`,
         "success"
       );
+      
+      // Recargamos los datos generales para que el carrusel de productos refleje el nuevo stock
+      await cargarDatosGenerales();
       await cargarPartidosPeriodo();
+
     } catch (err) {
       console.error(err);
       mostrarNotificacion("Error", "Error al liquidar el ticket.", "error");
@@ -678,6 +745,68 @@ export default function RecepcionElite() {
     } catch (err) {
       console.error(err);
       mostrarNotificacion("Error", "Error registrando el abono.", "error");
+    } finally {
+      setProcesando(false);
+    }
+  }
+
+  // NUEVO MEJORADO: Función para aprobar un pago de la App y generar el ticket si cubre todo
+  async function aprobarPagoPendiente(match, pagoId) {
+    try {
+      setProcesando(true);
+      const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
+      
+      // 1. Cambiamos el status del pago específico a "aprobado"
+      const historialNuevo = historialActual.map(p => 
+        p.id === pagoId ? { ...p, status: "aprobado" } : p
+      );
+
+      // 2. Recalculamos si con esta aprobación ya se cubrió el total de la reserva
+      const totalAbonado = historialNuevo
+        .filter((item) => item.status === "aprobado")
+        .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+
+      const precioBase = match.total_price || 15;
+      const fee = match.app_fee || precioBase * 0.10;
+      const totalExtras = calcularTotalExtras(match);
+      const totalGranEsperado = precioBase + fee + totalExtras;
+
+      // 3. Verificamos si el pago ya cubre la totalidad
+      const pagoCompleto = totalAbonado >= totalGranEsperado - 0.05;
+
+      // 4. Guardamos primero la aprobación del pago en Supabase
+      await supabase
+        .from("padel_matches")
+        .update({
+          payments_history: historialNuevo,
+          payment_status: pagoCompleto ? "aprobado" : "pendiente_aprobacion",
+        })
+        .eq("id", match.id);
+
+      // Actualizamos el objeto localmente para las siguientes funciones
+      const matchActualizado = { 
+        ...match, 
+        payments_history: historialNuevo, 
+        payment_status: pagoCompleto ? "aprobado" : "pendiente_aprobacion" 
+      };
+
+      // 5. Si ya se completó el pago, llamamos a tu función de Liquidar Ticket automáticamente
+      if (pagoCompleto && match.payment_status !== "liquidado") {
+        mostrarNotificacion("Validando...", "Pago aprobado. Generando ticket de caja...", "info");
+        
+        // Llamamos a tu función principal para que genere la venta en 'sales', 
+        // descuente el inventario de 'products' y lo pase a "liquidado"
+        await cerrarTicketYLiquidarReserva(matchActualizado);
+      } else {
+        // Si fue un abono parcial, solo mostramos el éxito
+        mostrarNotificacion("Pago Aprobado", "✅ Se aprobó el pago parcial. Falta saldo por cobrar.", "success");
+        setMatchSeleccionado(matchActualizado);
+        await cargarPartidosPeriodo();
+      }
+
+    } catch (err) {
+      console.error("Error al aprobar pago:", err);
+      mostrarNotificacion("Error", "No se pudo aprobar el pago.", "error");
     } finally {
       setProcesando(false);
     }
@@ -870,10 +999,17 @@ export default function RecepcionElite() {
                     </div>
 
                     {/* PISTAS */}
+                                    {/* PISTAS */}
                     {canchas.map((cancha) => {
                       const reservado = obtenerReserva(cancha.id, dateObjSlot);
                       const esPendiente = reservado?.payment_status === "pendiente_aprobacion" || reservado?.payment_status === "pago_en_sitio";
-                      const precioUSD = cancha.price_credits || 15;
+                      
+                      // 🔴 NUEVA LÓGICA DE PRECIOS DINÁMICOS
+                      const esPico = chequearSiEsPico(dateObjSlot);
+                      const precioUSD = esPico 
+                        ? (cancha.price_peak || cancha.price_credits || 20)
+                        : (cancha.price_normal || cancha.price_credits || 12);
+                      
                       const precioBs = precioUSD * tasaBCV;
 
                       return (
@@ -904,9 +1040,16 @@ export default function RecepcionElite() {
                             </button>
                           ) : (
                             <button
-                              onClick={() => abrirModalAgendarPOS(cancha, dateObjSlot, bloque.etiqueta)}
-                              className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs"
+                              onClick={() => abrirModalAgendarPOS(cancha, dateObjSlot, bloque.etiqueta, precioUSD)}
+                              className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
                             >
+                              {/* ETIQUETA VISUAL DE HORA PICO */}
+                              {esPico && (
+                                <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
+                                  Pico
+                                </span>
+                              )}
+                              
                               <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">+ Agendar</span>
                               <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD} • Bs. {precioBs.toFixed(2)}</span>
                             </button>
@@ -1330,7 +1473,7 @@ export default function RecepcionElite() {
                             </p>
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0">
+                                               <div className="flex items-center gap-2 shrink-0">
                             <div className="text-right">
                               <span className={`text-xs font-black block leading-none ${esAprobado ? "text-emerald-700" : "text-amber-600"}`}>
                                 ${amountUsd.toFixed(2)}
@@ -1339,6 +1482,19 @@ export default function RecepcionElite() {
                                 Bs. {amountBs.toFixed(2)}
                               </span>
                             </div>
+
+                            {/* NUEVO: BOTÓN DE APROBAR SI EL PAGO ESTÁ PENDIENTE */}
+                            {!esAprobado && (
+                              <button
+                                type="button"
+                                onClick={() => aprobarPagoPendiente(matchSeleccionado, ab.id)}
+                                disabled={procesando}
+                                className="bg-emerald-500 hover:bg-emerald-600 text-white text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg transition-colors shadow-sm"
+                                title="Verificar y aprobar este pago"
+                              >
+                                ✓ Aprobar
+                              </button>
+                            )}
 
                             {/* COMPROBANTE LIGHTBOX INTERACTIVO */}
                             {ab.receipt_url && (

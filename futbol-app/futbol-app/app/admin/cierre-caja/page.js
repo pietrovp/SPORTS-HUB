@@ -7,8 +7,8 @@ export default function CierreCajaPage() {
   const [loading, setLoading] = useState(true);
   const [tasaBcv, setTasaBcv] = useState(null);
   
-  // Fecha seleccionada (por defecto hoy)
-  const [fecha, setFecha] = useState(() => new Date().toISOString().split("T")[0]);
+  // Fecha seleccionada (por defecto hoy en horario local, no UTC)
+  const [fecha, setFecha] = useState(() => new Date().toLocaleDateString('en-CA'));
   
   // Datos traídos de Supabase
   const [canchasReservadas, setCanchasReservadas] = useState([]);
@@ -55,10 +55,11 @@ export default function CierreCajaPage() {
         return;
       }
 
+      // Convertir fecha a rango UTC del día seleccionado
       const startOfDay = new Date(`${fechaSeleccionada}T00:00:00`).toISOString();
       const endOfDay = new Date(`${fechaSeleccionada}T23:59:59`).toISOString();
 
-      // Traer Reservas de Canchas (excluyendo cancelados)
+      // 1. Traer Reservas (Solo para mostrar el listado visual, no para cálculos financieros)
       const { data: matches } = await supabase
         .from("padel_matches")
         .select(`
@@ -71,12 +72,12 @@ export default function CierreCajaPage() {
         .neq("status", "cancelado")
         .neq("payment_status", "cancelado");
 
-      // Traer Ventas de POS + Sus Ítems
+      // 2. Traer Ventas (ESTA ES LA FUENTE ÚNICA DE LA VERDAD FINANCIERA)
       const { data: sales } = await supabase
         .from("sales")
         .select(`
           id, total_amount, payment_method, created_at,
-          sales_items ( id, item_name, quantity, price_unit )
+          sales_items ( id, item_type, item_name, quantity, price_unit )
         `)
         .eq("club_id", clubId)
         .gte("created_at", startOfDay)
@@ -90,18 +91,27 @@ export default function CierreCajaPage() {
     setLoading(false);
   };
 
-  // Cálculos automáticos
-  const totalCanchas = canchasReservadas.reduce(
-    (acc, curr) => acc + (Number(curr.total_price) || 0),
-    0
-  );
-  const totalTienda = ventasTienda.reduce(
-    (acc, curr) => acc + (Number(curr.total_amount) || 0),
-    0
-  );
+  // 🔴 CÁLCULOS FINANCIEROS CORRECTOS DESDE SALES_ITEMS 🔴
+  let sumCanchas = 0;
+  let sumTienda = 0;
+  let sumComision = 0;
 
-  const totalSistema = totalCanchas + totalTienda;
-  const comisionSportsHub = totalCanchas * 0.10; // 10% solo a canchas
+  ventasTienda.forEach((venta) => {
+    const items = venta.sales_items || [];
+    items.forEach((item) => {
+      const subtotal = item.quantity * Number(item.price_unit);
+      if (item.item_type === "cancha") {
+        sumCanchas += subtotal;
+      } else if (item.item_type === "producto") {
+        sumTienda += subtotal;
+      } else if (item.item_type === "comision_app") {
+        sumComision += subtotal;
+      }
+    });
+  });
+
+  const totalSistema = sumCanchas + sumTienda + sumComision;
+  const comisionSportsHub = sumComision > 0 ? sumComision : sumCanchas * 0.10; 
 
   const declarado = Number(efectivoDeclarado) || 0;
   const diferencia = declarado - totalSistema;
@@ -154,9 +164,9 @@ export default function CierreCajaPage() {
 
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                  <span className="font-semibold text-slate-600">🎾 Canchas</span>
+                  <span className="font-semibold text-slate-600">🎾 Canchas Netas</span>
                   <span className="font-black text-slate-900">
-                    ${totalCanchas.toFixed(2)}
+                    ${sumCanchas.toFixed(2)}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
@@ -164,12 +174,20 @@ export default function CierreCajaPage() {
                     📦 Tienda (POS)
                   </span>
                   <span className="font-black text-slate-900">
-                    ${totalTienda.toFixed(2)}
+                    ${sumTienda.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold text-slate-600">
+                    ⚡ Comisión Cobrada
+                  </span>
+                  <span className="font-black text-emerald-600">
+                    +${sumComision.toFixed(2)}
                   </span>
                 </div>
                 <div className="pt-3 border-t border-slate-100 flex justify-between items-center">
                   <span className="text-sm font-black uppercase text-slate-800">
-                    Total Esperado
+                    Total Facturado
                   </span>
                   <div className="text-right">
                     <span className="text-2xl font-black text-slate-900 block">
@@ -185,16 +203,16 @@ export default function CierreCajaPage() {
               </div>
             </div>
 
-            {/* COMISIÓN */}
+            {/* COMISIÓN QUE SE DEBE A LA APP */}
             <div className="bg-slate-950 p-5 rounded-2xl shadow-lg border border-slate-800 relative overflow-hidden">
               <div className="absolute top-0 right-0 p-4 opacity-10 text-6xl">
                 ⚡
               </div>
               <h2 className="text-xs font-black text-[#00FF9D] uppercase tracking-widest mb-1">
-                Comisión Sports Hub (10%)
+                Deuda a Sports Hub
               </h2>
               <p className="text-[10px] text-slate-400 font-bold mb-3">
-                Aplicado solo sobre reservas de canchas
+                10% cobrado al usuario en los tickets.
               </p>
               <p className="text-3xl font-black text-[#00FF9D]">
                 ${comisionSportsHub.toFixed(2)}
@@ -207,7 +225,7 @@ export default function CierreCajaPage() {
                 Declarar Caja
               </h2>
               <p className="text-xs text-indigo-600 mb-3 font-medium">
-                Ingresa el total de dinero físico y transferencias que tienes en mano.
+                Ingresa el total de dinero (físico + transferencias) que tienes en la cuenta.
               </p>
               <input
                 type="number"
@@ -235,11 +253,11 @@ export default function CierreCajaPage() {
 
           {/* COLUMNA DERECHA: DETALLE */}
           <div className="lg:col-span-2 space-y-6">
-            {/* TABLA CANCHAS */}
+            {/* TABLA CANCHAS (Visual) */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
                 <h3 className="text-sm font-black text-slate-800 uppercase">
-                  Detalle de Canchas
+                  Agenda de Canchas del Día
                 </h3>
                 <span className="text-xs font-bold bg-white px-2 py-1 rounded-lg border text-slate-500">
                   {canchasReservadas.length} reservas
@@ -291,20 +309,20 @@ export default function CierreCajaPage() {
               </div>
             </div>
 
-            {/* TABLA TIENDA (POS) */}
+            {/* TABLA TICKETS (POS) */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
                 <h3 className="text-sm font-black text-slate-800 uppercase">
-                  Detalle de Tienda (POS)
+                  Tickets Generados (Ventas de POS)
                 </h3>
                 <span className="text-xs font-bold bg-white px-2 py-1 rounded-lg border text-slate-500">
-                  {ventasTienda.length} ventas
+                  {ventasTienda.length} facturas
                 </span>
               </div>
               <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
                 {ventasTienda.length === 0 ? (
                   <p className="p-5 text-sm text-slate-400 font-medium text-center">
-                    No hay ventas en tienda para esta fecha.
+                    No hay ventas cerradas para esta fecha.
                   </p>
                 ) : (
                   ventasTienda.map((venta) => {
@@ -348,7 +366,7 @@ export default function CierreCajaPage() {
                             )}
                           </div>
                           <p className="text-[11px] text-slate-500 font-medium">
-                            Hora: {hora} • Método: {venta.payment_method}
+                            Hora Cierre: {hora} • Ref: {venta.payment_method}
                           </p>
                         </div>
                         <div className="text-right shrink-0 ml-4">

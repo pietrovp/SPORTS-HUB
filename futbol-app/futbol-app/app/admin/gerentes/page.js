@@ -7,12 +7,14 @@ import Link from "next/link";
 export default function AdminGerentesPage() {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
 
   const [usuarios, setUsuarios] = useState([]);
   const [clubes, setClubes] = useState([]);
   const [busqueda, setBusqueda] = useState("");
 
-  const [usuarioSeleccionado, setUsuarioSeleccionado] = useState(null);
+  // Usar IDs directos es más seguro que objetos completos para los selects
+  const [usuarioIdSeleccionado, setUsuarioIdSeleccionado] = useState("");
   const [clubSeleccionado, setClubSeleccionado] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [mensaje, setMensaje] = useState("");
@@ -32,6 +34,8 @@ export default function AdminGerentesPage() {
         setLoading(false);
         return;
       }
+
+      setCurrentUser(user);
 
       const { data: profile } = await supabase
         .from("profiles")
@@ -64,7 +68,6 @@ export default function AdminGerentesPage() {
       if (uErr) throw uErr;
 
       setUsuarios(usuariosData || []);
-
     } catch (err) {
       console.error("Error cargando gerentes:", err);
       setMensaje("Error al cargar datos.");
@@ -75,7 +78,7 @@ export default function AdminGerentesPage() {
 
   async function asignarGerente(e) {
     e.preventDefault();
-    if (!usuarioSeleccionado || !clubSeleccionado) {
+    if (!usuarioIdSeleccionado || !clubSeleccionado) {
       alert("Selecciona un usuario y un club.");
       return;
     }
@@ -90,13 +93,18 @@ export default function AdminGerentesPage() {
           is_gerente: true,
           club_id: clubSeleccionado,
         })
-        .eq("id", usuarioSeleccionado.id);
+        .eq("id", usuarioIdSeleccionado);
 
       if (error) throw error;
 
-      setMensaje(`✅ Se asignó como gerente a ${usuarioSeleccionado.nombre || usuarioSeleccionado.email}.`);
-      setUsuarioSeleccionado(null);
+      // Buscar el nombre para el mensaje de éxito
+      const u = usuarios.find(x => x.id === usuarioIdSeleccionado);
+      setMensaje(`✅ Se asignó como gerente a ${u?.nombre || u?.email}.`);
+      
+      // Limpiar formulario
+      setUsuarioIdSeleccionado("");
       setClubSeleccionado("");
+      
       await cargarDatos();
     } catch (err) {
       console.error(err);
@@ -131,7 +139,19 @@ export default function AdminGerentesPage() {
     }
   }
 
-  const gerentesActuales = usuarios.filter((u) => u.is_gerente);
+  // Lógica del buscador y filtro de gerentes activos
+  const gerentesActuales = usuarios.filter((u) => {
+    if (!u.is_gerente) return false;
+    
+    // Si hay búsqueda, filtrar por nombre o correo
+    if (busqueda.trim() !== "") {
+      const termino = busqueda.toLowerCase();
+      const nomCompleto = `${u.nombre || ''} ${u.apellido || ''} ${u.email}`.toLowerCase();
+      return nomCompleto.includes(termino);
+    }
+    
+    return true;
+  });
 
   if (loading) {
     return <div className="p-10 text-center font-bold text-slate-500 animate-pulse">Cargando gestión de gerentes...</div>;
@@ -181,18 +201,15 @@ export default function AdminGerentesPage() {
             <div>
               <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">1. Buscar y seleccionar Usuario</label>
               <select
-                value={usuarioSeleccionado?.id || ""}
-                onChange={(e) => {
-                  const u = usuarios.find((x) => x.id === e.target.value);
-                  setUsuarioSeleccionado(u || null);
-                }}
+                value={usuarioIdSeleccionado}
+                onChange={(e) => setUsuarioIdSeleccionado(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 outline-none"
                 required
               >
                 <option value="">Selecciona un usuario...</option>
                 {usuarios.map((u) => (
                   <option key={u.id} value={u.id}>
-                    {u.nombre ? `${u.nombre} ${u.apellido || ""}` : u.email} ({u.email}) {u.is_gerente ? "• [Gerente]" : ""}
+                    {u.nombre ? `${u.nombre} ${u.apellido || ""}` : u.email} ({u.email}) {u.is_gerente ? "• [Ya es Gerente]" : ""}
                   </option>
                 ))}
               </select>
@@ -235,7 +252,7 @@ export default function AdminGerentesPage() {
             </h3>
             <input
               type="text"
-              placeholder="🔍 Buscar..."
+              placeholder="🔍 Buscar gerente..."
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 outline-none w-48"
@@ -243,16 +260,19 @@ export default function AdminGerentesPage() {
           </div>
 
           {gerentesActuales.length === 0 ? (
-            <p className="text-xs text-slate-400 font-bold text-center py-6">No hay gerentes asignados aún.</p>
+            <p className="text-xs text-slate-400 font-bold text-center py-6">No hay gerentes asignados aún o que coincidan con la búsqueda.</p>
           ) : (
             <div className="divide-y divide-slate-100">
               {gerentesActuales.map((g) => {
                 const club = clubes.find((c) => c.id === g.club_id);
+                const esYoMismo = currentUser && g.id === currentUser.id;
+
                 return (
                   <div key={g.id} className="py-3 flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-black text-slate-900">
                         {g.nombre ? `${g.nombre} ${g.apellido || ""}` : "Gerente"}
+                        {esYoMismo && <span className="ml-2 text-[9px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full uppercase">Yo</span>}
                       </p>
                       <p className="text-[10px] font-bold text-slate-400">{g.email}</p>
                     </div>
@@ -266,7 +286,13 @@ export default function AdminGerentesPage() {
 
                       <button
                         onClick={() => removerGerente(g)}
-                        className="text-rose-500 hover:text-rose-700 hover:bg-rose-50 px-3 py-1.5 rounded-xl text-xs font-bold transition-colors"
+                        disabled={esYoMismo}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                          esYoMismo 
+                            ? "text-slate-300 cursor-not-allowed" 
+                            : "text-rose-500 hover:text-rose-700 hover:bg-rose-50"
+                        }`}
+                        title={esYoMismo ? "No puedes quitarte a ti mismo" : "Remover rol de gerente"}
                       >
                         Quitar Gerente
                       </button>

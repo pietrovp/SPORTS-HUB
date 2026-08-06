@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 const AMENIDADES_OPCIONES = [
   { id: "equipment_rental", label: "Alquiler de Equipo", icon: "🎾" },
@@ -21,6 +22,7 @@ const DEPORTES_OPCIONES = [
 ];
 
 export default function MiClubConfigPage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [user, setUser] = useState(null);
@@ -37,6 +39,8 @@ export default function MiClubConfigPage() {
     slot_duration_minutes: 60,
     open_time: "07:00",
     close_time: "23:00",
+    peak_start_time: "17:00",
+    peak_end_time: "22:00",
     sports: ["padel"],
     amenities: ["wifi", "free_parking", "changing_room"],
     opening_hours_text: {
@@ -48,15 +52,19 @@ export default function MiClubConfigPage() {
   });
 
   const [modalCanchaOpen, setModalCanchaOpen] = useState(false);
-  const [formCancha, setFormCancha] = useState({
+  const [editingCanchaId, setEditingCanchaId] = useState(null); // Nuevo estado para saber si editamos
+  
+  const defaultCanchaForm = {
     name: "Pista 1",
     court_number: 1,
     surface_type: "Cristal",
     court_type: "indoor",
     has_lighting: true,
-    price_credits: 16,
-  });
+    price_normal: 12,
+    price_peak: 20,
+  };
 
+  const [formCancha, setFormCancha] = useState(defaultCanchaForm);
   const [mensaje, setMensaje] = useState("");
 
   useEffect(() => {
@@ -121,6 +129,8 @@ export default function MiClubConfigPage() {
             slot_duration_minutes: clubData.slot_duration_minutes || 60,
             open_time: clubData.open_time?.slice(0, 5) || "07:00",
             close_time: clubData.close_time?.slice(0, 5) || "23:00",
+            peak_start_time: clubData.peak_start_time?.slice(0, 5) || "17:00",
+            peak_end_time: clubData.peak_end_time?.slice(0, 5) || "22:00",
             sports: deportesCargados,
             amenities: amenidadesCargadas,
             opening_hours_text: clubData.opening_hours_text || {
@@ -192,6 +202,8 @@ export default function MiClubConfigPage() {
         slot_duration_minutes: Number(formClub.slot_duration_minutes) || 60,
         open_time: `${formClub.open_time}:00`,
         close_time: `${formClub.close_time}:00`,
+        peak_start_time: `${formClub.peak_start_time}:00`,
+        peak_end_time: `${formClub.peak_end_time}:00`,
         amenities: formClub.amenities,
         sports: formClub.sports,
         opening_hours_text: formClub.opening_hours_text,
@@ -236,7 +248,7 @@ export default function MiClubConfigPage() {
       setMensaje("✅ ¡Configuración del Complejo guardada exitosamente!");
 
       if (esNuevo) {
-        window.location.href = "/admin/recepcion";
+        router.push("/admin/recepcion");
       } else {
         await cargarDatos();
       }
@@ -248,7 +260,34 @@ export default function MiClubConfigPage() {
     }
   }
 
-  async function agregarCancha(e) {
+  // ABRIR MODAL PARA NUEVA CANCHA
+  function abrirModalNuevaCancha() {
+    setEditingCanchaId(null);
+    setFormCancha({
+      ...defaultCanchaForm,
+      name: `Pista ${canchas.length + 1}`,
+      court_number: canchas.length + 1,
+    });
+    setModalCanchaOpen(true);
+  }
+
+  // ABRIR MODAL PARA EDITAR CANCHA EXISTENTE
+  function abrirModalEditarCancha(cancha) {
+    setEditingCanchaId(cancha.id);
+    setFormCancha({
+      name: cancha.name,
+      court_number: cancha.court_number,
+      surface_type: cancha.surface_type,
+      court_type: cancha.court_type,
+      has_lighting: cancha.has_lighting,
+      price_normal: cancha.price_normal || cancha.price_credits || 12,
+      price_peak: cancha.price_peak || cancha.price_credits || 20,
+    });
+    setModalCanchaOpen(true);
+  }
+
+  // GUARDAR (CREAR O ACTUALIZAR) CANCHA
+  async function guardarCancha(e) {
     e.preventDefault();
     if (!club) {
       alert("Debes guardar primero la información básica del complejo.");
@@ -264,39 +303,42 @@ export default function MiClubConfigPage() {
         surface_type: formCancha.surface_type,
         court_type: formCancha.court_type,
         has_lighting: formCancha.has_lighting,
-        price_credits: parseFloat(formCancha.price_credits) || 16,
+        price_normal: parseFloat(formCancha.price_normal) || 12,
+        price_peak: parseFloat(formCancha.price_peak) || 20,
+        price_credits: parseFloat(formCancha.price_normal) || 12, 
         is_active: true,
       };
 
-      const { error } = await supabase.from("padel_courts").insert(payload);
-      if (error) throw error;
+      if (editingCanchaId) {
+        // ACTUALIZAR EXISTENTE
+        const { error } = await supabase.from("padel_courts").update(payload).eq("id", editingCanchaId);
+        if (error) throw error;
+        setMensaje(`✅ Pista ${payload.name} actualizada correctamente.`);
+      } else {
+        // CREAR NUEVA
+        const { error } = await supabase.from("padel_courts").insert(payload);
+        if (error) throw error;
+        setMensaje(`✅ Nueva Pista ${payload.name} agregada correctamente.`);
+      }
 
       setModalCanchaOpen(false);
-      setFormCancha({
-        name: `Pista ${canchas.length + 2}`,
-        court_number: canchas.length + 2,
-        surface_type: "Cristal",
-        court_type: "indoor",
-        has_lighting: true,
-        price_credits: 16,
-      });
-
-      await cargarDatos();
+      await cargarDatos(); 
     } catch (err) {
       console.error(err);
-      alert("Error agregando pista: " + err.message);
+      alert("Error guardando pista: " + err.message);
     } finally {
       setSaving(false);
     }
   }
 
   async function eliminarCancha(canchaId) {
-    if (!confirm("¿Eliminar esta pista/cancha del complejo?")) return;
+    if (!confirm("🚨 ATENCIÓN: Borrar esta cancha eliminará su historial en el sistema.\n¿Estás completamente seguro de eliminarla?")) return;
     try {
       await supabase.from("padel_courts").delete().eq("id", canchaId);
+      setMensaje("🗑️ Pista eliminada.");
       await cargarDatos();
     } catch (err) {
-      alert("Error eliminando pista.");
+      alert("Error eliminando pista. Puede que tenga reservas asociadas.");
     }
   }
 
@@ -428,6 +470,67 @@ export default function MiClubConfigPage() {
             </div>
           </div>
 
+          <div className="border-t border-slate-100 pt-5 space-y-4">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">Horario y Horas Pico (Sistema)</h3>
+            <p className="text-[10px] text-slate-500 font-bold mb-2">
+              Define a qué hora abre y cierra tu club, y qué bloque se considera "Hora Pico" para cobrar más caro automáticamente.
+            </p>
+            
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Duración Turno</label>
+                <select
+                  value={formClub.slot_duration_minutes}
+                  onChange={(e) => setFormClub({ ...formClub, slot_duration_minutes: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 outline-none"
+                >
+                  <option value="60">60 minutos</option>
+                  <option value="90">90 minutos</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Abre</label>
+                <input
+                  type="time"
+                  value={formClub.open_time}
+                  onChange={(e) => setFormClub({ ...formClub, open_time: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Cierra</label>
+                <input
+                  type="time"
+                  value={formClub.close_time}
+                  onChange={(e) => setFormClub({ ...formClub, close_time: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 outline-none"
+                />
+              </div>
+
+              <div className="border-l-2 border-amber-200 pl-3">
+                <label className="text-[10px] font-black uppercase text-amber-500 block mb-1">Inicio Hr Pico</label>
+                <input
+                  type="time"
+                  value={formClub.peak_start_time}
+                  onChange={(e) => setFormClub({ ...formClub, peak_start_time: e.target.value })}
+                  className="w-full bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs font-bold text-amber-900 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase text-amber-500 block mb-1">Fin Hr Pico</label>
+                <input
+                  type="time"
+                  value={formClub.peak_end_time}
+                  onChange={(e) => setFormClub({ ...formClub, peak_end_time: e.target.value })}
+                  className="w-full bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs font-bold text-amber-900 outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="border-t border-slate-100 pt-5 space-y-3">
             <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">Deportes Disponibles en el Complejo</h3>
             <div className="flex flex-wrap gap-3">
@@ -477,7 +580,7 @@ export default function MiClubConfigPage() {
           </div>
 
           <div className="border-t border-slate-100 pt-5 space-y-4">
-            <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">Horarios de Atención y Operación</h3>
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">Horarios Públicos (Para mostrar en la App)</h3>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
@@ -547,7 +650,7 @@ export default function MiClubConfigPage() {
           </button>
         </form>
 
-        {club && (
+        {!esOnboardingInicial && club && (
           <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm space-y-6">
             <div className="flex justify-between items-center border-b border-slate-100 pb-4">
               <div>
@@ -556,7 +659,7 @@ export default function MiClubConfigPage() {
               </div>
               <button
                 type="button"
-                onClick={() => setModalCanchaOpen(true)}
+                onClick={abrirModalNuevaCancha}
                 className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-sm"
               >
                 + Añadir Pista
@@ -571,7 +674,7 @@ export default function MiClubConfigPage() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 {canchas.map((c) => (
-                  <div key={c.id} className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex flex-col justify-between space-y-3">
+                  <div key={c.id} className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex flex-col justify-between space-y-3 relative overflow-hidden">
                     <div className="flex justify-between items-start">
                       <div>
                         <h4 className="font-black text-slate-900 text-sm">{c.name}</h4>
@@ -579,9 +682,27 @@ export default function MiClubConfigPage() {
                           {c.court_type} • {c.surface_type}
                         </span>
                       </div>
-                      <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full">
-                        ${c.price_credits || 16} cr
-                      </span>
+                      
+                      <div className="flex gap-1">
+                        <button 
+                          onClick={() => abrirModalEditarCancha(c)} 
+                          className="w-8 h-8 rounded-full bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center shadow-xs transition-colors"
+                          title="Editar precios o nombre"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 mt-2 bg-white p-2 rounded-xl border border-slate-100 shadow-xs">
+                      <div className="flex-1 text-center border-r border-slate-100">
+                        <p className="text-[8px] font-black text-slate-400 uppercase">Normal</p>
+                        <p className="font-black text-emerald-600">${c.price_normal || c.price_credits || 0}</p>
+                      </div>
+                      <div className="flex-1 text-center bg-amber-50/50 rounded-lg">
+                        <p className="text-[8px] font-black text-amber-500 uppercase">Pico</p>
+                        <p className="font-black text-amber-600">${c.price_peak || c.price_credits || 0}</p>
+                      </div>
                     </div>
 
                     <div className="flex justify-between items-center text-[10px] text-slate-500 border-t border-slate-200 pt-2 font-bold">
@@ -603,11 +724,13 @@ export default function MiClubConfigPage() {
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4" onClick={() => setModalCanchaOpen(false)}>
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="text-base font-black text-slate-900">Registrar Nueva Pista</h3>
+              <h3 className="text-base font-black text-slate-900">
+                {editingCanchaId ? "✏️ Editar Pista" : "Registrar Nueva Pista"}
+              </h3>
               <button onClick={() => setModalCanchaOpen(false)} className="text-slate-400 font-bold">✕</button>
             </div>
 
-            <form onSubmit={agregarCancha} className="space-y-3 text-xs font-bold text-slate-700">
+            <form onSubmit={guardarCancha} className="space-y-3 text-xs font-bold text-slate-700">
               <div>
                 <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Nombre de la Pista</label>
                 <input
@@ -649,20 +772,36 @@ export default function MiClubConfigPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Precio Base en Créditos ($)</label>
-                <input
-                  type="number"
-                  step="0.5"
-                  required
-                  value={formCancha.price_credits}
-                  onChange={(e) => setFormCancha({ ...formCancha, price_credits: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
-                />
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-xl">
+                  <label className="block text-[10px] font-black uppercase text-emerald-700 mb-1">Precio Normal ($)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    required
+                    value={formCancha.price_normal}
+                    onChange={(e) => setFormCancha({ ...formCancha, price_normal: e.target.value })}
+                    className="w-full bg-white border border-emerald-200 rounded-lg p-2 font-black text-emerald-900 outline-none"
+                  />
+                  <span className="text-[8px] text-emerald-600 block mt-1 leading-tight">Aplica fuera de las horas pico.</span>
+                </div>
+
+                <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl">
+                  <label className="block text-[10px] font-black uppercase text-amber-700 mb-1">Precio Hora Pico ($)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    required
+                    value={formCancha.price_peak}
+                    onChange={(e) => setFormCancha({ ...formCancha, price_peak: e.target.value })}
+                    className="w-full bg-white border border-amber-200 rounded-lg p-2 font-black text-amber-900 outline-none"
+                  />
+                  <span className="text-[8px] text-amber-600 block mt-1 leading-tight">Aplica en el bloque pico configurado.</span>
+                </div>
               </div>
 
-              <button type="submit" disabled={saving} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md">
-                {saving ? "Guardando..." : "Guardar Pista"}
+              <button type="submit" disabled={saving} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md mt-2">
+                {saving ? "Guardando..." : (editingCanchaId ? "✓ Actualizar Pista" : "Guardar Pista")}
               </button>
             </form>
           </div>
