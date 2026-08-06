@@ -41,7 +41,8 @@ export default function PublicClubDetailPage() {
   const [tasaBCV, setTasaBCV] = useState(36.65);
 
   const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
-
+  // [NUEVO] Estado para guardar la promo de hoy
+  const [promocionHoy, setPromocionHoy] = useState(null); 
   // POPUP NOTIFICACIÓN PERSONALIZADO
   const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
 
@@ -198,6 +199,21 @@ export default function PublicClubDetailPage() {
     } finally {
       setLoading(false);
     }
+    const hoyStr = fechaSeleccionada.toISOString().split("T")[0]; 
+    console.log("Buscando promoción para fecha:", hoyStr, "en club:", clubId);
+
+    const { data: promoActiva, error: promoErr } = await supabase
+      .from("padel_promotions")
+      .select("*")
+      .eq("club_id", clubId)
+      .lte("start_date", hoyStr)
+      .gte("end_date", hoyStr)
+      .maybeSingle();
+      
+    console.log("Promoción encontrada:", promoActiva);
+    if (promoErr) console.error("Error en promo:", promoErr);
+
+    setPromocionHoy(promoActiva);
   }
 
   // LÓGICA DE DETECCIÓN DE HORA PICO
@@ -656,10 +672,15 @@ export default function PublicClubDetailPage() {
                           );
                         });
 
-                        const esPico = chequearSiEsPico(bloque.dateObj);
-                        const precioUSD = esPico 
-                          ? (cancha.price_peak || cancha.price_credits || 20)
-                          : (cancha.price_normal || cancha.price_credits || 12);
+                         const esPico = chequearSiEsPico(bloque.dateObj);
+
+// --- AQUÍ PEGAS EL CÓDIGO NUEVO ---
+let precioUSD = 0;
+if (promocionHoy) {
+  precioUSD = esPico ? promocionHoy.price_peak : promocionHoy.price_normal;
+} else {
+  precioUSD = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
+}
 
                         if (partidoOcupado) {
                           const esPrivado = partidoOcupado.is_private || partidoOcupado.match_type === "privado";

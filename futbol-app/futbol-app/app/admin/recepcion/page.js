@@ -28,6 +28,8 @@ export default function RecepcionElite() {
   const [partidosPeriodo, setPartidosPeriodo] = useState([]);
   const [productos, setProductos] = useState([]);
   const [busquedaProducto, setBusquedaProducto] = useState("");
+  // NUEVO ESTADO PARA LA PROMOCIÓN
+  const [promocionHoy, setPromocionHoy] = useState(null); 
 
   // POPUPS / NOTIFICACIONES PERSONALIZADAS
   const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
@@ -77,6 +79,13 @@ export default function RecepcionElite() {
     }
   }, [clubId, fechaBase]);
 
+// NUEVO USE-EFFECT
+useEffect(() => {
+  if (clubId) {
+    chequearPromocion(clubId, fechaBase);
+  }
+}, [clubId, fechaBase]);
+
   // Suscripción Realtime
   useEffect(() => {
     if (!clubId || !supabase) return;
@@ -124,6 +133,31 @@ export default function RecepcionElite() {
       console.error("Fallo al consultar BCV:", e);
     }
   }
+
+  // NUEVA FUNCIÓN PARA CHEQUEAR PROMOCIONES
+async function chequearPromocion(clubIdActual, fechaActual) {
+  if (!clubIdActual) return;
+  
+  // Convertir fechaBase a YYYY-MM-DD local
+  const year = fechaActual.getFullYear();
+  const month = String(fechaActual.getMonth() + 1).padStart(2, '0');
+  const day = String(fechaActual.getDate()).padStart(2, '0');
+  const hoyStr = `${year}-${month}-${day}`;
+
+  try {
+    const { data } = await supabase
+      .from("padel_promotions")
+      .select("*")
+      .eq("club_id", clubIdActual)
+      .lte("start_date", hoyStr)
+      .gte("end_date", hoyStr)
+      .maybeSingle();
+      
+    setPromocionHoy(data || null);
+  } catch (error) {
+    console.error("Error buscando promoción:", error);
+  }
+} 
 
   async function cargarDatosGenerales() {
     try {
@@ -1073,13 +1107,21 @@ export default function RecepcionElite() {
 
                     {/* PISTAS CON NUEVAS REGLAS DE ESTADO VISUAL */}
                     {canchas.map((cancha) => {
-                      const reservado = obtenerReserva(cancha.id, dateObjSlot);
-                      const esPico = chequearSiEsPico(dateObjSlot);
-                      const precioUSD = esPico 
-                        ? (cancha.price_peak || cancha.price_credits || 20)
-                        : (cancha.price_normal || cancha.price_credits || 12);
-                      
-                      const precioBs = precioUSD * tasaBCV;
+                     const reservado = obtenerReserva(cancha.id, dateObjSlot);
+const esPico = chequearSiEsPico(dateObjSlot);
+
+// [REEMPLAZA ESTO]
+// const precioUSD = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
+// const precioBs = precioUSD * tasaBCV;
+
+// [POR ESTO]
+let precioUSD = 0;
+if (promocionHoy) {
+  precioUSD = esPico ? promocionHoy.price_peak : promocionHoy.price_normal;
+} else {
+  precioUSD = esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
+}
+const precioBs = precioUSD * tasaBCV;
 
                       return (
                         <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200 relative">
