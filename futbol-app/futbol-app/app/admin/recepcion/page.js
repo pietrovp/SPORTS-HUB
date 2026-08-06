@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
 
 function parsearFechaBD(fechaStr) {
@@ -11,6 +12,7 @@ function parsearFechaBD(fechaStr) {
 
 export default function RecepcionElite() {
   const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
   const [user, setUser] = useState(null);
   const [clubId, setClubId] = useState(null);
   const [clubInfo, setClubInfo] = useState(null);
@@ -51,6 +53,10 @@ export default function RecepcionElite() {
   const [modalConfirmCambios, setModalConfirmCambios] = useState(false);
   const [imagenEngrande, setImagenEngrande] = useState(null);
 
+  // Estados Desplegables del Modal de Gestión
+  const [historialAbierto, setHistorialAbierto] = useState(true);
+  const [cobroAbierto, setCobroAbierto] = useState(true);
+
   // Abono y Extras en POS
   const [monedaCobroPOS, setMonedaCobroPOS] = useState("USD"); // 'USD' | 'VES'
   const [montoAbonoManualPOS, setMontoAbonoManualPOS] = useState("");
@@ -60,6 +66,7 @@ export default function RecepcionElite() {
   const [procesando, setProcesando] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     cargarDatosGenerales();
     obtenerTasaBCV();
   }, []);
@@ -75,11 +82,16 @@ export default function RecepcionElite() {
     if (!clubId || !supabase) return;
 
     const channel = supabase
-      .channel("pos-realtime-matches-full-v22")
+      .channel("pos-realtime-matches-full-v28")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "padel_matches", filter: `club_id=eq.${clubId}` },
         () => cargarPartidosPeriodo()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "products", filter: `club_id=eq.${clubId}` },
+        () => cargarDatosGenerales()
       )
       .subscribe();
 
@@ -146,7 +158,7 @@ export default function RecepcionElite() {
       const { data: courts } = await supabase.from("padel_courts").select("*").eq("club_id", targetClubId).eq("is_active", true).order("court_number");
       setCanchas(courts || []);
 
-      const { data: inventory } = await supabase.from("products").select("*").eq("club_id", targetClubId);
+      const { data: inventory } = await supabase.from("products").select("*").eq("club_id", targetClubId).order("name");
       setProductos(inventory || []);
     } catch (err) {
       console.error("Error al cargar datos del POS:", err);
@@ -222,6 +234,8 @@ export default function RecepcionElite() {
   const abrirModalDetalle = (reservado) => {
     setMatchSeleccionado(reservado);
     setExtrasBackup(Array.isArray(reservado.extra_items) ? [...reservado.extra_items] : []);
+    setHistorialAbierto(true);
+    setCobroAbierto(reservado.payment_status !== "liquidado");
     setModalDetalleMatch(true);
   };
 
@@ -290,9 +304,7 @@ export default function RecepcionElite() {
     return "Cliente Mostrador";
   };
 
-      // NUEVO: Función para chequear si un bloque cae en Hora Pico
   const chequearSiEsPico = (dateObj) => {
-    // Si por alguna razón el club no tiene horario pico, asumimos que de 17:00 a 22:00 es pico por defecto.
     const startStr = clubInfo?.peak_start_time || "17:00:00"; 
     const endStr = clubInfo?.peak_end_time || "22:00:00";
     
@@ -307,7 +319,6 @@ export default function RecepcionElite() {
     if (startMins <= endMins) {
       return slotMins >= startMins && slotMins < endMins;
     } else {
-      // Caso en que la hora pico cruza la medianoche (ej. 18:00 a 02:00)
       return slotMins >= startMins || slotMins < endMins;
     }
   };
@@ -351,7 +362,7 @@ export default function RecepcionElite() {
     });
   };
 
-    const abrirModalAgendarPOS = (cancha, dateObj, horaLabel, precioCalculado) => {
+  const abrirModalAgendarPOS = (cancha, dateObj, horaLabel, precioCalculado) => {
     const precioBaseTotal = precioCalculado || cancha.price_credits || 15;
     const feeSugerido = precioBaseTotal * 0.10;
     const totalSugerido = precioBaseTotal + feeSugerido;
@@ -482,7 +493,7 @@ export default function RecepcionElite() {
     return extras.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
   };
 
-   // LIQUIDAR RESERVA
+  // LIQUIDAR RESERVA
   async function cerrarTicketYLiquidarReserva(match) {
     if (match.payment_status === "liquidado") {
       return mostrarNotificacion("Ya Liquidado", "Esta reserva ya fue liquidada e ingresada al historial de ventas.", "info");
@@ -558,10 +569,8 @@ export default function RecepcionElite() {
         });
       }
 
-      // 🔴 AQUÍ OCURRE LA MAGIA DEL INVENTARIO 🔴
-      // Agrupamos los extras para saber exactamente cuántas unidades de cada producto descontar
       const extrasList = Array.isArray(match.extra_items) ? match.extra_items : [];
-      const productosVendidos = {}; // Para agrupar por ID de producto
+      const productosVendidos = {};
 
       extrasList.forEach((ex) => {
         itemsAInsertar.push({
@@ -573,7 +582,6 @@ export default function RecepcionElite() {
           price_unit: parseFloat(ex.price) || 0,
         });
 
-        // Agrupamos cantidades vendidas por ID de producto
         if (ex.id) {
           if (!productosVendidos[ex.id]) {
             productosVendidos[ex.id] = 0;
@@ -584,8 +592,7 @@ export default function RecepcionElite() {
 
       await supabase.from("sales_items").insert(itemsAInsertar);
 
-      // 🔴 EJECUTAR DESCUENTO DE STOCK EN BASE DE DATOS 🔴
-      // Obtenemos los productos actuales del club para restarles la cantidad vendida
+      // DESCUENTO DE STOCK REAL EN INVENTARIO
       if (Object.keys(productosVendidos).length > 0) {
         const { data: currentProducts } = await supabase
           .from("products")
@@ -593,12 +600,11 @@ export default function RecepcionElite() {
           .in("id", Object.keys(productosVendidos));
 
         if (currentProducts) {
-          // Preparamos las actualizaciones masivas (solo para productos físicos, ignoramos los alquileres ilimitados)
           const updates = currentProducts
-            .filter(p => !p.is_rental) // No descontamos el stock 999 de las palas de alquiler
+            .filter(p => !p.is_rental)
             .map(p => {
               const cantidadVendida = productosVendidos[p.id] || 0;
-              const nuevoStock = Math.max(0, p.stock - cantidadVendida); // Evita números negativos
+              const nuevoStock = Math.max(0, p.stock - cantidadVendida);
               
               return supabase
                 .from("products")
@@ -606,7 +612,6 @@ export default function RecepcionElite() {
                 .eq("id", p.id);
             });
           
-          // Ejecutamos todos los updates en paralelo
           if (updates.length > 0) {
             await Promise.all(updates);
           }
@@ -628,7 +633,6 @@ export default function RecepcionElite() {
         "success"
       );
       
-      // Recargamos los datos generales para que el carrusel de productos refleje el nuevo stock
       await cargarDatosGenerales();
       await cargarPartidosPeriodo();
 
@@ -641,6 +645,10 @@ export default function RecepcionElite() {
   }
 
   function cancelarReserva(match) {
+    if (match.payment_status === "liquidado") {
+      return mostrarNotificacion("Ticket Liquidado", "No se puede anular una reserva que ya fue liquidada e ingresada en las ventas oficiales.", "warning");
+    }
+
     pedirConfirmacion(
       "Anular Reserva Completa",
       `¿Deseas anular completamente la reserva de ${match.court?.name || "Pista"}? Se liberará la agenda y se removerán los registros asociados.`,
@@ -681,6 +689,10 @@ export default function RecepcionElite() {
   }
 
   async function agregarAbonoManualPOS(match) {
+    if (match.payment_status === "liquidado") {
+      return mostrarNotificacion("Ticket Liquidado", "No se pueden agregar más cobros a un ticket que ya fue liquidado.", "warning");
+    }
+
     const valIngresado = parseFloat(montoAbonoManualPOS);
     if (isNaN(valIngresado) || valIngresado <= 0) {
       return mostrarNotificacion("Monto Inválido", "Ingresa un monto válido a cobrar.", "error");
@@ -750,18 +762,65 @@ export default function RecepcionElite() {
     }
   }
 
-  // NUEVO MEJORADO: Función para aprobar un pago de la App y generar el ticket si cubre todo
+  // 💵 REGISTRAR DEVOLUCIÓN DE CAMBIO EN EFECTIVO
+  async function registrarDevolucionCambioPOS(match, cambioUSD) {
+    if (cambioUSD <= 0.05) return;
+    if (match.payment_status === "liquidado") {
+      return mostrarNotificacion("Ticket Liquidado", "No se puede registrar cambio en una reserva ya liquidada.", "warning");
+    }
+
+    try {
+      setProcesando(true);
+      const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
+      const nuevoAbono = {
+        id: `pay-pos-change-${Date.now()}`,
+        user_id: user.id,
+        user_name: "Devolución de Cambio (POS)",
+        user_phone: "En sitio",
+        amount: -Math.abs(cambioUSD),
+        method: "efectivo",
+        reference: `Entrega Cambio $${cambioUSD.toFixed(2)}`,
+        receipt_url: null,
+        status: "aprobado",
+        created_at: new Date().toISOString(),
+      };
+
+      const historialNuevo = [...historialActual, nuevoAbono];
+
+      await supabase
+        .from("padel_matches")
+        .update({
+          payments_history: historialNuevo,
+        })
+        .eq("id", match.id);
+
+      mostrarNotificacion(
+        "Cambio Registrado",
+        `💵 Se registró la entrega de $${cambioUSD.toFixed(2)} USD (Bs. ${(cambioUSD * tasaBCV).toFixed(2)}) en cambio.`,
+        "success"
+      );
+      await cargarPartidosPeriodo();
+    } catch (err) {
+      console.error(err);
+      mostrarNotificacion("Error", "Error al registrar la devolución de cambio.", "error");
+    } finally {
+      setProcesando(false);
+    }
+  }
+
   async function aprobarPagoPendiente(match, pagoId) {
+    if (match.payment_status === "liquidado") {
+      return mostrarNotificacion("Ticket Liquidado", "Esta reserva ya está liquidada.", "warning");
+    }
+
     try {
       setProcesando(true);
       const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
       
-      // 1. Cambiamos el status del pago específico a "aprobado"
       const historialNuevo = historialActual.map(p => 
         p.id === pagoId ? { ...p, status: "aprobado" } : p
       );
 
-      // 2. Recalculamos si con esta aprobación ya se cubrió el total de la reserva
       const totalAbonado = historialNuevo
         .filter((item) => item.status === "aprobado")
         .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
@@ -771,38 +830,28 @@ export default function RecepcionElite() {
       const totalExtras = calcularTotalExtras(match);
       const totalGranEsperado = precioBase + fee + totalExtras;
 
-      // 3. Verificamos si el pago ya cubre la totalidad
       const pagoCompleto = totalAbonado >= totalGranEsperado - 0.05;
+      const nuevoEstadoGeneral = match.payment_status === "liquidado" 
+        ? "liquidado" 
+        : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
 
-      // 4. Guardamos primero la aprobación del pago en Supabase
       await supabase
         .from("padel_matches")
         .update({
           payments_history: historialNuevo,
-          payment_status: pagoCompleto ? "aprobado" : "pendiente_aprobacion",
+          payment_status: nuevoEstadoGeneral,
         })
         .eq("id", match.id);
 
-      // Actualizamos el objeto localmente para las siguientes funciones
       const matchActualizado = { 
         ...match, 
         payments_history: historialNuevo, 
-        payment_status: pagoCompleto ? "aprobado" : "pendiente_aprobacion" 
+        payment_status: nuevoEstadoGeneral 
       };
 
-      // 5. Si ya se completó el pago, llamamos a tu función de Liquidar Ticket automáticamente
-      if (pagoCompleto && match.payment_status !== "liquidado") {
-        mostrarNotificacion("Validando...", "Pago aprobado. Generando ticket de caja...", "info");
-        
-        // Llamamos a tu función principal para que genere la venta en 'sales', 
-        // descuente el inventario de 'products' y lo pase a "liquidado"
-        await cerrarTicketYLiquidarReserva(matchActualizado);
-      } else {
-        // Si fue un abono parcial, solo mostramos el éxito
-        mostrarNotificacion("Pago Aprobado", "✅ Se aprobó el pago parcial. Falta saldo por cobrar.", "success");
-        setMatchSeleccionado(matchActualizado);
-        await cargarPartidosPeriodo();
-      }
+      setMatchSeleccionado(matchActualizado);
+      mostrarNotificacion("Pago Aprobado", "✅ El pago ha sido verificado y aprobado correctamente.", "success");
+      await cargarPartidosPeriodo();
 
     } catch (err) {
       console.error("Error al aprobar pago:", err);
@@ -812,97 +861,121 @@ export default function RecepcionElite() {
     }
   }
 
+  // 🔴 AGREGAR EXTRA OPTIMISTA CON VALIDACIÓN DE LIQUIDACIÓN
   async function agregarUnExtraSilencioso(match, producto) {
     if (!producto || !match) return;
+
+    const currentMatch = (matchSeleccionado && matchSeleccionado.id === match.id) ? matchSeleccionado : match;
+    
+    if (currentMatch.payment_status === "liquidado") {
+      return mostrarNotificacion("🔒 Reserva Liquidada", "No se pueden agregar más consumos a una reserva que ya fue liquidada.", "warning");
+    }
+
+    const extrasActuales = Array.isArray(currentMatch.extra_items) ? currentMatch.extra_items : [];
+    const realStock = producto.is_rental ? 999999 : (parseInt(producto.stock, 10) || 0);
+
+    if (!producto.is_rental) {
+      const cantidadEnTicket = extrasActuales.filter((ex) => String(ex.id) === String(producto.id)).length;
+      if (cantidadEnTicket >= realStock) {
+        return mostrarNotificacion(
+          "Stock Insuficiente",
+          `No puedes agregar más de ${realStock} und. de "${producto.name}". Disponibilidad máxima alcanzada.`,
+          "warning"
+        );
+      }
+    }
+
+    const nuevoExtraItem = {
+      id_unic: `extra-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: producto.id,
+      name: producto.name,
+      price: parseFloat(producto.price) || 0,
+    };
+
+    const nuevosExtras = [...extrasActuales, nuevoExtraItem];
+
+    const totalAbonado = (Array.isArray(currentMatch.payments_history) ? currentMatch.payments_history : [])
+      .filter((item) => item.status === "aprobado")
+      .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+
+    const precioBase = currentMatch.total_price || 15;
+    const fee = currentMatch.app_fee || precioBase * 0.10;
+    const totalExtrasNuevo = nuevosExtras.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
+    const totalGranEsperadoNuevo = precioBase + fee + totalExtrasNuevo;
+
+    const pagoCompleto = totalAbonado >= totalGranEsperadoNuevo - 0.05;
+    const nuevoEstadoGeneral = currentMatch.payment_status === "liquidado" 
+      ? "liquidado" 
+      : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
+
+    // ACTUALIZACIÓN OPTIMISTA EN ESTADO REACT (0ms DE LATENCIA)
+    const updatedMatch = { ...currentMatch, extra_items: nuevosExtras, payment_status: nuevoEstadoGeneral };
+    setMatchSeleccionado(updatedMatch);
+    setPartidosPeriodo((prev) =>
+      prev.map((m) => (m.id === currentMatch.id ? updatedMatch : m))
+    );
+
     try {
-      setProcesando(true);
-      const extrasActuales = Array.isArray(match.extra_items) ? match.extra_items : [];
-      const nuevoExtraItem = {
-        id_unic: `extra-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        id: producto.id,
-        name: producto.name,
-        price: parseFloat(producto.price) || 0,
-      };
-
-      const nuevosExtras = [...extrasActuales, nuevoExtraItem];
-
-      const totalAbonado = (Array.isArray(match.payments_history) ? match.payments_history : [])
-        .filter((item) => item.status === "aprobado")
-        .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
-
-      const precioBase = match.total_price || 15;
-      const fee = match.app_fee || precioBase * 0.10;
-      const totalExtrasNuevo = nuevosExtras.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
-      const totalGranEsperadoNuevo = precioBase + fee + totalExtrasNuevo;
-
-      const pagoCompleto = totalAbonado >= totalGranEsperadoNuevo - 0.05;
-      const nuevoEstadoGeneral = match.payment_status === "liquidado" 
-        ? "liquidado" 
-        : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
-
       await supabase
         .from("padel_matches")
         .update({
           extra_items: nuevosExtras,
           payment_status: nuevoEstadoGeneral,
         })
-        .eq("id", match.id);
-
-      setMatchSeleccionado((prev) =>
-        prev ? { ...prev, extra_items: nuevosExtras, payment_status: nuevoEstadoGeneral } : null
-      );
-
-      await cargarPartidosPeriodo();
+        .eq("id", currentMatch.id);
     } catch (err) {
-      console.error("Error al agregar extra:", err);
-    } finally {
-      setProcesando(false);
+      console.error("Error guardando extra en BD:", err);
     }
   }
 
   async function quitarUnExtraSilencioso(match, productoId) {
     if (!match) return;
+
+    const currentMatch = (matchSeleccionado && matchSeleccionado.id === match.id) ? matchSeleccionado : match;
+    
+    if (currentMatch.payment_status === "liquidado") {
+      return mostrarNotificacion("🔒 Reserva Liquidada", "No se pueden eliminar consumos de una reserva que ya fue liquidada.", "warning");
+    }
+
+    const extrasActuales = Array.isArray(currentMatch.extra_items) ? currentMatch.extra_items : [];
+    
+    const idxToRemove = extrasActuales.findIndex((ex) => String(ex.id) === String(productoId));
+    if (idxToRemove === -1) return;
+
+    const nuevosExtras = [...extrasActuales];
+    nuevosExtras.splice(idxToRemove, 1);
+
+    const totalAbonado = (Array.isArray(currentMatch.payments_history) ? currentMatch.payments_history : [])
+      .filter((item) => item.status === "aprobado")
+      .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+
+    const precioBase = currentMatch.total_price || 15;
+    const fee = currentMatch.app_fee || precioBase * 0.10;
+    const totalExtrasNuevo = nuevosExtras.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
+    const totalGranEsperadoNuevo = precioBase + fee + totalExtrasNuevo;
+
+    const pagoCompleto = totalAbonado >= totalGranEsperadoNuevo - 0.05;
+    const nuevoEstadoGeneral = currentMatch.payment_status === "liquidado" 
+      ? "liquidado" 
+      : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
+
+    // ACTUALIZACIÓN OPTIMISTA EN ESTADO REACT
+    const updatedMatch = { ...currentMatch, extra_items: nuevosExtras, payment_status: nuevoEstadoGeneral };
+    setMatchSeleccionado(updatedMatch);
+    setPartidosPeriodo((prev) =>
+      prev.map((m) => (m.id === currentMatch.id ? updatedMatch : m))
+    );
+
     try {
-      setProcesando(true);
-      const extrasActuales = Array.isArray(match.extra_items) ? match.extra_items : [];
-      
-      const idxToRemove = extrasActuales.findIndex((ex) => ex.id === productoId);
-      if (idxToRemove === -1) return;
-
-      const nuevosExtras = [...extrasActuales];
-      nuevosExtras.splice(idxToRemove, 1);
-
-      const totalAbonado = (Array.isArray(match.payments_history) ? match.payments_history : [])
-        .filter((item) => item.status === "aprobado")
-        .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
-
-      const precioBase = match.total_price || 15;
-      const fee = match.app_fee || precioBase * 0.10;
-      const totalExtrasNuevo = nuevosExtras.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
-      const totalGranEsperadoNuevo = precioBase + fee + totalExtrasNuevo;
-
-      const pagoCompleto = totalAbonado >= totalGranEsperadoNuevo - 0.05;
-      const nuevoEstadoGeneral = match.payment_status === "liquidado" 
-        ? "liquidado" 
-        : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
-
       await supabase
         .from("padel_matches")
         .update({
           extra_items: nuevosExtras,
           payment_status: nuevoEstadoGeneral,
         })
-        .eq("id", match.id);
-
-      setMatchSeleccionado((prev) =>
-        prev ? { ...prev, extra_items: nuevosExtras, payment_status: nuevoEstadoGeneral } : null
-      );
-
-      await cargarPartidosPeriodo();
+        .eq("id", currentMatch.id);
     } catch (err) {
-      console.error("Error al quitar extra:", err);
-    } finally {
-      setProcesando(false);
+      console.error("Error removiendo extra en BD:", err);
     }
   }
 
@@ -912,15 +985,15 @@ export default function RecepcionElite() {
     return productos.filter(p => p.name.toLowerCase().includes(term) || (p.brand && p.brand.toLowerCase().includes(term)));
   }, [productos, busquedaProducto]);
 
-  // Agrupación de consumos extra para mostrar en el desglose de factura
   const extrasAgrupados = useMemo(() => {
     const list = Array.isArray(matchSeleccionado?.extra_items) ? matchSeleccionado.extra_items : [];
     const map = {};
     list.forEach((ex) => {
-      if (!map[ex.id]) {
-        map[ex.id] = { id: ex.id, name: ex.name, price: parseFloat(ex.price) || 0, qty: 0 };
+      const itemKey = String(ex.id);
+      if (!map[itemKey]) {
+        map[itemKey] = { id: ex.id, name: ex.name, price: parseFloat(ex.price) || 0, qty: 0 };
       }
-      map[ex.id].qty += 1;
+      map[itemKey].qty += 1;
     });
     return Object.values(map);
   }, [matchSeleccionado?.extra_items]);
@@ -984,13 +1057,13 @@ export default function RecepcionElite() {
                 ))}
               </div>
 
-              {/* FILAS DE HORARIOS */}
+              {/* FILAS DE HORARIOS CON ALTURA CORREGIDA H-24 */}
               {bloquesHorarios.map((bloque, idx) => {
                 const dateObjSlot = new Date(fechaBase);
                 dateObjSlot.setHours(bloque.horaInt, bloque.minutosInt, 0, 0);
 
                 return (
-                  <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
+                  <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-24">
                     
                     {/* COLUMNA DE HORA STICKY */}
                     <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center sticky left-0 z-20 shadow-xs">
@@ -998,13 +1071,9 @@ export default function RecepcionElite() {
                       <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
                     </div>
 
-                    {/* PISTAS */}
-                                    {/* PISTAS */}
+                    {/* PISTAS CON NUEVAS REGLAS DE ESTADO VISUAL */}
                     {canchas.map((cancha) => {
                       const reservado = obtenerReserva(cancha.id, dateObjSlot);
-                      const esPendiente = reservado?.payment_status === "pendiente_aprobacion" || reservado?.payment_status === "pago_en_sitio";
-                      
-                      // 🔴 NUEVA LÓGICA DE PRECIOS DINÁMICOS
                       const esPico = chequearSiEsPico(dateObjSlot);
                       const precioUSD = esPico 
                         ? (cancha.price_peak || cancha.price_credits || 20)
@@ -1014,36 +1083,77 @@ export default function RecepcionElite() {
 
                       return (
                         <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200 relative">
-                          {reservado ? (
-                            <button
-                              onClick={() => abrirModalDetalle(reservado)}
-                              className={`h-full w-full rounded-xl p-2 sm:p-2.5 flex flex-col justify-between text-left transition-all shadow-xs border-2 ${
-                                esPendiente
-                                  ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse"
-                                  : "bg-slate-950 text-white border-slate-800"
-                              }`}
-                            >
-                              <div className="flex justify-between items-center w-full">
-                                <span className={`text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full ${
-                                  esPendiente ? "bg-slate-950 text-amber-400" : "bg-emerald-500/20 text-[#00FF9D]"
-                                }`}>
-                                  {esPendiente ? "⚠️ PENDIENTE" : reservado.is_private || reservado.match_type === "privado" ? "🔒 Privado" : "🌐 Abierto"}
-                                </span>
-                                <span className="text-[9px] font-black px-1.5 py-0.5 bg-white/10 rounded">
-                                  {reservado.players?.length || 1}/4
-                                </span>
-                              </div>
-                              <div>
-                                <p className="text-[11px] sm:text-xs font-black truncate">{obtenerNombreCliente(reservado)}</p>
-                                <p className="text-[8px] sm:text-[9px] opacity-80 font-bold">Bs. {((reservado.total_price || 15) * tasaBCV).toFixed(2)}</p>
-                              </div>
-                            </button>
-                          ) : (
+                          {reservado ? (() => {
+                            const isLiquidado = reservado.payment_status === "liquidado";
+                            const precioCanchaBaseFee = (reservado.total_price || 15) + (reservado.app_fee || 1.50);
+                            const totalAbonado = (Array.isArray(reservado.payments_history) ? reservado.payments_history : [])
+                              .filter((a) => a.status === "aprobado")
+                              .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+                            const totalExtras = (Array.isArray(reservado.extra_items) ? reservado.extra_items : [])
+                              .reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
+                            const totalGranEsperado = precioCanchaBaseFee + totalExtras;
+
+                            const canchaCubierta = totalAbonado >= (precioCanchaBaseFee - 0.05);
+                            const todoPagado = totalAbonado >= (totalGranEsperado - 0.05);
+                            const esAbierto = reservado.match_type === "abierto" && !reservado.is_private;
+
+                            let cardStyle = "";
+                            let badgeText = "";
+                            let badgeStyle = "";
+
+                            if (isLiquidado) {
+                              cardStyle = "bg-emerald-100/90 text-emerald-950 border-emerald-400 hover:bg-emerald-200/90 shadow-sm";
+                              badgeText = "✅ LIQUIDADA";
+                              badgeStyle = "bg-emerald-600 text-white font-black";
+                            } else if (todoPagado) {
+                              // PAGADA PERO ABIERTA/SIN LIQUIDAR -> COLOR OSCURO PREDETERMINADO
+                              cardStyle = "bg-slate-950 text-white border-slate-800 hover:border-emerald-400";
+                              badgeText = "✅ PAGADA";
+                              badgeStyle = "bg-emerald-500/20 text-[#00FF9D] font-black";
+                            } else if (canchaCubierta) {
+                              cardStyle = "bg-amber-400/90 text-slate-950 border-amber-500 animate-pulse hover:bg-amber-400";
+                              badgeText = "⚠️ CONSUMOS PENDIENTES";
+                              badgeStyle = "bg-slate-950 text-amber-300 font-black";
+                            } else {
+                              cardStyle = "bg-rose-500/90 text-white border-rose-600 animate-pulse hover:bg-rose-500";
+                              badgeText = "🚨 PENDIENTE CONFIRMACION";
+                              badgeStyle = "bg-slate-950 text-rose-300 font-black";
+                            }
+
+                            return (
+                              <button
+                                onClick={() => abrirModalDetalle(reservado)}
+                                className={`h-full w-full rounded-xl p-1.5 sm:p-2 flex flex-col justify-between text-left transition-all shadow-xs border-2 overflow-hidden ${cardStyle}`}
+                              >
+                                <div className="flex justify-between items-center w-full gap-1">
+                                  <span className={`text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full truncate ${badgeStyle}`}>
+                                    {badgeText}
+                                  </span>
+                                  {/* MOSTRAR 1/4 ÚNICAMENTE SI ES PARTIDO ABIERTO */}
+                                  {esAbierto && (
+                                    <span className="text-[9px] font-black px-1.5 py-0.5 bg-slate-900/20 rounded shrink-0">
+                                      {reservado.players?.length || 1}/4
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="my-0.5">
+                                  <p className="text-[10px] sm:text-[11px] font-black truncate leading-tight">{obtenerNombreCliente(reservado)}</p>
+                                  <p className="text-[8px] sm:text-[9px] opacity-80 font-bold leading-tight">Bs. {((reservado.total_price || 15) * tasaBCV).toFixed(2)}</p>
+                                </div>
+
+                                {!isLiquidado && (
+                                  <div className="pt-1 border-t border-black/10 flex justify-between items-center text-[8px] sm:text-[9px] font-black uppercase tracking-wider opacity-90">
+                                    <span>⚙️ Gestionar</span>
+                                    <span>→</span>
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })() : (
                             <button
                               onClick={() => abrirModalAgendarPOS(cancha, dateObjSlot, bloque.etiqueta, precioUSD)}
                               className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
                             >
-                              {/* ETIQUETA VISUAL DE HORA PICO */}
                               {esPico && (
                                 <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
                                   Pico
@@ -1065,10 +1175,10 @@ export default function RecepcionElite() {
         </div>
       </div>
 
-      {/* MODAL AGENDAR EN POS */}
-      {modalAgendarOpen && bloqueAgendar && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[10000] flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+      {/* MODAL AGENDAR EN POS (RENDERIZADO VÍA PORTAL) */}
+      {mounted && modalAgendarOpen && bloqueAgendar && createPortal(
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-3 sm:p-4" onClick={() => setModalAgendarOpen(false)}>
+          <div className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center border-b pb-3">
               <div>
                 <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Nueva Reserva POS</span>
@@ -1259,437 +1369,551 @@ export default function RecepcionElite() {
               </button>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* MODAL AUDITORÍA Y DETALLE DE RESERVA */}
-      {modalDetalleMatch && matchSeleccionado && (() => {
-        const extras = Array.isArray(matchSeleccionado.extra_items) ? matchSeleccionado.extra_items : [];
-        const precioBase = matchSeleccionado.total_price || 15;
-        const feeApp = matchSeleccionado.app_fee || (matchSeleccionado.is_private ? 0 : precioBase * 0.10);
-        const totalCanchaConFee = precioBase + feeApp;
+      {/* MODAL AUDITORÍA Y DETALLE DE RESERVA (RENDERIZADO VÍA PORTAL) */}
+      {mounted && modalDetalleMatch && matchSeleccionado && createPortal(
+        (() => {
+          const extras = Array.isArray(matchSeleccionado.extra_items) ? matchSeleccionado.extra_items : [];
+          const precioBase = matchSeleccionado.total_price || 15;
+          const feeApp = matchSeleccionado.app_fee || (matchSeleccionado.is_private ? 0 : precioBase * 0.10);
+          const totalCanchaConFee = precioBase + feeApp;
 
-        const totalExtras = calcularTotalExtras(matchSeleccionado);
-        const totalGranEsperado = totalCanchaConFee + totalExtras;
+          const totalExtras = calcularTotalExtras(matchSeleccionado);
+          const totalGranEsperado = totalCanchaConFee + totalExtras;
 
-        const historialAbonos = Array.isArray(matchSeleccionado.payments_history) ? matchSeleccionado.payments_history : [];
-        const totalAbonadoAprobado = historialAbonos
-          .filter((a) => a.status === "aprobado")
-          .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+          const historialAbonos = Array.isArray(matchSeleccionado.payments_history) ? matchSeleccionado.payments_history : [];
+          const totalAbonadoAprobado = historialAbonos
+            .filter((a) => a.status === "aprobado")
+            .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
 
-        const pendientePorCobrar = Math.max(0, totalGranEsperado - totalAbonadoAprobado);
-        const cambioDevolver = Math.max(0, totalAbonadoAprobado - totalGranEsperado);
-        
-        // 🎾 REGLA DE NEGOCIO: La cancha está cubierta si los abonos igualan o superan el costo de la cancha + fee
-        const esLiquidadoOficial = matchSeleccionado.payment_status === "liquidado";
-        const canchaTotalmenteCubierta = totalAbonadoAprobado >= (totalCanchaConFee - 0.05);
-        const todoPagadoConExtras = pendientePorCobrar <= 0.05;
+          const pendientePorCobrar = Math.max(0, totalGranEsperado - totalAbonadoAprobado);
+          const cambioDevolver = Math.max(0, totalAbonadoAprobado - totalGranEsperado);
+          
+          const esLiquidadoOficial = matchSeleccionado.payment_status === "liquidado";
+          const canchaTotalmenteCubierta = totalAbonadoAprobado >= (totalCanchaConFee - 0.05);
+          const todoPagadoConExtras = pendientePorCobrar <= 0.05;
 
-        const montoNumIngresado = parseFloat(montoAbonoManualPOS) || 0;
-        const equivalenteCalculado = monedaCobroPOS === "USD" 
-          ? montoNumIngresado * tasaBCV 
-          : montoNumIngresado / tasaBCV;
+          const montoNumIngresado = parseFloat(montoAbonoManualPOS) || 0;
+          const equivalenteCalculado = monedaCobroPOS === "USD" 
+            ? montoNumIngresado * tasaBCV 
+            : montoNumIngresado / tasaBCV;
 
-        return (
-          <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[10000] flex items-center justify-center p-3 sm:p-4">
-            <div className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-2xl shadow-2xl space-y-4 sm:space-y-5 max-h-[92vh] overflow-y-auto">
-              
-              <div className="flex justify-between items-start border-b pb-3">
-                <div>
-                  <span className={`text-[9px] sm:text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
-                    esLiquidadoOficial
-                      ? "bg-emerald-100 text-emerald-800"
-                      : todoPagadoConExtras 
-                        ? "bg-emerald-100 text-emerald-800" 
-                        : canchaTotalmenteCubierta 
-                          ? "bg-blue-100 text-blue-900 border border-blue-200" 
-                          : "bg-amber-500 text-slate-950"
-                  }`}>
-                    {esLiquidadoOficial 
-                      ? "🔒 FACTURA LIQUIDADA EN VENTAS" 
-                      : todoPagadoConExtras 
-                        ? "✅ FACTURA TOTALMENTE PAGADA" 
-                        : canchaTotalmenteCubierta 
-                          ? "🎾 CANCHA RESERVADA (EXTRAS PENDIENTES)" 
-                          : "⚠️ RESERVA PENDIENTE DE PAGO"}
-                  </span>
-                  <h3 className="text-lg sm:text-xl font-black text-slate-900 mt-1">{matchSeleccionado.court?.name || "Pista"}</h3>
-                </div>
-                <button onClick={solicitarCerrarModalDetalle} className="text-slate-400 font-bold text-lg hover:text-slate-700">✕</button>
-              </div>
-
-              {/* DATOS DEL CLIENTE Y BOTÓN ANULAR RESERVA */}
-              <div className="bg-slate-50 p-3 sm:p-4 rounded-2xl border border-slate-200 flex justify-between items-center text-xs font-bold text-slate-700">
-                <div className="grid grid-cols-2 gap-4 flex-1">
+          return (
+            <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-3 sm:p-4" onClick={solicitarCerrarModalDetalle}>
+              <div className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-5xl shadow-2xl space-y-4 sm:space-y-5 max-h-[92vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
+                
+                {/* CABECERA POS */}
+                <div className="flex justify-between items-start border-b pb-3">
                   <div>
-                    <span className="text-[9px] uppercase font-black text-slate-400 block">Cliente:</span>
-                    <p className="text-slate-900 font-black text-xs sm:text-sm truncate">{obtenerNombreCliente(matchSeleccionado)}</p>
+                    <span className={`text-[9px] sm:text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
+                      esLiquidadoOficial
+                        ? "bg-emerald-100 text-emerald-800"
+                        : todoPagadoConExtras 
+                          ? "bg-emerald-100 text-emerald-800" 
+                          : canchaTotalmenteCubierta 
+                            ? "bg-blue-100 text-blue-900 border border-blue-200" 
+                            : "bg-amber-500 text-slate-950"
+                    }`}>
+                      {esLiquidadoOficial 
+                        ? "🔒 FACTURA LIQUIDADA EN VENTAS" 
+                        : todoPagadoConExtras 
+                          ? "✅ FACTURA TOTALMENTE PAGADA" 
+                          : canchaTotalmenteCubierta 
+                            ? "🎾 CANCHA RESERVADA (EXTRAS PENDIENTES)" 
+                            : "⚠️ RESERVA PENDIENTE DE PAGO"}
+                    </span>
+                    <h3 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{matchSeleccionado.court?.name || "Pista"}</h3>
                   </div>
-                  <div>
-                    <span className="text-[9px] uppercase font-black text-slate-400 block">Contacto:</span>
-                    <p className="text-slate-900 font-black text-xs sm:text-sm">{matchSeleccionado.creator_profile?.telefono || "En sitio"}</p>
-                  </div>
+                  <button onClick={solicitarCerrarModalDetalle} className="text-slate-400 font-bold text-lg hover:text-slate-700">✕</button>
                 </div>
 
-                <button
-                  onClick={() => cancelarReserva(matchSeleccionado)}
-                  disabled={procesando}
-                  className="px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2"
-                >
-                  🚨 Anular Reserva
-                </button>
-              </div>
-
-              {/* FACTURA DETALLADA ITEMIZADA MULTIMONEDA */}
-              <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3 font-bold">
-                <p className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] border-b border-slate-800 pb-1">
-                  🧾 Desglose de Factura
-                </p>
-
-                <div className="space-y-2 text-xs border-b border-slate-800 pb-3">
-                  {/* CANCHA BASE */}
-                  <div className="flex justify-between items-start text-slate-300">
-                    <span>Pista Completa:</span>
-                    <div className="text-right">
-                      <span className="text-white block font-black">${precioBase.toFixed(2)}</span>
-                      <span className="text-[10px] text-slate-400 block">Bs. {(precioBase * tasaBCV).toFixed(2)}</span>
-                    </div>
-                  </div>
-
-                  {/* FEE APP */}
-                  {feeApp > 0 && (
-                    <div className="flex justify-between items-start text-emerald-400">
-                      <span>Comisión App (+10%):</span>
-                      <div className="text-right">
-                        <span className="block font-black">+${feeApp.toFixed(2)}</span>
-                        <span className="text-[10px] text-emerald-400/70 block">Bs. {(feeApp * tasaBCV).toFixed(2)}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* LISTA ITEMIZADA DE CONSUMOS EXTRA */}
-                  {extrasAgrupados.length > 0 && (
-                    <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-                      <span className="text-[10px] font-black uppercase text-amber-300 block">
-                        🛒 Consumos Tienda / Extras ({extrasAgrupados.reduce((s, x) => s + x.qty, 0)} items):
-                      </span>
-                      {extrasAgrupados.map((item) => {
-                        const subtotalUSD = item.price * item.qty;
-                        const subtotalBs = subtotalUSD * tasaBCV;
-                        return (
-                          <div key={item.id} className="flex justify-between items-start text-[11px] bg-slate-850 p-1.5 rounded-lg border border-slate-800">
-                            <span className="text-slate-200">
-                              • {item.name} <strong className="text-amber-400">x{item.qty}</strong>
-                            </span>
-                            <div className="text-right">
-                              <span className="text-amber-300 font-black block">+${subtotalUSD.toFixed(2)}</span>
-                              <span className="text-[9px] text-slate-400 block">Bs. {subtotalBs.toFixed(2)}</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* TOTALES DE FACTURA MULTIMONEDA */}
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                    <span className="text-[9px] font-black uppercase text-slate-400 block">Total Factura:</span>
-                    <p className="text-lg font-black text-white leading-none mt-1">${totalGranEsperado.toFixed(2)}</p>
-                    <p className="text-[10px] font-bold text-slate-400 mt-0.5">Bs. {(totalGranEsperado * tasaBCV).toFixed(2)}</p>
-                  </div>
-
-                  <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                    <span className="text-[9px] font-black uppercase text-emerald-400 block">Total Abonado:</span>
-                    <p className="text-lg font-black text-emerald-400 leading-none mt-1">${totalAbonadoAprobado.toFixed(2)}</p>
-                    <p className="text-[10px] font-bold text-emerald-500/70 mt-0.5">Bs. {(totalAbonadoAprobado * tasaBCV).toFixed(2)}</p>
-                  </div>
-                </div>
-
-                {/* GESTIÓN DE EXCESO DE PAGO O SALDO PENDIENTE */}
-                {cambioDevolver > 0.05 ? (
-                  <div className="p-3.5 rounded-2xl border bg-cyan-500/20 border-cyan-500/60 text-cyan-300 flex justify-between items-center shadow-inner">
-                    <div>
-                      <span className="text-[10px] font-black uppercase tracking-wider block text-cyan-300">
-                        💵 DINERO A DEVOLVER / CAMBIO:
-                      </span>
-                      <span className="text-xs font-bold block opacity-90 mt-0.5 text-cyan-200">
-                        Bs. {(cambioDevolver * tasaBCV).toFixed(2)} VES
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-2xl font-black block leading-none text-cyan-200">${cambioDevolver.toFixed(2)}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className={`p-3.5 rounded-2xl border flex justify-between items-center transition-all ${
-                    pendientePorCobrar > 0.05 
-                      ? "bg-amber-500/20 border-amber-500/60 text-amber-300" 
-                      : "bg-emerald-500/20 border-emerald-500/60 text-emerald-400"
-                  }`}>
-                    <div>
-                      <span className="text-[10px] font-black uppercase tracking-wider block">🔥 SALDO RESTANTE A COBRAR:</span>
-                      <span className="text-xs font-bold block opacity-90 mt-0.5">Bs. {(pendientePorCobrar * tasaBCV).toFixed(2)} VES</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-2xl font-black block leading-none">${pendientePorCobrar.toFixed(2)}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* HISTORIAL Y AUDITORÍA DE PAGOS / ABONOS YA REALIZADOS */}
-              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2">
-                <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-                  <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
-                    📜 Historial de Pagos y Comprobantes ({historialAbonos.length})
-                  </h4>
-                  <span className="text-[10px] font-bold text-slate-500">
-                    Aprobado: ${totalAbonadoAprobado.toFixed(2)}
-                  </span>
-                </div>
-
-                {historialAbonos.length === 0 ? (
-                  <p className="text-xs font-bold text-slate-400 italic py-2 text-center">No hay abonos registrados en esta reserva.</p>
-                ) : (
-                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                    {historialAbonos.map((ab, idx) => {
-                      const amountUsd = parseFloat(ab.amount) || 0;
-                      const amountBs = amountUsd * tasaBCV;
-                      const esAprobado = ab.status === "aprobado";
-
-                      return (
-                        <div key={ab.id || idx} className="bg-white p-2.5 rounded-xl border border-slate-200 flex items-center justify-between shadow-2xs">
-                          <div className="min-w-0 flex-1 pr-2">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-slate-900 text-[#00FF9D]">
-                                {ab.method ? ab.method.replace("_", " ") : "POS"}
-                              </span>
-                              <span className="text-xs font-black text-slate-800 truncate">{ab.user_name || "Cliente"}</span>
-                            </div>
-                            <p className="text-[10px] text-slate-500 font-bold mt-0.5 truncate">
-                              Ref: <strong className="text-slate-800">{ab.reference || "S/R"}</strong> • {ab.created_at ? new Date(ab.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "POS"}
-                            </p>
-                          </div>
-
-                                               <div className="flex items-center gap-2 shrink-0">
-                            <div className="text-right">
-                              <span className={`text-xs font-black block leading-none ${esAprobado ? "text-emerald-700" : "text-amber-600"}`}>
-                                ${amountUsd.toFixed(2)}
-                              </span>
-                              <span className="text-[9px] font-bold text-slate-400 block mt-0.5">
-                                Bs. {amountBs.toFixed(2)}
-                              </span>
-                            </div>
-
-                            {/* NUEVO: BOTÓN DE APROBAR SI EL PAGO ESTÁ PENDIENTE */}
-                            {!esAprobado && (
-                              <button
-                                type="button"
-                                onClick={() => aprobarPagoPendiente(matchSeleccionado, ab.id)}
-                                disabled={procesando}
-                                className="bg-emerald-500 hover:bg-emerald-600 text-white text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg transition-colors shadow-sm"
-                                title="Verificar y aprobar este pago"
-                              >
-                                ✓ Aprobar
-                              </button>
-                            )}
-
-                            {/* COMPROBANTE LIGHTBOX INTERACTIVO */}
-                            {ab.receipt_url && (
-                              <button
-                                type="button"
-                                onClick={() => setImagenEngrande(ab.receipt_url)}
-                                className="w-8 h-8 rounded-lg border border-slate-300 bg-slate-100 overflow-hidden hover:border-blue-500 transition-all shrink-0"
-                                title="Ver captura original"
-                              >
-                                <img src={ab.receipt_url} alt="Comprobante" className="w-full h-full object-cover" />
-                              </button>
-                            )}
-                          </div>
+                {/* ESTRUCTURA TÁCTIL POS DE 2 COLUMNAS */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                  
+                  {/* COLUMNA IZQUIERDA (RESUMEN FINANCIERO Y CLIENTE) */}
+                  <div className="lg:col-span-6 space-y-4">
+                    
+                    {/* DATOS CLIENTE */}
+                    <div className="bg-slate-50 p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex justify-between items-center text-xs font-bold text-slate-700">
+                      <div className="grid grid-cols-2 gap-4 flex-1">
+                        <div>
+                          <span className="text-[9px] uppercase font-black text-slate-400 block">Cliente:</span>
+                          <p className="text-slate-900 font-black text-xs sm:text-sm truncate">{obtenerNombreCliente(matchSeleccionado)}</p>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                        <div>
+                          <span className="text-[9px] uppercase font-black text-slate-400 block">Contacto:</span>
+                          <p className="text-slate-900 font-black text-xs sm:text-sm">{matchSeleccionado.creator_profile?.telefono || "En sitio"}</p>
+                        </div>
+                      </div>
 
-              {/* COBRAR SALDO EN SITIO (SOLO SI NO HA SIDO LIQUIDADA) */}
-              {!esLiquidadoOficial && (
-                <div className="bg-slate-50 p-3.5 sm:p-4 rounded-2xl border border-slate-200 space-y-3">
-                  <div className="flex justify-between items-center">
-                    <p className="text-[10px] font-black uppercase text-slate-500">Registrar Cobro de Saldo en Sitio:</p>
-                    <div className="flex items-center bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
-                      <button type="button" onClick={() => setMonedaCobroPOS("USD")} className={`px-2 py-0.5 rounded-lg ${monedaCobroPOS === "USD" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}>$ USD</button>
-                      <button type="button" onClick={() => setMonedaCobroPOS("VES")} className={`px-2 py-0.5 rounded-lg ${monedaCobroPOS === "VES" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}>Bs. VES</button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                    {[
-                      { id: "pago_movil", label: "📱 Pago Móvil" },
-                      { id: "zelle", label: "🇺🇸 Zelle" },
-                      { id: "efectivo", label: "💵 Efectivo" },
-                      { id: "punto", label: "💳 Punto Venta" },
-                    ].map((m) => (
                       <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setMetodoAbonoManualPOS(m.id)}
-                        className={`py-2 px-2 rounded-xl text-[10px] font-black uppercase border transition-all ${
-                          metodoAbonoManualPOS === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-xs" : "bg-white text-slate-600 border-slate-200"
+                        onClick={() => cancelarReserva(matchSeleccionado)}
+                        disabled={procesando || esLiquidadoOficial}
+                        className={`px-3 py-1.5 border font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2 ${
+                          esLiquidadoOficial
+                            ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                            : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
                         }`}
                       >
-                        {m.label}
+                        🚨 Anular Reserva
                       </button>
-                    ))}
-                  </div>
-
-                  <div className="flex gap-2">
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder={`$${pendientePorCobrar.toFixed(2)}`}
-                      value={montoAbonoManualPOS}
-                      onChange={(e) => setMontoAbonoManualPOS(e.target.value)}
-                      className="flex-1 bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold outline-none"
-                    />
-                    <button
-                      onClick={() => agregarAbonoManualPOS(matchSeleccionado)}
-                      disabled={procesando}
-                      className="px-4 py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shrink-0 hover:bg-slate-800 transition-colors"
-                    >
-                      + Registrar
-                    </button>
-                  </div>
-
-                  {metodoAbonoManualPOS !== "efectivo" && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                      <input
-                        type="text"
-                        placeholder="N° Referencia / ID Transacción"
-                        value={numRefAbonoManualPOS}
-                        onChange={(e) => setNumRefAbonoManualPOS(e.target.value)}
-                        className="bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold outline-none"
-                      />
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleSeleccionarImagenPOS(e, setPreviewAbonoManualPOS)}
-                        className="bg-white border border-slate-300 rounded-xl p-1 text-[10px] outline-none file:mr-1 file:py-1 file:px-2 file:rounded-md file:border-0 file:bg-slate-900 file:text-[#00FF9D]"
-                      />
                     </div>
-                  )}
 
-                  {montoNumIngresado > 0 && (
-                    <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900">
-                      <span>🧮 Conversión en vivo:</span>
-                      <span>
-                        {monedaCobroPOS === "USD"
-                          ? `Bs. ${equivalenteCalculado.toFixed(2)} VES`
-                          : `$${equivalenteCalculado.toFixed(2)} USD`}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
+                    {/* FACTURA DETALLADA MULTIMONEDA */}
+                    <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3 font-bold">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] border-b border-slate-800 pb-1">
+                        🧾 Desglose de Factura
+                      </p>
 
-              {/* CONSUMOS EXTRA EN SLIDER CON BUSCADOR */}
-              <div className="border-t border-slate-200 pt-3 space-y-3">
-                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">🛒 Consumos Extra</h4>
-                    <span className="text-xs font-black text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border">
-                      ${totalExtras.toFixed(2)} (Bs. {(totalExtras * tasaBCV).toFixed(2)})
-                    </span>
-                  </div>
-                  
-                  {/* BUSCADOR DE PRODUCTOS */}
-                  <div className="relative w-full sm:w-48">
-                    <input
-                      type="text"
-                      placeholder="🔍 Buscar artículo..."
-                      value={busquedaProducto}
-                      onChange={(e) => setBusquedaProducto(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1 text-xs font-bold outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-
-                {/* SLIDER CARROUSEL HORIZONTAL DE PRODUCTOS */}
-                <div className="flex gap-3 overflow-x-auto pb-3 pt-1 px-1 bg-slate-50 rounded-2xl border border-slate-200 scrollbar-thin scrollbar-thumb-slate-300">
-                  {productosFiltrados.length === 0 ? (
-                    <p className="text-xs text-slate-400 font-bold p-3">No se encontraron productos.</p>
-                  ) : (
-                    productosFiltrados.map((prod) => {
-                      const qty = extras.filter((ex) => ex.id === prod.id).length;
-                      const pPrice = parseFloat(prod.price) || 0;
-
-                      return (
-                        <div key={prod.id} className={`shrink-0 w-44 p-3 rounded-2xl border flex flex-col justify-between shadow-xs transition-all ${
-                          qty > 0 ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"
-                        }`}>
-                          <div>
-                            <span className="text-[9px] font-black uppercase text-blue-500 block">{prod.brand || "Tienda"}</span>
-                            <p className="text-xs font-black text-slate-900 truncate" title={prod.name}>{prod.name}</p>
-                            <div className="mt-0.5">
-                              <span className="text-[11px] font-black text-slate-900 block">${pPrice.toFixed(2)}</span>
-                              <span className="text-[9px] font-bold text-slate-400 block">Bs. {(pPrice * tasaBCV).toFixed(2)}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
-                            {qty > 0 ? (
-                              <div className="flex items-center justify-between w-full">
-                                <button type="button" onClick={() => quitarUnExtraSilencioso(matchSeleccionado, prod.id)} className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-black text-xs flex items-center justify-center hover:bg-rose-200 transition-colors">-</button>
-                                <span className="text-xs font-black">{qty} und</span>
-                                <button type="button" onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)} className="w-7 h-7 rounded-lg bg-emerald-600 text-white font-black text-xs flex items-center justify-center hover:bg-emerald-700 transition-colors">+</button>
-                              </div>
-                            ) : (
-                              <button type="button" onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)} className="w-full py-1.5 rounded-xl bg-slate-900 text-[#00FF9D] font-black text-[10px] uppercase hover:bg-slate-800 transition-colors">
-                                + Añadir
-                              </button>
-                            )}
+                      <div className="space-y-2 text-xs border-b border-slate-800 pb-3">
+                        <div className="flex justify-between items-start text-slate-300">
+                          <span>Pista Completa:</span>
+                          <div className="text-right">
+                            <span className="text-white block font-black">${precioBase.toFixed(2)}</span>
+                            <span className="text-[10px] text-slate-400 block">Bs. {(precioBase * tasaBCV).toFixed(2)}</span>
                           </div>
                         </div>
-                      );
-                    })
-                  )}
+
+                        {feeApp > 0 && (
+                          <div className="flex justify-between items-start text-emerald-400">
+                            <span>Comisión App (+10%):</span>
+                            <div className="text-right">
+                              <span className="block font-black">+${feeApp.toFixed(2)}</span>
+                              <span className="text-[10px] text-emerald-400/70 block">Bs. {(feeApp * tasaBCV).toFixed(2)}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {extrasAgrupados.length > 0 && (
+                          <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                            <span className="text-[10px] font-black uppercase text-amber-300 block">
+                              🛒 Consumos Tienda / Extras ({extrasAgrupados.reduce((s, x) => s + x.qty, 0)} items):
+                            </span>
+                            {extrasAgrupados.map((item) => {
+                              const subtotalUSD = item.price * item.qty;
+                              const subtotalBs = subtotalUSD * tasaBCV;
+                              return (
+                                <div key={item.id} className="flex justify-between items-start text-[11px] bg-slate-850 p-1.5 rounded-lg border border-slate-800">
+                                  <span className="text-slate-200">
+                                    • {item.name} <strong className="text-amber-400">x{item.qty}</strong>
+                                  </span>
+                                  <div className="text-right">
+                                    <span className="text-amber-300 font-black block">+${subtotalUSD.toFixed(2)}</span>
+                                    <span className="text-[9px] text-slate-400 block">Bs. {subtotalBs.toFixed(2)}</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 pt-1">
+                        <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                          <span className="text-[9px] font-black uppercase text-slate-400 block">Total Factura:</span>
+                          <p className="text-lg font-black text-white leading-none mt-1">${totalGranEsperado.toFixed(2)}</p>
+                          <p className="text-[10px] font-bold text-slate-400 mt-0.5">Bs. {(totalGranEsperado * tasaBCV).toFixed(2)}</p>
+                        </div>
+
+                        <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                          <span className="text-[9px] font-black uppercase text-emerald-400 block">Total Abonado:</span>
+                          <p className="text-lg font-black text-emerald-400 leading-none mt-1">${totalAbonadoAprobado.toFixed(2)}</p>
+                          <p className="text-[10px] font-bold text-emerald-500/70 mt-0.5">Bs. {(totalAbonadoAprobado * tasaBCV).toFixed(2)}</p>
+                        </div>
+                      </div>
+
+                      {/* MOSTRAR BANNER DE CAMBIO O SALDO RESTANTE */}
+                      {cambioDevolver > 0.05 ? (
+                        <div className="p-3.5 rounded-2xl border bg-cyan-500/20 border-cyan-500/60 text-cyan-300 flex justify-between items-center shadow-inner">
+                          <div>
+                            <span className="text-[10px] font-black uppercase tracking-wider block text-cyan-300">
+                              💵 DINERO A DEVOLVER / CAMBIO:
+                            </span>
+                            <span className="text-xs font-bold block opacity-90 mt-0.5 text-cyan-200">
+                              Bs. {(cambioDevolver * tasaBCV).toFixed(2)} VES
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-2xl font-black block leading-none text-cyan-200">${cambioDevolver.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={`p-3.5 rounded-2xl border flex justify-between items-center transition-all ${
+                          pendientePorCobrar > 0.05 
+                            ? "bg-amber-500/20 border-amber-500/60 text-amber-300" 
+                            : "bg-emerald-500/20 border-emerald-500/60 text-emerald-400"
+                        }`}>
+                          <div>
+                            <span className="text-[10px] font-black uppercase tracking-wider block">🔥 SALDO RESTANTE A COBRAR:</span>
+                            <span className="text-xs font-bold block opacity-90 mt-0.5">Bs. {(pendientePorCobrar * tasaBCV).toFixed(2)} VES</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-2xl font-black block leading-none">${pendientePorCobrar.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+
+                  {/* COLUMNA DERECHA (HISTORIAL DESPLEGABLE, COBRO DESPLEGABLE & CONSUMOS) */}
+                  <div className="lg:col-span-6 space-y-4">
+
+                    {/* 1. HISTORIAL DE PAGOS DESPLEGABLE (ARRIBA) */}
+                    <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+                      <button
+                        type="button"
+                        onClick={() => setHistorialAbierto(!historialAbierto)}
+                        className="w-full p-3.5 flex justify-between items-center bg-slate-100/80 hover:bg-slate-200/70 transition-colors text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-500">{historialAbierto ? "▼" : "▶"}</span>
+                          <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                            📜 Historial de Pagos ({historialAbonos.length})
+                          </h4>
+                        </div>
+                        <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                          Aprobado: ${totalAbonadoAprobado.toFixed(2)}
+                        </span>
+                      </button>
+
+                      {historialAbierto && (
+                        <div className="p-3.5 border-t border-slate-200 space-y-2 bg-white">
+                          {historialAbonos.length === 0 ? (
+                            <p className="text-xs font-bold text-slate-400 italic py-2 text-center">No hay abonos registrados.</p>
+                          ) : (
+                            <div className="space-y-2 max-h-40 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-1">
+                              {historialAbonos.map((ab, idx) => {
+                                const amountUsd = parseFloat(ab.amount) || 0;
+                                const amountBs = amountUsd * tasaBCV;
+                                const esAprobado = ab.status === "aprobado";
+
+                                return (
+                                  <div key={ab.id || idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex items-center justify-between shadow-2xs">
+                                    <div className="min-w-0 flex-1 pr-2">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-slate-900 text-[#00FF9D]">
+                                          {ab.method ? ab.method.replace("_", " ") : "POS"}
+                                        </span>
+                                        <span className="text-xs font-black text-slate-800 truncate">{ab.user_name || "Cliente"}</span>
+                                      </div>
+                                      <p className="text-[10px] text-slate-500 font-bold mt-0.5 truncate">
+                                        Ref: <strong className="text-slate-800">{ab.reference || "S/R"}</strong>
+                                      </p>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <div className="text-right">
+                                        <span className={`text-xs font-black block leading-none ${amountUsd < 0 ? "text-cyan-600" : esAprobado ? "text-emerald-700" : "text-amber-600"}`}>
+                                          {amountUsd < 0 ? `-$${Math.abs(amountUsd).toFixed(2)}` : `$${amountUsd.toFixed(2)}`}
+                                        </span>
+                                        <span className="text-[9px] font-bold text-slate-400 block mt-0.5">
+                                          Bs. {amountBs.toFixed(2)}
+                                        </span>
+                                      </div>
+
+                                      {!esAprobado && !esLiquidadoOficial && (
+                                        <button
+                                          type="button"
+                                          onClick={() => aprobarPagoPendiente(matchSeleccionado, ab.id)}
+                                          disabled={procesando}
+                                          className="bg-emerald-500 hover:bg-emerald-600 text-white text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg transition-colors shadow-sm"
+                                        >
+                                          ✓ Aprobar
+                                        </button>
+                                      )}
+
+                                      {ab.receipt_url && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setImagenEngrande(ab.receipt_url)}
+                                          className="w-8 h-8 rounded-lg border border-slate-300 bg-slate-100 overflow-hidden hover:border-blue-500 transition-all shrink-0"
+                                        >
+                                          <img src={ab.receipt_url} alt="Comprobante" className="w-full h-full object-cover" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* 2. REGISTRAR COBRO EN SITIO DESPLEGABLE (OCULTO SI ESTÁ LIQUIDADA) */}
+                    {!esLiquidadoOficial && (
+                      <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={() => setCobroAbierto(!cobroAbierto)}
+                          className="w-full p-3.5 flex justify-between items-center bg-slate-100/80 hover:bg-slate-200/70 transition-colors text-left"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-500">{cobroAbierto ? "▼" : "▶"}</span>
+                            <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                              💳 Registrar Cobro de Saldo en Sitio
+                            </h4>
+                          </div>
+                          {pendientePorCobrar > 0.05 && (
+                            <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
+                              Pendiente: ${pendientePorCobrar.toFixed(2)}
+                            </span>
+                          )}
+                        </button>
+
+                        {cobroAbierto && (
+                          <div className="p-3.5 sm:p-4 border-t border-slate-200 space-y-3 bg-white">
+                            <div className="flex justify-between items-center">
+                              <p className="text-[10px] font-black uppercase text-slate-500">Moneda de Pago:</p>
+                              <div className="flex items-center bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
+                                <button type="button" onClick={() => setMonedaCobroPOS("USD")} className={`px-2 py-0.5 rounded-lg ${monedaCobroPOS === "USD" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}>$ USD</button>
+                                <button type="button" onClick={() => setMonedaCobroPOS("VES")} className={`px-2 py-0.5 rounded-lg ${monedaCobroPOS === "VES" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}>Bs. VES</button>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                              {[
+                                { id: "pago_movil", label: "📱 Pago Móvil" },
+                                { id: "zelle", label: "🇺🇸 Zelle" },
+                                { id: "efectivo", label: "💵 Efectivo" },
+                                { id: "punto", label: "💳 Punto Venta" },
+                              ].map((m) => (
+                                <button
+                                  key={m.id}
+                                  type="button"
+                                  onClick={() => setMetodoAbonoManualPOS(m.id)}
+                                  className={`py-2 px-2 rounded-xl text-[10px] font-black uppercase border transition-all ${
+                                    metodoAbonoManualPOS === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-xs" : "bg-slate-50 text-slate-600 border-slate-200"
+                                  }`}
+                                >
+                                  {m.label}
+                                </button>
+                              ))}
+                            </div>
+
+                            <div className="flex gap-2">
+                              <input
+                                type="number"
+                                step="0.01"
+                                placeholder={`$${pendientePorCobrar.toFixed(2)}`}
+                                value={montoAbonoManualPOS}
+                                onChange={(e) => setMontoAbonoManualPOS(e.target.value)}
+                                className="flex-1 bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold outline-none"
+                              />
+                              <button
+                                onClick={() => agregarAbonoManualPOS(matchSeleccionado)}
+                                disabled={procesando}
+                                className="px-4 py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shrink-0 hover:bg-slate-800 transition-colors"
+                              >
+                                + Registrar
+                              </button>
+                            </div>
+
+                            {cambioDevolver > 0.05 && (
+                              <button
+                                type="button"
+                                onClick={() => registrarDevolucionCambioPOS(matchSeleccionado, cambioDevolver)}
+                                disabled={procesando}
+                                className="w-full py-2.5 bg-cyan-600 text-white font-black text-xs uppercase rounded-xl shadow-sm hover:bg-cyan-700 transition-colors"
+                              >
+                                💵 Entregar y Registrar Cambio (${cambioDevolver.toFixed(2)} USD)
+                              </button>
+                            )}
+
+                            {metodoAbonoManualPOS !== "efectivo" && (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                <input
+                                  type="text"
+                                  placeholder="N° Referencia / ID Transacción"
+                                  value={numRefAbonoManualPOS}
+                                  onChange={(e) => setNumRefAbonoManualPOS(e.target.value)}
+                                  className="bg-slate-50 border border-slate-300 rounded-xl p-2 text-xs font-bold outline-none"
+                                />
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(e) => handleSeleccionarImagenPOS(e, setPreviewAbonoManualPOS)}
+                                  className="bg-slate-50 border border-slate-300 rounded-xl p-1 text-[10px] outline-none file:mr-1 file:py-1 file:px-2 file:rounded-md file:border-0 file:bg-slate-900 file:text-[#00FF9D]"
+                                />
+                              </div>
+                            )}
+
+                            {montoNumIngresado > 0 && (
+                              <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900">
+                                <span>🧮 Conversión en vivo:</span>
+                                <span>
+                                  {monedaCobroPOS === "USD"
+                                    ? `Bs. ${equivalenteCalculado.toFixed(2)} VES`
+                                    : `$${equivalenteCalculado.toFixed(2)} USD`}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 3. CONSUMOS EXTRA EN SLIDER CON BUSCADOR (DESHABILITADO SI ESTÁ LIQUIDADA) */}
+                    <div className="border-t border-slate-200 pt-3 space-y-3">
+                      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">🛒 Consumos Extra</h4>
+                          <span className="text-xs font-black text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border">
+                            ${totalExtras.toFixed(2)} (Bs. {(totalExtras * tasaBCV).toFixed(2)})
+                          </span>
+                        </div>
+                        
+                        <div className="relative w-full sm:w-48">
+                          <input
+                            type="text"
+                            placeholder="🔍 Buscar artículo..."
+                            value={busquedaProducto}
+                            onChange={(e) => setBusquedaProducto(e.target.value)}
+                            disabled={esLiquidadoOficial}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1 text-xs font-bold outline-none focus:border-blue-500 disabled:opacity-50"
+                          />
+                        </div>
+                      </div>
+
+                      {esLiquidadoOficial && (
+                        <p className="text-[10px] font-bold text-amber-600 bg-amber-50 p-2 rounded-xl border border-amber-200">
+                          🔒 Ticket Liquidado - No es posible modificar consumos en facturas cerradas.
+                        </p>
+                      )}
+
+                      {/* SLIDER HORIZONTAL DE PRODUCTOS */}
+                      <div className={`flex gap-3 overflow-x-auto pb-3 pt-1 px-1 bg-slate-50 rounded-2xl border border-slate-200 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden ${
+                        esLiquidadoOficial ? "opacity-60 pointer-events-none" : ""
+                      }`}>
+                        {productosFiltrados.length === 0 ? (
+                          <p className="text-xs text-slate-400 font-bold p-3">No se encontraron productos.</p>
+                        ) : (
+                          productosFiltrados.map((prod) => {
+                            const qty = extras.filter((ex) => String(ex.id) === String(prod.id)).length;
+                            const pPrice = parseFloat(prod.price) || 0;
+                            const stockDisponible = prod.is_rental ? 999999 : (parseInt(prod.stock, 10) || 0);
+                            const alcanzadoLimiteStock = !prod.is_rental && qty >= stockDisponible;
+                            const sinStock = !prod.is_rental && stockDisponible <= 0;
+
+                            return (
+                              <div key={prod.id} className={`shrink-0 w-44 p-3 rounded-2xl border flex flex-col justify-between shadow-xs transition-all ${
+                                qty > 0 ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"
+                              }`}>
+                                <div>
+                                  <div className="flex justify-between items-center mb-0.5">
+                                    <span className="text-[9px] font-black uppercase text-blue-500 truncate">{prod.brand || "Tienda"}</span>
+                                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.2 rounded ${
+                                      prod.is_rental 
+                                        ? "bg-purple-100 text-purple-700" 
+                                        : sinStock 
+                                          ? "bg-rose-100 text-rose-700" 
+                                          : "bg-slate-100 text-slate-600"
+                                    }`}>
+                                      {prod.is_rental ? "Ilimitado" : `Stock: ${stockDisponible}`}
+                                    </span>
+                                  </div>
+
+                                  <p className="text-xs font-black text-slate-900 truncate" title={prod.name}>{prod.name}</p>
+                                  <div className="mt-0.5">
+                                    <span className="text-[11px] font-black text-slate-900 block">${pPrice.toFixed(2)}</span>
+                                    <span className="text-[9px] font-bold text-slate-400 block">Bs. {(pPrice * tasaBCV).toFixed(2)}</span>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
+                                  {qty > 0 ? (
+                                    <div className="flex items-center justify-between w-full">
+                                      <button 
+                                        type="button" 
+                                        onClick={() => quitarUnExtraSilencioso(matchSeleccionado, prod.id)} 
+                                        disabled={esLiquidadoOficial}
+                                        className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-black text-xs flex items-center justify-center hover:bg-rose-200 transition-colors disabled:opacity-40"
+                                      >
+                                        -
+                                      </button>
+                                      <span className="text-xs font-black">{qty} und</span>
+                                      <button 
+                                        type="button" 
+                                        onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)} 
+                                        disabled={esLiquidadoOficial || alcanzadoLimiteStock}
+                                        className={`w-7 h-7 rounded-lg font-black text-xs flex items-center justify-center transition-colors ${
+                                          (esLiquidadoOficial || alcanzadoLimiteStock)
+                                            ? "bg-slate-200 text-slate-400 cursor-not-allowed" 
+                                            : "bg-emerald-600 text-white hover:bg-emerald-700"
+                                        }`}
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button 
+                                      type="button" 
+                                      onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)} 
+                                      disabled={esLiquidadoOficial || sinStock || alcanzadoLimiteStock}
+                                      className={`w-full py-1.5 rounded-xl font-black text-[10px] uppercase transition-colors ${
+                                        (esLiquidadoOficial || sinStock || alcanzadoLimiteStock)
+                                          ? "bg-slate-200 text-slate-400 cursor-not-allowed" 
+                                          : "bg-slate-900 text-[#00FF9D] hover:bg-slate-800"
+                                      }`}
+                                    >
+                                      {sinStock ? "Agotado" : "+ Añadir"}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
                 </div>
-              </div>
 
-              {/* BOTONES DE ACCIÓN CON BLOQUEO SI YA FUE LIQUIDADA */}
-              <div className="flex gap-2 pt-2 border-t">
-                <button 
-                  onClick={solicitarCerrarModalDetalle} 
-                  disabled={procesando} 
-                  className="w-1/3 py-3 bg-slate-100 text-slate-700 font-black text-[11px] uppercase rounded-2xl hover:bg-slate-200 transition-colors"
-                >
-                  🚪 Salir / Cerrar
-                </button>
-                
-                <button 
-                  onClick={() => cerrarTicketYLiquidarReserva(matchSeleccionado)} 
-                  disabled={procesando || esLiquidadoOficial} 
-                  className={`w-2/3 py-3 text-white font-black text-[11px] uppercase rounded-2xl shadow-md transition-colors ${
-                    esLiquidadoOficial 
-                      ? "bg-slate-400 cursor-not-allowed" 
-                      : "bg-emerald-600 hover:bg-emerald-700"
-                  }`}
-                >
-                  {esLiquidadoOficial ? "✅ Ticket Ya Liquidado" : "🔒 Liquidar Reserva"}
-                </button>
-              </div>
+                {/* BOTONES DE ACCIÓN */}
+                <div className="flex gap-2 pt-2 border-t">
+                  <button 
+                    onClick={solicitarCerrarModalDetalle} 
+                    disabled={procesando} 
+                    className="w-1/3 py-3.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-2xl hover:bg-slate-200 transition-colors"
+                  >
+                    🚪 Salir / Cerrar
+                  </button>
+                  
+                  <button 
+                    onClick={() => cerrarTicketYLiquidarReserva(matchSeleccionado)} 
+                    disabled={procesando || esLiquidadoOficial || pendientePorCobrar > 0.05} 
+                    className={`w-2/3 py-3.5 text-white font-black text-xs uppercase rounded-2xl shadow-md transition-all ${
+                      esLiquidadoOficial 
+                        ? "bg-slate-400 cursor-not-allowed" 
+                        : pendientePorCobrar > 0.05
+                          ? "bg-slate-300 text-slate-500 cursor-not-allowed border border-slate-300"
+                          : "bg-emerald-600 hover:bg-emerald-700 active:scale-98"
+                    }`}
+                  >
+                    {esLiquidadoOficial 
+                      ? "✅ Ticket Ya Liquidado" 
+                      : pendientePorCobrar > 0.05
+                        ? `⚠️ Falta Cobrar $${pendientePorCobrar.toFixed(2)} USD`
+                        : "🔒 Liquidar Reserva"}
+                  </button>
+                </div>
 
+              </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })(),
+        document.body
+      )}
 
-      {/* MODAL DE CONFIRMACIÓN AL CERRAR CON CAMBIOS */}
-      {modalConfirmCambios && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[25000] flex items-center justify-center p-4">
+      {/* MODAL DE CONFIRMACIÓN AL CERRAR CON CAMBIOS (RENDERIZADO VÍA PORTAL) */}
+      {mounted && modalConfirmCambios && createPortal(
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4 text-center">
             <span className="text-3xl block">⚠️</span>
             <h3 className="text-base font-black text-slate-900">¿Guardar cambios en la reserva?</h3>
@@ -1717,12 +1941,13 @@ export default function RecepcionElite() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* LIGHTBOX AMPLIFICADOR DE COMPROBANTE / CAPTURA DE PAGO */}
-      {imagenEngrande && (
-        <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[30000] flex flex-col items-center justify-center p-4" onClick={() => setImagenEngrande(null)}>
+      {/* LIGHTBOX AMPLIFICADOR DE COMPROBANTE (RENDERIZADO VÍA PORTAL) */}
+      {mounted && imagenEngrande && createPortal(
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[99999] flex flex-col items-center justify-center p-4" onClick={() => setImagenEngrande(null)}>
           <div className="relative max-w-2xl max-h-[85vh] w-full flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
@@ -1733,23 +1958,25 @@ export default function RecepcionElite() {
             </button>
             <img src={imagenEngrande} alt="Comprobante Ampliado" className="max-h-[80vh] w-auto object-contain rounded-2xl shadow-2xl border border-slate-800" />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* POPUP NOTIFICACIÓN */}
-      {popupNotif.open && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[30000] flex items-center justify-center p-4">
+      {/* POPUP NOTIFICACIÓN (RENDERIZADO VÍA PORTAL) */}
+      {mounted && popupNotif.open && createPortal(
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-3 text-center">
             <h3 className="text-base font-black text-slate-900">{popupNotif.title}</h3>
             <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
             <button onClick={() => setPopupNotif({ ...popupNotif, open: false })} className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl">Entendido</button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* CONFIRMACIÓN GENERAL */}
-      {modalConfirm.open && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[30000] flex items-center justify-center p-4">
+      {/* CONFIRMACIÓN GENERAL (RENDERIZADO VÍA PORTAL) */}
+      {mounted && modalConfirm.open && createPortal(
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-3 text-center">
             <h3 className="text-base font-black text-slate-900">{modalConfirm.title}</h3>
             <p className="text-xs font-bold text-slate-600">{modalConfirm.message}</p>
@@ -1758,7 +1985,8 @@ export default function RecepcionElite() {
               <button onClick={() => { const act = modalConfirm.action; setModalConfirm({ ...modalConfirm, open: false }); if (act) act(); }} className="w-1/2 py-2.5 bg-rose-600 text-white font-black text-xs uppercase rounded-xl shadow-md">Confirmar</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>
