@@ -503,24 +503,33 @@ export default function RecepcionElite() {
     return "Cliente Mostrador";
   };
 
-  const chequearSiEsPico = (dateObj) => {
-    const startStr = clubInfo?.peak_start_time || "17:00:00"; 
-    const endStr = clubInfo?.peak_end_time || "22:00:00";
-    
-    const slotMins = dateObj.getHours() * 60 + dateObj.getMinutes();
-    
-    const [startH, startM] = startStr.split(':').map(Number);
-    const [endH, endM] = endStr.split(':').map(Number);
-    
-    const startMins = startH * 60 + (startM || 0);
-    const endMins = endH * 60 + (endM || 0);
+  // ----- NUEVA FUNCIÓN PARA OBTENER EL PRECIO DINÁMICO POR BLOQUE -----
+  const calcularPrecioPorBloque = (cancha, dateObj) => {
+    const hora = dateObj.getHours();
+    const minutos = dateObj.getMinutes();
+    const horaFormateada = `${String(hora).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`;
 
-    if (startMins <= endMins) {
-      return slotMins >= startMins && slotMins < endMins;
-    } else {
-      return slotMins >= startMins || slotMins < endMins;
+    if (!cancha.pricing_blocks || cancha.pricing_blocks.length === 0) {
+      // Si la pista es vieja y no tiene bloques, usar la lógica vieja o precios por defecto
+      const precioNormal = parseFloat(cancha.price_normal) || 12;
+      return { precio: precioNormal, esPico: false };
     }
+
+    // Buscar en qué bloque encaja la hora seleccionada
+    const bloqueEncontrado = cancha.pricing_blocks.find(bloque => {
+      return horaFormateada >= bloque.start_time && horaFormateada < bloque.end_time;
+    });
+
+    if (bloqueEncontrado) {
+      // Devolver el precio del bloque encontrado. (Podemos inferir que es 'pico' si el precio es mayor al promedio, o simplemente pasarlo como falso para no pintar el badge)
+      return { precio: parseFloat(bloqueEncontrado.price), esPico: false };
+    }
+
+    // Si por alguna razón la hora cae en un bache que el dueño no configuró, devolver el precio del primer bloque o el precio normal por defecto.
+    return { precio: parseFloat(cancha.pricing_blocks[0].price), esPico: false };
   };
+  // ----------------------------------------------------------------------
+
 
   const bloquesHorarios = useMemo(() => {
     const duracion = clubInfo?.slot_duration_minutes || 60;
@@ -1541,8 +1550,9 @@ export default function RecepcionElite() {
                             dateObjSlot.setHours(bloque.horaInt, bloque.minutosInt, 0, 0);
 
                             const reservado = obtenerReserva(col.cancha.id, dateObjSlot);
-                            const esPico = chequearSiEsPico(dateObjSlot);
-                            const precioOriginal = esPico ? (col.cancha.price_peak || 20) : (col.cancha.price_normal || 12);
+                            
+                            // ---- AQUÍ SE APLICA EL NUEVO CÁLCULO POR BLOQUE DINÁMICO ----
+                            const { precio: precioOriginal } = calcularPrecioPorBloque(col.cancha, dateObjSlot);
 
                             // EVALUACIÓN DE PROMOCIÓN POR LA FECHA EXACTA DE LA CELDA
                             const slotFechaStr = `${dateObjSlot.getFullYear()}-${String(dateObjSlot.getMonth() + 1).padStart(2, '0')}-${String(dateObjSlot.getDate()).padStart(2, '0')}`;
@@ -1563,11 +1573,10 @@ export default function RecepcionElite() {
                                   esPromoAplicada = false;
                                 }
                               } else {
-                                precioUSD = esPico ? promoSlot.price_peak : promoSlot.price_normal;
+                                // Como ahora es dinámico, si la promo no tiene bloques, podemos aplicar un descuento general o tomar el normal.
+                                precioUSD = promoSlot.price_normal;
                               }
                             }
-
-                            const precioBs = precioUSD * tasaBCV;
 
                             return (
                               <div
@@ -1644,11 +1653,6 @@ export default function RecepcionElite() {
                                     onClick={() => abrirModalAgendarPOS(col.cancha, dateObjSlot, bloque.etiqueta, precioUSD)}
                                     className="h-full w-full hover:bg-emerald-50/90 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300/80 hover:border-emerald-500 transition-all shadow-2xs relative cursor-pointer opacity-80 hover:opacity-100"
                                   >
-                                    {esPico && (
-                                      <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
-                                        Pico
-                                      </span>
-                                    )}
                                     {esPromoAplicada && (
                                       <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
                                         Promo

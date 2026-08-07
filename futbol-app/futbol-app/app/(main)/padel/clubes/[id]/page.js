@@ -41,27 +41,22 @@ export default function PublicClubDetailPage() {
   const [tasaBCV, setTasaBCV] = useState(36.65);
 
   const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
-  // [NUEVO] Estado para guardar la promo de hoy
   const [promocionHoy, setPromocionHoy] = useState(null); 
-  // POPUP NOTIFICACIÓN PERSONALIZADO
   const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
 
-  // Modal Pasarela de Pago Inicial
   const [modalReservaOpen, setModalReservaOpen] = useState(false);
   const [pasoModal, setPasoModal] = useState(1);
   const [bloqueSeleccionado, setBloqueSeleccionado] = useState(null);
   const [procesandoReserva, setProcesandoReserva] = useState(false);
   
-  // Formulario
   const [tipoReserva, setTipoReserva] = useState("abierto");
   const [modoCompetitivo, setModoCompetitivo] = useState(true);
   const [metodoPago, setMetodoPago] = useState("pago_movil");
-  const [monedaAbono, setMonedaAbono] = useState("USD"); // 'USD' | 'VES'
+  const [monedaAbono, setMonedaAbono] = useState("USD"); 
   const [montoAbono, setMontoAbono] = useState("");
   const [numReferencia, setNumReferencia] = useState("");
   const [previewComprobante, setPreviewComprobante] = useState("");
 
-  // Modal Mi Reserva
   const [modalMiReservaOpen, setModalMiReservaOpen] = useState(false);
   const [matchMiReservaSel, setMatchMiReservaSel] = useState(null);
   const [formPagoExtra, setFormPagoExtra] = useState({
@@ -75,10 +70,21 @@ export default function PublicClubDetailPage() {
   useEffect(() => {
     setMounted(true);
     if (clubId) {
-      cargarDetalleClub();
-      obtenerTasaBCV();
+      Promise.allSettled([
+        cargarDetalleClub(),
+        obtenerTasaBCV()
+      ]).finally(() => {
+        setLoading(false);
+      });
     }
-  }, [clubId, fechaSeleccionada]);// <--- AÑADE fechaSeleccionada AQUÍ
+  }, [clubId]); 
+
+  // Este useEffect separa la carga de promos para que no re-cargue TODO el club al cambiar de día.
+  useEffect(() => {
+    if (clubId && mounted && !loading) {
+      cargarPromocionDelDia();
+    }
+  }, [fechaSeleccionada, clubId, mounted, loading]);
 
   const mostrarNotificacion = (title, message, type = "info") => {
     setPopupNotif({ open: true, title, message, type });
@@ -91,20 +97,36 @@ export default function PublicClubDetailPage() {
         const data = await res.json();
         if (data.usdRate) return setTasaBCV(parseFloat(data.usdRate));
       }
+      
       const resFallback = await fetch("https://ve.dolarapi.com/v1/dolares/oficial");
       if (resFallback.ok) {
         const dataFallback = await resFallback.json();
         if (dataFallback?.promedio) return setTasaBCV(parseFloat(dataFallback.promedio));
       }
     } catch (e) {
-      console.error("Fallo al consultar BCV:", e);
+      console.warn("No se pudo obtener la tasa BCV en tiempo real. Se usará la tasa por defecto (36.65).", e);
+    }
+  }
+
+  async function cargarPromocionDelDia() {
+    try {
+      const hoyStr = fechaSeleccionada.toISOString().split("T")[0]; 
+      const { data: promoActiva } = await supabase
+        .from("padel_promotions")
+        .select("*")
+        .eq("club_id", clubId)
+        .lte("start_date", hoyStr)
+        .gte("end_date", hoyStr)
+        .maybeSingle();
+        
+      setPromocionHoy(promoActiva || null);
+    } catch (e) {
+      console.error("Error buscando promo:", e);
     }
   }
 
   async function cargarDetalleClub() {
     try {
-      setLoading(true);
-
       const { data: { user: authUser } } = await supabase.auth.getUser();
       setUser(authUser);
 
@@ -136,16 +158,12 @@ export default function PublicClubDetailPage() {
 
       setCanchas(courtsData || []);
 
-      const { data: matchesData, error: matchesErr } = await supabase
+      const { data: matchesData } = await supabase
         .from("padel_matches")
         .select("*, court:padel_courts(name)")
         .eq("club_id", clubId)
         .neq("status", "cancelado")
         .order("scheduled_at", { ascending: true });
-
-      if (matchesErr) {
-        console.error("Error al obtener partidos del club:", matchesErr);
-      }
 
       const matchIds = (matchesData || []).map((m) => m.id);
 
@@ -186,53 +204,42 @@ export default function PublicClubDetailPage() {
         }));
 
         setPartidosClub(partidosFinales);
-
-        if (matchMiReservaSel) {
-          const actualizado = partidosFinales.find(m => m.id === matchMiReservaSel.id);
-          if (actualizado) setMatchMiReservaSel(actualizado);
-        }
       } else {
         setPartidosClub(matchesData || []);
       }
     } catch (err) {
       console.error("Error cargando detalle del club:", err);
+      throw err; // Relanzamos para que Promise.allSettled lo capture si falla
     } finally {
-      setLoading(false);
+      cargarPromocionDelDia();
     }
-    const hoyStr = fechaSeleccionada.toISOString().split("T")[0]; 
-    console.log("Buscando promoción para fecha:", hoyStr, "en club:", clubId);
-
-    const { data: promoActiva, error: promoErr } = await supabase
-      .from("padel_promotions")
-      .select("*")
-      .eq("club_id", clubId)
-      .lte("start_date", hoyStr)
-      .gte("end_date", hoyStr)
-      .maybeSingle();
-      
-    console.log("Promoción encontrada:", promoActiva);
-    if (promoErr) console.error("Error en promo:", promoErr);
-
-    setPromocionHoy(promoActiva);
   }
 
-  // LÓGICA DE DETECCIÓN DE HORA PICO
-  const chequearSiEsPico = (dateObj) => {
-    const startStr = club?.peak_start_time || "17:00:00"; 
-    const endStr = club?.peak_end_time || "22:00:00";
-    
-    const slotMins = dateObj.getHours() * 60 + dateObj.getMinutes();
-    
-    const [startH, startM] = startStr.split(':').map(Number);
-    const [endH, endM] = endStr.split(':').map(Number);
-    
-    const startMins = startH * 60 + (startM || 0);
-    const endMins = endH * 60 + (endM || 0);
+  // --- LÓGICA REPARADA Y SEGURA DE PRECIOS POR BLOQUE ---
+  const calcularPrecioPorBloque = (cancha, dateObj) => {
+    try {
+      const hora = dateObj.getHours();
+      const minutos = dateObj.getMinutes();
+      const horaFormateada = `${String(hora).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`;
 
-    if (startMins <= endMins) {
-      return slotMins >= startMins && slotMins < endMins;
-    } else {
-      return slotMins >= startMins || slotMins < endMins;
+      if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
+        const precioNormal = parseFloat(cancha.price_normal);
+        return { precio: isNaN(precioNormal) ? 15 : precioNormal, esPico: false };
+      }
+
+      const bloqueEncontrado = cancha.pricing_blocks.find(bloque => {
+        return horaFormateada >= (bloque.start_time || "00:00") && horaFormateada < (bloque.end_time || "23:59");
+      });
+
+      if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price))) {
+        return { precio: parseFloat(bloqueEncontrado.price), esPico: false };
+      }
+
+      const primerPrecio = parseFloat(cancha.pricing_blocks[0].price);
+      return { precio: isNaN(primerPrecio) ? 15 : primerPrecio, esPico: false };
+    } catch (error) {
+      console.error("Error calculando precio bloque:", error);
+      return { precio: 15, esPico: false }; 
     }
   };
 
@@ -689,10 +696,8 @@ export default function PublicClubDetailPage() {
     );
   });
 
-  // --- LÓGICA NUEVA DE PRECIOS (PROMO + BLOQUES) ---
-  const esPico = chequearSiEsPico(bloque.dateObj);
-  const precioOriginal =
-    esPico ? (cancha.price_peak || 20) : (cancha.price_normal || 12);
+  // --- LÓGICA NUEVA DE PRECIOS POR BLOQUE DINÁMICO ---
+  const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.dateObj);
   let precioUSD = precioOriginal;
 
   if (promocionHoy) {
@@ -707,22 +712,20 @@ export default function PublicClubDetailPage() {
 
       const bloqueAplicable = promocionHoy.time_blocks.find((b) => {
         return (
-          horaBotonStr >= b.start_time &&
-          horaBotonStr < b.end_time
+          horaBotonStr >= (b.start_time || "00:00") &&
+          horaBotonStr < (b.end_time || "23:59")
         );
       });
 
-      if (bloqueAplicable) {
-        precioUSD = bloqueAplicable.price; // Precio del bloque, ej: 5.00
+      if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
+        precioUSD = parseFloat(bloqueAplicable.price); 
       } else {
-        // Fuera de los bloques, usamos el precio original de la cancha
         precioUSD = precioOriginal;
       }
     } else {
-      // Promo sin bloques: modo todo el día (Precio Promo / Hora Pico Promo)
-      precioUSD = esPico
-        ? promocionHoy.price_peak
-        : promocionHoy.price_normal;
+      // Promo sin bloques: aplicamos precio promocional normal general
+      const promoPrice = parseFloat(promocionHoy.price_normal);
+      precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
     }
   }
 
@@ -853,13 +856,6 @@ export default function PublicClubDetailPage() {
         onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
         className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
       >
-        {/* BADGE PICO */}
-        {esPico && (
-          <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
-            Pico
-          </span>
-        )}
-
         {/* BADGE PROMO */}
         {promocionHoy && (
           <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
@@ -874,15 +870,15 @@ export default function PublicClubDetailPage() {
         {promocionHoy ? (
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className="text-[8px] font-bold text-slate-400 line-through">
-              ${precioOriginal}
+              ${precioOriginal.toFixed(2)}
             </span>
             <span className="text-[10px] sm:text-[11px] font-black text-rose-500">
-              ${precioUSD}
+              ${precioUSD.toFixed(2)}
             </span>
           </div>
         ) : (
           <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">
-            ${precioUSD}
+            ${precioUSD.toFixed(2)}
           </span>
         )}
       </button>

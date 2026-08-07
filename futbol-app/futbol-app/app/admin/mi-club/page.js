@@ -39,7 +39,7 @@ export default function MiClubConfigPage() {
     slot_duration_minutes: 60,
     open_time: "07:00",
     close_time: "23:00",
-    peak_start_time: "17:00",
+    peak_start_time: "17:00", // Aunque dejemos esto para otras funciones, la pista usará bloques
     peak_end_time: "22:00",
     sports: ["padel"],
     amenities: ["wifi", "free_parking", "changing_room"],
@@ -52,7 +52,7 @@ export default function MiClubConfigPage() {
   });
 
   const [modalCanchaOpen, setModalCanchaOpen] = useState(false);
-  const [editingCanchaId, setEditingCanchaId] = useState(null); // Nuevo estado para saber si editamos
+  const [editingCanchaId, setEditingCanchaId] = useState(null);
   
   const defaultCanchaForm = {
     name: "Pista 1",
@@ -60,8 +60,11 @@ export default function MiClubConfigPage() {
     surface_type: "Cristal",
     court_type: "indoor",
     has_lighting: true,
-    price_normal: 12,
-    price_peak: 20,
+    // Nuevo esquema de precios dinámicos
+    pricing_blocks: [
+      { start_time: "07:00", end_time: "12:00", price: 10 },
+      { start_time: "12:00", end_time: "17:00", price: 15 },
+    ],
   };
 
   const [formCancha, setFormCancha] = useState(defaultCanchaForm);
@@ -274,16 +277,44 @@ export default function MiClubConfigPage() {
   // ABRIR MODAL PARA EDITAR CANCHA EXISTENTE
   function abrirModalEditarCancha(cancha) {
     setEditingCanchaId(cancha.id);
+    
+    // Si la cancha vieja no tiene pricing_blocks (para retrocompatibilidad) 
+    // le armamos un bloque falso con sus precios normales y picos antiguos.
+    const bloquesPorDefecto = cancha.pricing_blocks && cancha.pricing_blocks.length > 0 
+      ? cancha.pricing_blocks 
+      : [
+          { start_time: "07:00", end_time: "17:00", price: cancha.price_normal || 12 },
+          { start_time: "17:00", end_time: "23:00", price: cancha.price_peak || 20 }
+        ];
+
     setFormCancha({
       name: cancha.name,
       court_number: cancha.court_number,
       surface_type: cancha.surface_type,
       court_type: cancha.court_type,
       has_lighting: cancha.has_lighting,
-      price_normal: cancha.price_normal || cancha.price_credits || 12,
-      price_peak: cancha.price_peak || cancha.price_credits || 20,
+      pricing_blocks: bloquesPorDefecto
     });
     setModalCanchaOpen(true);
+  }
+
+  // NUEVAS FUNCIONES PARA MANEJAR BLOQUES
+  function agregarBloque() {
+    setFormCancha(prev => ({
+      ...prev,
+      pricing_blocks: [...prev.pricing_blocks, { start_time: "", end_time: "", price: 0 }]
+    }));
+  }
+
+  function actualizarBloque(index, campo, valor) {
+    const nuevosBloques = [...formCancha.pricing_blocks];
+    nuevosBloques[index][campo] = valor;
+    setFormCancha({ ...formCancha, pricing_blocks: nuevosBloques });
+  }
+
+  function eliminarBloque(index) {
+    const nuevosBloques = formCancha.pricing_blocks.filter((_, i) => i !== index);
+    setFormCancha({ ...formCancha, pricing_blocks: nuevosBloques });
   }
 
   // GUARDAR (CREAR O ACTUALIZAR) CANCHA
@@ -291,6 +322,11 @@ export default function MiClubConfigPage() {
     e.preventDefault();
     if (!club) {
       alert("Debes guardar primero la información básica del complejo.");
+      return;
+    }
+    
+    if (formCancha.pricing_blocks.length === 0) {
+      alert("Debes agregar al menos un bloque de precios.");
       return;
     }
 
@@ -303,19 +339,21 @@ export default function MiClubConfigPage() {
         surface_type: formCancha.surface_type,
         court_type: formCancha.court_type,
         has_lighting: formCancha.has_lighting,
-        price_normal: parseFloat(formCancha.price_normal) || 12,
-        price_peak: parseFloat(formCancha.price_peak) || 20,
-        price_credits: parseFloat(formCancha.price_normal) || 12, 
+        pricing_blocks: formCancha.pricing_blocks, // SE GUARDARÁ COMO JSONB
+        
+        // Enviamos valores por defecto a los campos antiguos por si la base de datos 
+        // tiene configurado que no pueden ser nulos (NOT NULL)
+        price_normal: parseFloat(formCancha.pricing_blocks[0].price) || 12,
+        price_peak: parseFloat(formCancha.pricing_blocks[0].price) || 20,
+        price_credits: parseFloat(formCancha.pricing_blocks[0].price) || 12, 
         is_active: true,
       };
 
       if (editingCanchaId) {
-        // ACTUALIZAR EXISTENTE
         const { error } = await supabase.from("padel_courts").update(payload).eq("id", editingCanchaId);
         if (error) throw error;
         setMensaje(`✅ Pista ${payload.name} actualizada correctamente.`);
       } else {
-        // CREAR NUEVA
         const { error } = await supabase.from("padel_courts").insert(payload);
         if (error) throw error;
         setMensaje(`✅ Nueva Pista ${payload.name} agregada correctamente.`);
@@ -352,6 +390,7 @@ export default function MiClubConfigPage() {
     <div className="p-6 bg-slate-50 min-h-screen">
       <div className="max-w-5xl mx-auto space-y-6">
 
+        {/* ... (Cabecera y form general se mantienen igual) ... */}
         <div className={`p-6 rounded-3xl border shadow-sm flex flex-col md:flex-row justify-between md:items-end gap-4 ${
           esOnboardingInicial
             ? "bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 text-white border-slate-800"
@@ -509,8 +548,8 @@ export default function MiClubConfigPage() {
                 />
               </div>
 
-              <div className="border-l-2 border-amber-200 pl-3">
-                <label className="text-[10px] font-black uppercase text-amber-500 block mb-1">Inicio Hr Pico</label>
+              <div className="border-l-2 border-amber-200 pl-3 opacity-50 pointer-events-none">
+                <label className="text-[10px] font-black uppercase text-amber-500 block mb-1">Inicio Hr Pico (Obsoleto)</label>
                 <input
                   type="time"
                   value={formClub.peak_start_time}
@@ -519,8 +558,8 @@ export default function MiClubConfigPage() {
                 />
               </div>
 
-              <div>
-                <label className="text-[10px] font-black uppercase text-amber-500 block mb-1">Fin Hr Pico</label>
+              <div className="opacity-50 pointer-events-none">
+                <label className="text-[10px] font-black uppercase text-amber-500 block mb-1">Fin Hr Pico (Obsoleto)</label>
                 <input
                   type="time"
                   value={formClub.peak_end_time}
@@ -694,15 +733,22 @@ export default function MiClubConfigPage() {
                       </div>
                     </div>
                     
-                    <div className="flex items-center gap-2 mt-2 bg-white p-2 rounded-xl border border-slate-100 shadow-xs">
-                      <div className="flex-1 text-center border-r border-slate-100">
-                        <p className="text-[8px] font-black text-slate-400 uppercase">Normal</p>
-                        <p className="font-black text-emerald-600">${c.price_normal || c.price_credits || 0}</p>
-                      </div>
-                      <div className="flex-1 text-center bg-amber-50/50 rounded-lg">
-                        <p className="text-[8px] font-black text-amber-500 uppercase">Pico</p>
-                        <p className="font-black text-amber-600">${c.price_peak || c.price_credits || 0}</p>
-                      </div>
+                    {/* NUEVO DISEÑO PARA MOSTRAR BLOQUES DE HORARIO */}
+                    <div className="mt-2 bg-white p-2 rounded-xl border border-slate-100 shadow-xs flex flex-col gap-1 max-h-32 overflow-y-auto">
+                      <p className="text-[8px] font-black text-slate-400 uppercase border-b border-slate-50 pb-1">Precios por Bloques</p>
+                      {(c.pricing_blocks && c.pricing_blocks.length > 0) ? (
+                        c.pricing_blocks.map((b, i) => (
+                          <div key={i} className="flex justify-between items-center text-[10px] font-bold py-0.5">
+                            <span className="text-slate-500">{b.start_time} - {b.end_time}</span>
+                            <span className="text-emerald-600 font-black">${b.price}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex justify-between items-center text-[10px] font-bold py-0.5">
+                          <span className="text-slate-500">Precio Fijo (Antiguo)</span>
+                          <span className="text-emerald-600 font-black">${c.price_normal}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex justify-between items-center text-[10px] text-slate-500 border-t border-slate-200 pt-2 font-bold">
@@ -727,7 +773,7 @@ export default function MiClubConfigPage() {
               <h3 className="text-base font-black text-slate-900">
                 {editingCanchaId ? "✏️ Editar Pista" : "Registrar Nueva Pista"}
               </h3>
-              <button onClick={() => setModalCanchaOpen(false)} className="text-slate-400 font-bold">✕</button>
+              <button onClick={() => setModalCanchaOpen(false)} className="text-slate-400 font-bold hover:text-slate-700">✕</button>
             </div>
 
             <form onSubmit={guardarCancha} className="space-y-3 text-xs font-bold text-slate-700">
@@ -772,35 +818,81 @@ export default function MiClubConfigPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-2">
-                <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-xl">
-                  <label className="block text-[10px] font-black uppercase text-emerald-700 mb-1">Precio Normal ($)</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    required
-                    value={formCancha.price_normal}
-                    onChange={(e) => setFormCancha({ ...formCancha, price_normal: e.target.value })}
-                    className="w-full bg-white border border-emerald-200 rounded-lg p-2 font-black text-emerald-900 outline-none"
-                  />
-                  <span className="text-[8px] text-emerald-600 block mt-1 leading-tight">Aplica fuera de las horas pico.</span>
+              {/* NUEVO COMPONENTE DE BLOQUES DE PRECIO */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="flex justify-between items-center">
+                  <label className="block text-[10px] font-black uppercase text-slate-400">Bloques de Precios</label>
+                  <button 
+                    type="button" 
+                    onClick={agregarBloque} 
+                    className="text-[10px] font-black text-blue-600 bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                  >
+                    + Añadir Bloque
+                  </button>
                 </div>
-
-                <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl">
-                  <label className="block text-[10px] font-black uppercase text-amber-700 mb-1">Precio Hora Pico ($)</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    required
-                    value={formCancha.price_peak}
-                    onChange={(e) => setFormCancha({ ...formCancha, price_peak: e.target.value })}
-                    className="w-full bg-white border border-amber-200 rounded-lg p-2 font-black text-amber-900 outline-none"
-                  />
-                  <span className="text-[8px] text-amber-600 block mt-1 leading-tight">Aplica en el bloque pico configurado.</span>
+                
+                <div className="max-h-48 overflow-y-auto pr-1 space-y-2">
+                  {formCancha.pricing_blocks.map((bloque, i) => (
+                    <div key={i} className="flex items-center gap-1.5 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                      <div className="flex flex-col flex-1">
+                        <label className="text-[8px] uppercase text-slate-400 mb-0.5">Desde</label>
+                        <input 
+                          type="time" 
+                          required
+                          value={bloque.start_time}
+                          onChange={(e) => actualizarBloque(i, "start_time", e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold outline-none"
+                        />
+                      </div>
+                      
+                      <div className="flex flex-col flex-1">
+                        <label className="text-[8px] uppercase text-slate-400 mb-0.5">Hasta</label>
+                        <input 
+                          type="time" 
+                          required
+                          value={bloque.end_time}
+                          onChange={(e) => actualizarBloque(i, "end_time", e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold outline-none"
+                        />
+                      </div>
+                      
+                      <div className="flex flex-col flex-1">
+                        <label className="text-[8px] uppercase text-emerald-600 mb-0.5">Precio</label>
+                        <div className="flex items-center bg-white border border-slate-200 rounded-lg px-2">
+                          <span className="text-slate-400 text-xs font-black">$</span>
+                          <input 
+                            type="number" 
+                            step="0.5"
+                            required
+                            min="0"
+                            placeholder="0"
+                            value={bloque.price}
+                            onChange={(e) => actualizarBloque(i, "price", e.target.value)}
+                            className="w-full p-1.5 text-xs font-black outline-none bg-transparent"
+                          />
+                        </div>
+                      </div>
+                      
+                      <button 
+                        type="button" 
+                        onClick={() => eliminarBloque(i)} 
+                        className="mt-3.5 w-6 h-6 flex items-center justify-center text-rose-500 hover:bg-rose-50 rounded-md transition-colors shrink-0"
+                        title="Eliminar bloque"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
                 </div>
+                
+                {formCancha.pricing_blocks.length === 0 && (
+                  <p className="text-[10px] text-rose-500 font-bold bg-rose-50 p-2 rounded-lg">
+                    Debes agregar al menos un bloque de horario con su precio.
+                  </p>
+                )}
               </div>
 
-              <button type="submit" disabled={saving} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md mt-2">
+              <button type="submit" disabled={saving || formCancha.pricing_blocks.length === 0} className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md mt-2 transition-colors">
                 {saving ? "Guardando..." : (editingCanchaId ? "✓ Actualizar Pista" : "Guardar Pista")}
               </button>
             </form>
