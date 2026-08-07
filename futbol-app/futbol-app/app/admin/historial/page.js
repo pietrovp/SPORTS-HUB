@@ -99,7 +99,6 @@ export default function HistorialVentasPage() {
     return "—";
   };
 
-  // Helper para agrupar consumos repetidos en una sola fila
   const agruparItemsConsumo = (items) => {
     if (!items || items.length === 0) return [];
     const map = {};
@@ -125,14 +124,16 @@ export default function HistorialVentasPage() {
     if (!matches || matches.length === 0) return null;
 
     const itemCancha = (venta.sales_items || []).find(
-      (i) =>
-        i.item_type === "cancha" ||
-        (i.item_name &&
-          (i.item_name.toLowerCase().includes("reserva") ||
-            i.item_name.toLowerCase().includes("pista")))
+      (i) => i.item_type === "cancha" || (i.item_name && i.item_name.toLowerCase().includes("reserva"))
     );
 
     if (!itemCancha) return null;
+
+    if (itemCancha.item_detail && itemCancha.item_detail.includes("MatchID:")) {
+      const matchIdExtraido = itemCancha.item_detail.split("MatchID:")[1].split(" ")[0].trim();
+      const matchDirecto = matches.find(m => String(m.id) === String(matchIdExtraido));
+      if (matchDirecto) return matchDirecto;
+    }
 
     const cleanCliente = normalizarTexto(itemCancha.item_detail || "");
     const cleanPista = normalizarTexto(itemCancha.item_name || "");
@@ -148,18 +149,10 @@ export default function HistorialVentasPage() {
       const mCourt = normalizarTexto(m.court?.name || "");
       const mDate = new Date(m.scheduled_at).toDateString();
 
-      if (cleanPista && mCourt && (cleanPista.includes(mCourt) || mCourt.includes(cleanPista))) {
-        score += 3;
-      }
-      if (cleanCliente && (mCliente.includes(cleanCliente) || cleanCliente.includes(mCliente) || mNotes.includes(cleanCliente))) {
-        score += 5;
-      }
-      if (mDate === fechaVenta) {
-        score += 2;
-      }
-      if (m.payment_status === "liquidado") {
-        score += 1;
-      }
+      if (cleanPista && mCourt && (cleanPista.includes(mCourt) || mCourt.includes(cleanPista))) score += 3;
+      if (cleanCliente && (mCliente.includes(cleanCliente) || cleanCliente.includes(mCliente) || mNotes.includes(cleanCliente))) score += 5;
+      if (mDate === fechaVenta) score += 2;
+      if (m.payment_status === "liquidado") score += 1;
 
       if (score > maxScore && score >= 4) {
         maxScore = score;
@@ -209,40 +202,72 @@ export default function HistorialVentasPage() {
       const ventasProcesadas = ventasRaw.map((v) => {
         const match = encontrarMatchParaVenta(v, matchesList);
 
+        let clienteFinal = "Cliente Mostrador";
+        let telefonoFinal = "—";
+        let horaReservaFinal = "—";
         let pagosDesglosados = [];
-        if (match && Array.isArray(match.payments_history) && match.payments_history.length > 0) {
-          pagosDesglosados = match.payments_history.filter(p => p.status === 'aprobado' || !p.status);
+
+        if (match) {
+          // VENTA PROVENIENTE DE RESERVA DE CANCHA
+          clienteFinal = obtenerNombreClienteMatch(match) || "Cliente Mostrador";
+          telefonoFinal = obtenerTelefonoClienteMatch(match);
+          horaReservaFinal = formatearHoraReserva(match.scheduled_at) || "—";
+
+          if (Array.isArray(match.payments_history) && match.payments_history.length > 0) {
+            pagosDesglosados = match.payments_history.filter(p => p.status === 'aprobado' || !p.status);
+          } else {
+            pagosDesglosados = [
+              {
+                method: v.payment_method || "efectivo",
+                amount: v.total_amount,
+                user_name: clienteFinal,
+                reference: "Cobro POS",
+              },
+            ];
+          }
         } else {
+          // VENTA DIRECTA DE TIENDA (PARSEO ESTRUCTURADO DE ITEM_DETAIL)
+          const primerItem = (v.sales_items || [])[0];
+          const detail = primerItem?.item_detail || "";
+
+          let refTienda = "Venta Tienda POS";
+          let proofTienda = null;
+
+          if (detail.includes("Cliente:")) {
+            const mC = detail.match(/Cliente:\s*([^|]+)/i);
+            if (mC && mC[1]) clienteFinal = mC[1].trim();
+          }
+          if (detail.includes("Tel:")) {
+            const mT = detail.match(/Tel:\s*([^|]+)/i);
+            if (mT && mT[1]) telefonoFinal = mT[1].trim();
+          }
+          if (detail.includes("Ref:")) {
+            const mR = detail.match(/Ref:\s*([^|]+)/i);
+            if (mR && mR[1]) refTienda = mR[1].trim();
+          }
+          if (detail.includes("Proof:")) {
+            const mP = detail.match(/Proof:\s*(.+)$/i);
+            if (mP && mP[1]) proofTienda = mP[1].trim();
+          }
+
+          horaReservaFinal = "Tienda POS";
           pagosDesglosados = [
             {
               method: v.payment_method || "efectivo",
               amount: v.total_amount,
-              user_name: "Cliente Mostrador (POS)",
-              reference: "Cobro POS",
+              user_name: clienteFinal,
+              user_phone: telefonoFinal,
+              reference: refTienda,
+              receipt_url: proofTienda,
             },
           ];
         }
 
-        const horaReservaExacta = match ? formatearHoraReserva(match.scheduled_at) : null;
-        const clienteNombreExacto = match ? obtenerNombreClienteMatch(match) : null;
-        const telefonoClienteExacto = match ? obtenerTelefonoClienteMatch(match) : "—";
-
-        const itemCancha = (v.sales_items || []).find(
-          (i) =>
-            i.item_type === "cancha" ||
-            (i.item_name &&
-              (i.item_name.toLowerCase().includes("reserva") ||
-                i.item_name.toLowerCase().includes("pista")))
-        );
-
-        const clienteTicket = clienteNombreExacto || (itemCancha?.item_detail ? itemCancha.item_detail.replace(/^Cliente:\s*/i, "").trim() : "Cliente Mostrador");
-        const horaReservaTicket = horaReservaExacta || "—";
-
         return {
           ...v,
-          cliente_principal: clienteTicket,
-          telefono_principal: telefonoClienteExacto,
-          hora_reserva_principal: horaReservaTicket,
+          cliente_principal: clienteFinal,
+          telefono_principal: telefonoFinal,
+          hora_reserva_principal: horaReservaFinal,
           pagos_desglosados: pagosDesglosados,
           match_info: match,
         };
@@ -260,7 +285,7 @@ export default function HistorialVentasPage() {
     if (!metodo) return '💵 EFECTIVO';
     const key = metodo.toString().toLowerCase().trim();
     if (key.includes('zelle')) return '🇺🇸 ZELLE';
-    if (key.includes('movil') || key.includes('móvil') || key.includes('pago_movil') || key.includes('pago movil')) return '📱 PAGO MÓVIL';
+    if (key.includes('movil') || key.includes('móvil') || key.includes('pago_movil') || key.includes('pago movil') || key.includes('transferencia')) return '📱 PAGO MÓVIL';
     if (key.includes('punto') || key.includes('pos') || key.includes('card') || key.includes('tarjeta')) return '💳 PUNTO';
     if (key.includes('efectivo') || key.includes('cash')) return '💵 EFECTIVO';
     return `💰 ${metodo.toString().toUpperCase()}`;
@@ -315,7 +340,6 @@ export default function HistorialVentasPage() {
   return (
     <div className="p-3 sm:p-6 bg-slate-50 min-h-screen">
       <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
-        {/* HEADER */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm gap-4">
           <div>
             <h1 className="text-xl sm:text-2xl font-black text-slate-900">🧾 Historial de Tickets</h1>
@@ -335,7 +359,6 @@ export default function HistorialVentasPage() {
           </div>
         </div>
 
-        {/* LISTA DE HISTORIAL */}
         {ventasAgrupadas.length === 0 ? (
           <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm p-10 sm:p-16 text-center">
             <span className="text-4xl sm:text-5xl block mb-3">📭</span>
@@ -443,13 +466,11 @@ export default function HistorialVentasPage() {
                                       </td>
                                     </tr>
 
-                                    {/* PANEL EXPANDIDO */}
                                     {esExpandido && (
                                       <tr className="bg-slate-50/70 border-t-0">
                                         <td colSpan="7" className="p-5 px-8 border-b border-slate-200">
                                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                             
-                                            {/* COLUMNA 1: RESERVA E ÍTEMS AGRUPADOS */}
                                             <div className="space-y-3">
                                               <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-200 pb-2">
                                                 📦 Detalle de la Reserva e Ítems
@@ -478,7 +499,6 @@ export default function HistorialVentasPage() {
                                               </div>
                                             </div>
 
-                                            {/* COLUMNA 2: DESGLOSE REAL DE PAGOS DE RECEPCIÓN */}
                                             <div className="space-y-3">
                                               <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-200 pb-2">
                                                 💳 Desglose de Pagos Recibidos ({venta.pagos_desglosados.length})
