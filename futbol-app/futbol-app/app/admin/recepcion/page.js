@@ -222,7 +222,7 @@ export default function RecepcionElite() {
     if (!clubId || !supabase) return;
 
     const channel = supabase
-      .channel("pos-realtime-matches-full-v39")
+      .channel("pos-realtime-matches-full-v41")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "padel_matches", filter: `club_id=eq.${clubId}` },
@@ -335,11 +335,19 @@ export default function RecepcionElite() {
   async function cargarPartidosPeriodo() {
     if (!clubId || diasVisibles.length === 0) return;
 
-    let inicio = new Date(diasVisibles[0]);
-    inicio.setHours(0, 0, 0, 0);
+    let inicio = new Date(Date.UTC(
+      diasVisibles[0].getFullYear(),
+      diasVisibles[0].getMonth(),
+      diasVisibles[0].getDate(),
+      0, 0, 0, 0
+    ));
 
-    let fin = new Date(diasVisibles[diasVisibles.length - 1]);
-    fin.setHours(23, 59, 59, 999);
+    let fin = new Date(Date.UTC(
+      diasVisibles[diasVisibles.length - 1].getFullYear(),
+      diasVisibles[diasVisibles.length - 1].getMonth(),
+      diasVisibles[diasVisibles.length - 1].getDate(),
+      23, 59, 59, 999
+    ));
 
     const { data: matches, error: matchErr } = await supabase
       .from("padel_matches")
@@ -503,33 +511,24 @@ export default function RecepcionElite() {
     return "Cliente Mostrador";
   };
 
-  // ----- NUEVA FUNCIÓN PARA OBTENER EL PRECIO DINÁMICO POR BLOQUE -----
-  const calcularPrecioPorBloque = (cancha, dateObj) => {
-    const hora = dateObj.getHours();
-    const minutos = dateObj.getMinutes();
-    const horaFormateada = `${String(hora).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`;
+  const chequearSiEsPico = (dateObj) => {
+    const startStr = clubInfo?.peak_start_time || "17:00:00"; 
+    const endStr = clubInfo?.peak_end_time || "22:00:00";
+    
+    const slotMins = dateObj.getUTCHours() * 60 + dateObj.getUTCMinutes();
+    
+    const [startH, startM] = startStr.split(':').map(Number);
+    const [endH, endM] = endStr.split(':').map(Number);
+    
+    const startMins = startH * 60 + (startM || 0);
+    const endMins = endH * 60 + (endM || 0);
 
-    if (!cancha.pricing_blocks || cancha.pricing_blocks.length === 0) {
-      // Si la pista es vieja y no tiene bloques, usar la lógica vieja o precios por defecto
-      const precioNormal = parseFloat(cancha.price_normal) || 12;
-      return { precio: precioNormal, esPico: false };
+    if (startMins <= endMins) {
+      return slotMins >= startMins && slotMins < endMins;
+    } else {
+      return slotMins >= startMins || slotMins < endMins;
     }
-
-    // Buscar en qué bloque encaja la hora seleccionada
-    const bloqueEncontrado = cancha.pricing_blocks.find(bloque => {
-      return horaFormateada >= bloque.start_time && horaFormateada < bloque.end_time;
-    });
-
-    if (bloqueEncontrado) {
-      // Devolver el precio del bloque encontrado. (Podemos inferir que es 'pico' si el precio es mayor al promedio, o simplemente pasarlo como falso para no pintar el badge)
-      return { precio: parseFloat(bloqueEncontrado.price), esPico: false };
-    }
-
-    // Si por alguna razón la hora cae en un bache que el dueño no configuró, devolver el precio del primer bloque o el precio normal por defecto.
-    return { precio: parseFloat(cancha.pricing_blocks[0].price), esPico: false };
   };
-  // ----------------------------------------------------------------------
-
 
   const bloquesHorarios = useMemo(() => {
     const duracion = clubInfo?.slot_duration_minutes || 60;
@@ -537,35 +536,41 @@ export default function RecepcionElite() {
     const horaCierre = parseInt((clubInfo?.close_time || "23:00:00").split(":")[0], 10);
 
     const bloques = [];
-    let cur = new Date(fechaBase);
-    cur.setHours(horaApertura, 0, 0, 0);
+    let curH = horaApertura;
+    let curM = 0;
 
-    const end = new Date(fechaBase);
-    end.setHours(horaCierre, 0, 0, 0);
+    while (curH < horaCierre || (curH === horaCierre && curM === 0)) {
+      if (curH === horaCierre && curM > 0) break;
+      const periodo = curH >= 12 ? "PM" : "AM";
+      const hora12 = curH % 12 || 12;
+      const hStr = `${hora12}:${String(curM).padStart(2, "0")} ${periodo}`;
 
-    while (cur <= end) {
-      if (cur.getHours() === horaCierre && cur.getMinutes() > 0) break;
-      const hStr = cur.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: true });
       bloques.push({
         etiqueta: hStr,
-        horaInt: cur.getHours(),
-        minutosInt: cur.getMinutes(),
+        horaInt: curH,
+        minutosInt: curM,
       });
-      cur.setMinutes(cur.getMinutes() + duracion);
+
+      curM += duracion;
+      if (curM >= 60) {
+        curH += Math.floor(curM / 60);
+        curM = curM % 60;
+      }
     }
     return bloques;
-  }, [clubInfo, fechaBase]);
+  }, [clubInfo]);
 
+  // BÚSQUEDA DE RESERVA SIN CONVERSIÓN DE ZONA HORARIA LOCAL (SOLO UTC WALL-CLOCK)
   const obtenerReserva = (canchaId, bloqueDateObj) => {
     return partidosPeriodo.find((p) => {
       if (p.court_id !== canchaId) return false;
       const t = parsearFechaBD(p.scheduled_at);
       return (
-        t.getFullYear() === bloqueDateObj.getFullYear() &&
-        t.getMonth() === bloqueDateObj.getMonth() &&
-        t.getDate() === bloqueDateObj.getDate() &&
-        t.getHours() === bloqueDateObj.getHours() &&
-        t.getMinutes() === bloqueDateObj.getMinutes()
+        t.getUTCFullYear() === bloqueDateObj.getUTCFullYear() &&
+        t.getUTCMonth() === bloqueDateObj.getUTCMonth() &&
+        t.getUTCDate() === bloqueDateObj.getUTCDate() &&
+        t.getUTCHours() === bloqueDateObj.getUTCHours() &&
+        t.getUTCMinutes() === bloqueDateObj.getUTCMinutes()
       );
     });
   };
@@ -1489,43 +1494,49 @@ export default function RecepcionElite() {
         )}
 
         {/* GRILLA RESPONSIVA ADAPTABLE AL 100% */}
-        <div className="flex-1 overflow-auto p-2 sm:p-4 bg-slate-100/70">
-          <div className="flex gap-3 w-full min-w-full items-start">
+        <div className="flex-1 overflow-auto p-2 sm:p-4 bg-slate-100 relative">
+          <div className="flex gap-3 w-full min-w-full items-start relative">
             
-            {/* HORA STICKY EXTERNA */}
-            <div className="w-16 sm:w-20 shrink-0 sticky left-0 z-30 bg-slate-100/70 pr-1 flex flex-col">
-              <div className="h-[74px] bg-slate-900 text-[#00FF9D] font-black text-xs uppercase flex items-center justify-center rounded-2xl border-b-4 border-[#00FF9D] shadow-xs shrink-0">
-                HORA
-              </div>
-              <div className="flex flex-col">
-                {bloquesHorarios.map((bloque, idx) => (
-                  <div key={idx} className="h-24 flex flex-col items-center justify-center p-1 text-center bg-white border-b border-slate-200 shadow-2xs rounded-l-xl">
-                    <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
-                    <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
-                  </div>
-                ))}
+            {/* HORA STICKY EXTERNA (FONDO SÓLIDO LIMPIO SIN DEGRADADO) */}
+            <div className="w-[72px] sm:w-[84px] shrink-0 sticky left-0 z-30 flex flex-col bg-slate-100 pr-3">
+              <div className="bg-white rounded-2xl border-2 border-slate-300 shadow-md flex flex-col overflow-hidden mb-2">
+                
+                {/* ENCABEZADO "HORA" (48px + 40px = 88px) */}
+                <div className="h-[88px] bg-slate-900 text-[#00FF9D] font-black text-xs uppercase flex items-center justify-center border-b-4 border-[#00FF9D] shrink-0">
+                  HORA
+                </div>
+                
+                {/* BLOQUES DE HORA (96px exactos por fila) */}
+                <div className="flex flex-col">
+                  {bloquesHorarios.map((bloque, idx) => (
+                    <div key={idx} className="h-24 flex flex-col items-center justify-center p-1 text-center border-b border-slate-100 last:border-b-0">
+                      <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
+                      <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
             {/* CONTENEDORES DE DÍAS QUE SE ADAPTAN SEGÚN LA VISTA */}
-            <div className="flex-1 flex gap-3 min-w-0 w-full">
+            <div className="flex-1 flex gap-3 min-w-0 w-full relative z-0">
               {bloquesPorDia.map((bloqueDia) => (
                 <div
                   key={bloqueDia.diaIdx}
-                  className={`bg-white rounded-2xl border-2 border-slate-300 shadow-md flex flex-col overflow-hidden ${
+                  className={`bg-white rounded-2xl border-2 border-slate-300 shadow-md flex flex-col overflow-hidden mb-2 ${
                     vistaCalendario === "dia" ? "w-full flex-1" : "shrink-0 w-auto"
                   }`}
                 >
                   
-                  {/* ENCABEZADO DE TARJETA (DÍA) */}
-                  <div className="h-10 bg-slate-900 text-white px-3 flex items-center justify-center border-b-4 border-[#00FF9D]">
+                  {/* ENCABEZADO DE TARJETA (DÍA) - ALTURA 48px */}
+                  <div className="h-12 bg-slate-900 text-white px-3 flex items-center justify-center border-b-4 border-[#00FF9D]">
                     <h3 className="text-xs sm:text-sm font-black tracking-wider uppercase text-[#00FF9D] truncate">
                       {bloqueDia.nombreDiaLargoMayus}
                     </h3>
                   </div>
 
-                  {/* SUBENCABEZADO DE PISTAS */}
-                  <div className="h-8 flex border-b border-slate-200 bg-slate-100/80 items-center">
+                  {/* SUBENCABEZADO DE PISTAS - ALTURA 40px */}
+                  <div className="h-10 flex border-b border-slate-200 bg-slate-100/80 items-center">
                     {bloqueDia.canchas.map((col) => (
                       <div
                         key={col.keyCol}
@@ -1546,16 +1557,22 @@ export default function RecepcionElite() {
                       return (
                         <div key={idx} className={`flex h-24 border-b border-slate-100 last:border-b-0 ${esFilaPar ? "bg-white" : "bg-slate-50/50"}`}>
                           {bloqueDia.canchas.map((col) => {
-                            const dateObjSlot = new Date(bloqueDia.diaObj);
-                            dateObjSlot.setHours(bloque.horaInt, bloque.minutosInt, 0, 0);
+                            // Construcción en formato UTC Fijo (Wall-Clock sin desplazamiento por zona horaria de dispositivo)
+                            const dateObjSlot = new Date(Date.UTC(
+                              bloqueDia.diaObj.getFullYear(),
+                              bloqueDia.diaObj.getMonth(),
+                              bloqueDia.diaObj.getDate(),
+                              bloque.horaInt,
+                              bloque.minutosInt,
+                              0, 0
+                            ));
 
                             const reservado = obtenerReserva(col.cancha.id, dateObjSlot);
-                            
-                            // ---- AQUÍ SE APLICA EL NUEVO CÁLCULO POR BLOQUE DINÁMICO ----
-                            const { precio: precioOriginal } = calcularPrecioPorBloque(col.cancha, dateObjSlot);
+                            const esPico = chequearSiEsPico(dateObjSlot);
+                            const precioOriginal = esPico ? (col.cancha.price_peak || 20) : (col.cancha.price_normal || 12);
 
                             // EVALUACIÓN DE PROMOCIÓN POR LA FECHA EXACTA DE LA CELDA
-                            const slotFechaStr = `${dateObjSlot.getFullYear()}-${String(dateObjSlot.getMonth() + 1).padStart(2, '0')}-${String(dateObjSlot.getDate()).padStart(2, '0')}`;
+                            const slotFechaStr = `${dateObjSlot.getUTCFullYear()}-${String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObjSlot.getUTCDate()).padStart(2, '0')}`;
                             const promoSlot = promocionesPeriodo.find(p => p.start_date <= slotFechaStr && p.end_date >= slotFechaStr);
 
                             let precioUSD = precioOriginal;
@@ -1573,10 +1590,11 @@ export default function RecepcionElite() {
                                   esPromoAplicada = false;
                                 }
                               } else {
-                                // Como ahora es dinámico, si la promo no tiene bloques, podemos aplicar un descuento general o tomar el normal.
-                                precioUSD = promoSlot.price_normal;
+                                precioUSD = esPico ? promoSlot.price_peak : promoSlot.price_normal;
                               }
                             }
+
+                            const precioBs = precioUSD * tasaBCV;
 
                             return (
                               <div
@@ -1653,6 +1671,11 @@ export default function RecepcionElite() {
                                     onClick={() => abrirModalAgendarPOS(col.cancha, dateObjSlot, bloque.etiqueta, precioUSD)}
                                     className="h-full w-full hover:bg-emerald-50/90 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300/80 hover:border-emerald-500 transition-all shadow-2xs relative cursor-pointer opacity-80 hover:opacity-100"
                                   >
+                                    {esPico && (
+                                      <span className="absolute top-1.5 right-1.5 text-[8px] font-black uppercase bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">
+                                        Pico
+                                      </span>
+                                    )}
                                     {esPromoAplicada && (
                                       <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
                                         Promo
@@ -2139,6 +2162,7 @@ export default function RecepcionElite() {
                       </div>
 
                       <button
+                        type="button"
                         onClick={() => cancelarReserva(matchSeleccionado)}
                         disabled={procesando || esLiquidadoOficial}
                         className={`px-3 py-1.5 border font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2 cursor-pointer ${
@@ -2599,6 +2623,38 @@ export default function RecepcionElite() {
             <h3 className="text-base font-black text-slate-900">{popupNotif.title}</h3>
             <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
             <button onClick={() => setPopupNotif({ ...popupNotif, open: false })} className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl cursor-pointer">Entendido</button>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* MODAL DE CONFIRMACIÓN ACCIÓN GENERAL (ANULAR RESERVA, ETC.) */}
+      {mounted && modalConfirm.open && createPortal(
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4 text-center">
+            <span className="text-3xl block">🚨</span>
+            <h3 className="text-base font-black text-slate-900">{modalConfirm.title}</h3>
+            <p className="text-xs font-bold text-slate-600">{modalConfirm.message}</p>
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setModalConfirm({ ...modalConfirm, open: false })}
+                className="w-1/2 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl hover:bg-slate-200 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const act = modalConfirm.action;
+                  setModalConfirm({ ...modalConfirm, open: false });
+                  if (act) act();
+                }}
+                className="w-1/2 py-2.5 bg-rose-600 text-white font-black text-xs uppercase rounded-xl hover:bg-rose-700 shadow-md cursor-pointer"
+              >
+                Confirmar
+              </button>
+            </div>
           </div>
         </div>,
         document.body
