@@ -69,18 +69,30 @@ export default function PublicClubDetailPage() {
     previewComprobante: "",
   });
   const [enviandoPagoExtra, setEnviandoPagoExtra] = useState(false);
-
   useEffect(() => {
     setMounted(true);
     if (clubId) {
-      Promise.allSettled([
-        cargarDetalleClub(),
-        obtenerTasaBCV()
-      ]).finally(() => {
-        setLoading(false);
-      });
+      cargarDatosIniciales();
+    } else {
+      setLoading(false);
     }
   }, [clubId]); 
+
+  // NUEVA FUNCIÓN PARA ENCAPSULAR TODA LA CARGA INICIAL
+  async function cargarDatosIniciales() {
+    setLoading(true);
+    try {
+      // Cargar tasa BCV y Datos del Club en paralelo
+      await Promise.all([
+        obtenerTasaBCV(),
+        cargarDetalleClub()
+      ]);
+    } catch (e) {
+      console.error("Error en carga inicial:", e);
+    } finally {
+      setLoading(false);
+    }
+  } 
 
   useEffect(() => {
     if (clubId && mounted && !loading) {
@@ -221,30 +233,48 @@ export default function PublicClubDetailPage() {
     }
   }
 
-  async function cargarDetalleClub() {
+      async function cargarDetalleClub() {
     try {
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      setUser(authUser);
-
-      if (authUser) {
-        const { data: padelProf } = await supabase
-          .from("padel_profiles")
-          .select("*")
-          .eq("cuenta_id", authUser.id)
-          .maybeSingle();
-
-        setUserPadelProfile(padelProf || null);
+      // 1. OBTENER SESIÓN DE FORMA SEGURA (No falla si es null)
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session && session.user) {
+        setUser(session.user);
+        
+        // 2. Si hay usuario, intentar cargar su perfil de pádel
+        try {
+          const { data: padelProf } = await supabase
+            .from("padel_profiles")
+            .select("*")
+            .eq("cuenta_id", session.user.id)
+            .maybeSingle();
+          setUserPadelProfile(padelProf || null);
+        } catch (e) {
+          console.warn("No se pudo cargar el perfil de padel del usuario (Opcional)", e);
+        }
+      } else {
+        // No hay sesión, pero no pasa nada, continuamos cargando el club
+        setUser(null);
+        setUserPadelProfile(null);
       }
 
+      // 3. CARGAR DATOS PÚBLICOS DEL CLUB
       const { data: clubData, error: cErr } = await supabase
         .from("padel_clubs")
         .select("*")
         .eq("id", clubId)
         .maybeSingle();
 
-      if (cErr || !clubData) throw new Error("Club no encontrado.");
+      // Si no existe el club en la base de datos, ahí sí nos detenemos
+      if (cErr || !clubData) {
+        console.error("Club no encontrado en BD.");
+        setClub(null);
+        return; 
+      }
+      
       setClub(clubData);
 
+      // 4. Cargar Canchas (Públicas)
       const { data: courtsData } = await supabase
         .from("padel_courts")
         .select("*")
@@ -254,6 +284,7 @@ export default function PublicClubDetailPage() {
 
       setCanchas(courtsData || []);
 
+      // 5. Cargar Reservas / Partidos (Públicos)
       const { data: matchesData } = await supabase
         .from("padel_matches")
         .select("*, court:padel_courts(name)")
@@ -305,8 +336,9 @@ export default function PublicClubDetailPage() {
       }
     } catch (err) {
       console.error("Error cargando detalle del club:", err);
-      throw err; 
+      // BORRAMOS EL THROW ERR PARA QUE LA PÁGINA NO SE ROMPA SI FALLA ALGO MENOR
     } finally {
+      // Intentar cargar promoción al final
       cargarPromocionDelDia();
     }
   }
