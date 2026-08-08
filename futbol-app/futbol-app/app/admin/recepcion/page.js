@@ -524,11 +524,9 @@ export default function RecepcionElite() {
   };
 
   // --- LÓGICA DE PRECIOS POR BLOQUE (SINCRONIZADA CON POS Y PÚBLICO) ---
-  const calcularPrecioPorBloque = (cancha, dateObj) => {
+  const calcularPrecioPorBloque = (cancha, horaInt, minutosInt) => {
     try {
-      const hora = dateObj.getHours();
-      const minutos = dateObj.getMinutes();
-      const horaFormateada = `${String(hora).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`;
+      const horaFormateada = `${String(horaInt).padStart(2, '0')}:${String(minutosInt).padStart(2, '0')}`;
 
       if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
         const precioNormal = parseFloat(cancha.price_normal);
@@ -540,7 +538,7 @@ export default function RecepcionElite() {
       });
 
       if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price))) {
-        return { precio: parseFloat(bloqueEncontrado.price), esPico: false }; // En bloques creados por el gerente no asumimos "pico" visual, solo aplicamos su precio.
+        return { precio: parseFloat(bloqueEncontrado.price), esPico: false }; 
       }
 
       const primerPrecio = parseFloat(cancha.pricing_blocks[0].price);
@@ -787,7 +785,12 @@ export default function RecepcionElite() {
       await cargarPartidosPeriodo();
     } catch (err) {
       console.error(err);
-      mostrarNotificacion("Error al Agendar", err.message || "Error al procesar la reserva.", "error");
+      // CAPTURA DEL ERROR DE DUPLICIDAD (UNIQUE CONSTRAINT)
+      if (err.message && err.message.includes("unique_court_time")) {
+        mostrarNotificacion("Pista ya no disponible", "Alguien más acaba de confirmar una reserva para esta pista hace unos instantes.", "error");
+      } else {
+        mostrarNotificacion("Error al Agendar", err.message || "Error al procesar la reserva.", "error");
+      }
     } finally {
       setProcesando(false);
     }
@@ -1660,31 +1663,6 @@ export default function RecepcionElite() {
 
                             const reservado = obtenerReserva(col.cancha.id, dateObjSlot);
 
-                            // --- LÓGICA REPARADA Y SEGURA DE PRECIOS POR BLOQUE (IGUAL AL PÚBLICO) ---
-                            const calcularPrecioPorBloque = (cancha, horaInt, minutosInt) => {
-                              try {
-                                const horaFormateada = `${String(horaInt).padStart(2, '0')}:${String(minutosInt).padStart(2, '0')}`;
-
-                                if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
-                                  const precioNormal = parseFloat(cancha.price_normal);
-                                  return { precio: isNaN(precioNormal) ? 15 : precioNormal, esPico: false };
-                                }
-
-                                const bloqueEncontrado = cancha.pricing_blocks.find(b => {
-                                  return horaFormateada >= (b.start_time || "00:00") && horaFormateada < (b.end_time || "23:59");
-                                });
-
-                                if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price))) {
-                                  return { precio: parseFloat(bloqueEncontrado.price), esPico: false }; 
-                                }
-
-                                const primerPrecio = parseFloat(cancha.pricing_blocks[0].price);
-                                return { precio: isNaN(primerPrecio) ? 15 : primerPrecio, esPico: false };
-                              } catch (error) {
-                                return { precio: 15, esPico: false }; 
-                              }
-                            };
-
                             const { precio: precioOriginal } = calcularPrecioPorBloque(col.cancha, bloque.horaInt, bloque.minutosInt);
                             let precioUSD = precioOriginal;
 
@@ -1710,7 +1688,6 @@ export default function RecepcionElite() {
                               }
                             }
 
-                            // NUEVO: Verificación de Bloqueos en tiempo real
                             const ano = dateObjSlot.getUTCFullYear();
                             const mes = String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0');
                             const dia = String(dateObjSlot.getUTCDate()).padStart(2, '0');
@@ -1797,7 +1774,7 @@ export default function RecepcionElite() {
                                 })() : lockOcupado && (!user || lockOcupado.user_id !== user.id) ? (
                                   <div className="h-full w-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
                                     <span className="text-xl animate-pulse">⏳</span>
-                                    <p className="text-[10px] sm:text-[11px] font-black text-amber-600 mt-1 leading-tight">En proceso...</p>
+                                    <p className="text-[10px] font-black text-amber-600 mt-1 leading-tight">En proceso...</p>
                                     <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Cliente Agendando</p>
                                   </div>
                                 ) : (

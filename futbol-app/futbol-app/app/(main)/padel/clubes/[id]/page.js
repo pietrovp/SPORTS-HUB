@@ -586,9 +586,14 @@ export default function PublicClubDetailPage() {
       );
 
       await cargarDetalleClub();
-    } catch (err) {
+     } catch (err) {
       console.error("Error al procesar reserva:", err);
-      mostrarNotificacion("Error al Reservar", err.message || "Verifica los datos e inténtalo de nuevo.", "error");
+      // TRADUCIR EL ERROR DE DUPLICIDAD (UNIQUE CONSTRAINT)
+      if (err.message && err.message.includes("unique_court_time")) {
+        mostrarNotificacion("Pista ya no disponible", "Alguien más acaba de confirmar una reserva para esta pista hace unos instantes.", "error");
+      } else {
+        mostrarNotificacion("Error al Reservar", err.message || "Verifica los datos e inténtalo de nuevo.", "error");
+      }
     } finally {
       setProcesandoReserva(false);
     }
