@@ -55,18 +55,19 @@ export default function HistorialVentasPage() {
       .trim();
   };
 
-  const formatearHoraReserva = (isoString) => {
-    if (!isoString) return null;
+  const formatearHoraReserva = (dbDateString) => {
+    if (!dbDateString) return null;
     try {
-      const str = isoString.toString().replace(" ", "T");
-      const date = new Date(str.endsWith("Z") || str.includes("+") ? str : `${str}Z`);
-      if (isNaN(date.getTime())) return null;
-
-      return date.toLocaleTimeString("es-VE", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true
-      });
+      // Usamos subcadenas para evitar conversiones de Timezone del navegador
+      // Ej: "2026-08-10T15:30:00" -> hora: 15, min: 30
+      const horaStr = dbDateString.substring(11, 13);
+      const minStr = dbDateString.substring(14, 16);
+      
+      const hour = parseInt(horaStr, 10);
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const hora12 = hour % 12 || 12;
+      
+      return `${hora12}:${minStr} ${ampm}`;
     } catch (e) {
       return null;
     }
@@ -137,7 +138,9 @@ export default function HistorialVentasPage() {
 
     const cleanCliente = normalizarTexto(itemCancha.item_detail || "");
     const cleanPista = normalizarTexto(itemCancha.item_name || "");
-    const fechaVenta = new Date(venta.created_at).toDateString();
+    
+    // Comparación sin Timezone (solo los primeros 10 caracteres YYYY-MM-DD)
+    const fechaVenta = venta.created_at.substring(0, 10);
 
     let bestMatch = null;
     let maxScore = 0;
@@ -147,7 +150,7 @@ export default function HistorialVentasPage() {
       const mCliente = normalizarTexto(obtenerNombreClienteMatch(m));
       const mNotes = normalizarTexto(m.notes || "");
       const mCourt = normalizarTexto(m.court?.name || "");
-      const mDate = new Date(m.scheduled_at).toDateString();
+      const mDate = m.scheduled_at.substring(0, 10);
 
       if (cleanPista && mCourt && (cleanPista.includes(mCourt) || mCourt.includes(cleanPista))) score += 3;
       if (cleanCliente && (mCliente.includes(cleanCliente) || cleanCliente.includes(mCliente) || mNotes.includes(cleanCliente))) score += 5;
@@ -305,9 +308,11 @@ export default function HistorialVentasPage() {
 
   const ventasAgrupadas = useMemo(() => {
     return ventas.reduce((acc, venta) => {
+      // Agrupamos las ventas por la fecha en la que se emitieron
       const fechaObj = new Date(venta.created_at);
       const fechaString = fechaObj.toLocaleDateString("es-VE", { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
       const fechaMayus = fechaString.charAt(0).toUpperCase() + fechaString.slice(1);
+      
       const grupo = acc.find(g => g.fecha === fechaMayus);
       if (grupo) {
         grupo.tickets.push(venta);
@@ -418,6 +423,9 @@ export default function HistorialVentasPage() {
                                 const esExpandido = ventaExpandida === venta.id;
                                 const itemsAgrupados = agruparItemsConsumo(venta.sales_items);
 
+                                // Ajuste para renderizar la hora exacta de cobro sin timezone offset
+                                const horaCobro = venta.created_at.substring(11, 16);
+
                                 return (
                                   <React.Fragment key={venta.id}>
                                     <tr
@@ -449,7 +457,7 @@ export default function HistorialVentasPage() {
                                       </td>
                                       <td className="p-3">
                                         <p className="text-xs font-bold text-slate-600">
-                                          {new Date(venta.created_at).toLocaleTimeString("es-VE", { hour: '2-digit', minute: '2-digit', hour12: true })}
+                                          {horaCobro}
                                         </p>
                                       </td>
                                       <td className="p-3 text-right">

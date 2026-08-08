@@ -36,6 +36,7 @@ export default function PublicClubDetailPage() {
   const [club, setClub] = useState(null);
   const [canchas, setCanchas] = useState([]);
   const [partidosClub, setPartidosClub] = useState([]);
+  const [bloqueosActivos, setBloqueosActivos] = useState([]); // NUEVO: Estado para los bloqueos de 10 min
 
   // 🇻🇪 Tasa BCV Oficial
   const [tasaBCV, setTasaBCV] = useState(36.65);
@@ -48,6 +49,9 @@ export default function PublicClubDetailPage() {
   const [pasoModal, setPasoModal] = useState(1);
   const [bloqueSeleccionado, setBloqueSeleccionado] = useState(null);
   const [procesandoReserva, setProcesandoReserva] = useState(false);
+  
+  // NUEVO: Temporizador del modal
+  const [tiempoRestante, setTiempoRestante] = useState(null);
   
   const [tipoReserva, setTipoReserva] = useState("abierto");
   const [modoCompetitivo, setModoCompetitivo] = useState(true);
@@ -79,12 +83,46 @@ export default function PublicClubDetailPage() {
     }
   }, [clubId]); 
 
-  // Este useEffect separa la carga de promos para que no re-cargue TODO el club al cambiar de día.
   useEffect(() => {
     if (clubId && mounted && !loading) {
       cargarPromocionDelDia();
     }
   }, [fechaSeleccionada, clubId, mounted, loading]);
+
+  // NUEVO: Efecto para escuchar la tabla de bloqueos en tiempo real
+  useEffect(() => {
+    if (!clubId || !supabase) return;
+
+    cargarBloqueos(); // Carga inicial
+
+    const channel = supabase
+      .channel("realtime-locks")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "padel_locks" },
+        () => {
+          cargarBloqueos();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [clubId]);
+
+  // NUEVO: Efecto para el temporizador dentro del modal
+  useEffect(() => {
+    let intervalo;
+    if (modalReservaOpen && tiempoRestante !== null && tiempoRestante > 0) {
+      intervalo = setInterval(() => {
+        setTiempoRestante((prev) => prev - 1);
+      }, 1000);
+    } else if (tiempoRestante === 0 && modalReservaOpen) {
+      cerrarModalPorTiempoAgotado();
+    }
+    return () => clearInterval(intervalo);
+  }, [tiempoRestante, modalReservaOpen]);
 
   const mostrarNotificacion = (title, message, type = "info") => {
     setPopupNotif({ open: true, title, message, type });
@@ -104,13 +142,78 @@ export default function PublicClubDetailPage() {
         if (dataFallback?.promedio) return setTasaBCV(parseFloat(dataFallback.promedio));
       }
     } catch (e) {
-      console.warn("No se pudo obtener la tasa BCV en tiempo real. Se usará la tasa por defecto (36.65).", e);
+      console.warn("No se pudo obtener la tasa BCV.", e);
     }
   }
 
+  // NUEVO: Función para cargar bloqueos vigentes
+  async function cargarBloqueos() {
+    try {
+      const ahoraISO = new Date().toISOString();
+      const { data } = await supabase
+        .from("padel_locks")
+        .select("*")
+        .gt("expires_at", ahoraISO); // Solo trae los que no han expirado
+      
+      setBloqueosActivos(data || []);
+    } catch (error) {
+      console.error("Error cargando bloqueos:", error);
+    }
+  }
+
+  // NUEVO: Cuando se agota el tiempo en el modal
+  const cerrarModalPorTiempoAgotado = async () => {
+    setModalReservaOpen(false);
+    setTiempoRestante(null);
+    mostrarNotificacion(
+      "⏳ Tiempo Expirado", 
+      "Han pasado los 10 minutos. La pista ha sido liberada para otros usuarios.", 
+      "warning"
+    );
+    
+    // Si teníamos un bloque seleccionado, borramos su lock de la base de datos
+    if (bloqueSeleccionado && user) {
+      const d = bloqueSeleccionado.dateObj;
+      const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+      
+      await supabase
+        .from("padel_locks")
+        .delete()
+        .match({
+          court_id: bloqueSeleccionado.cancha.id,
+          scheduled_at: fechaFija,
+          user_id: user.id
+        });
+    }
+  };
+
+  // NUEVO: Cerrar modal manualmente también libera la pista
+  const cerrarModalManual = async () => {
+    setModalReservaOpen(false);
+    setTiempoRestante(null);
+    
+    if (bloqueSeleccionado && user) {
+      const d = bloqueSeleccionado.dateObj;
+      const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+      
+      await supabase
+        .from("padel_locks")
+        .delete()
+        .match({
+          court_id: bloqueSeleccionado.cancha.id,
+          scheduled_at: fechaFija,
+          user_id: user.id
+        });
+    }
+  };
+
   async function cargarPromocionDelDia() {
     try {
-      const hoyStr = fechaSeleccionada.toISOString().split("T")[0]; 
+      const ano = fechaSeleccionada.getFullYear();
+      const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+      const dia = String(fechaSeleccionada.getDate()).padStart(2, '0');
+      const hoyStr = `${ano}-${mes}-${dia}`;
+      
       const { data: promoActiva } = await supabase
         .from("padel_promotions")
         .select("*")
@@ -209,13 +312,12 @@ export default function PublicClubDetailPage() {
       }
     } catch (err) {
       console.error("Error cargando detalle del club:", err);
-      throw err; // Relanzamos para que Promise.allSettled lo capture si falla
+      throw err; 
     } finally {
       cargarPromocionDelDia();
     }
   }
 
-  // --- LÓGICA REPARADA Y SEGURA DE PRECIOS POR BLOQUE ---
   const calcularPrecioPorBloque = (cancha, dateObj) => {
     try {
       const hora = dateObj.getHours();
@@ -280,32 +382,76 @@ export default function PublicClubDetailPage() {
     return bloques;
   }, [club, fechaSeleccionada]);
 
-  const abrirModalTurno = (cancha, bloque, precioCalculado) => {
+  // MODIFICADO: abrirModalTurno ahora verifica y crea el bloqueo de 10 minutos
+  const abrirModalTurno = async (cancha, bloque, precioCalculado) => {
     if (!user) {
       mostrarNotificacion("Inicia Sesión", "Debes iniciar sesión para reservar una pista.", "warning");
       setTimeout(() => router.push("/login"), 1800);
       return;
     }
 
-    const precioBaseTotal = precioCalculado || cancha.price_credits || 16;
-    const precioBaseInd = precioBaseTotal / 4;
+    const d = bloque.dateObj;
+    const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
 
-    setBloqueSeleccionado({
-      cancha,
-      dateObj: bloque.dateObj,
-      horaLabel: bloque.etiqueta,
-      precioBaseTotal,
-      precioBaseInd,
-    });
+    // 1. VERIFICAR SI ALGUIEN YA LA BLOQUEÓ
+    const lockExistente = bloqueosActivos.find(l => 
+      l.court_id === cancha.id && 
+      l.scheduled_at.substring(0, 16) === fechaFija.substring(0, 16)
+    );
 
-    setTipoReserva("abierto");
-    setMetodoPago("pago_movil");
-    setMonedaAbono("USD");
-    setMontoAbono((precioBaseInd * 1.10).toFixed(2));
-    setNumReferencia("");
-    setPreviewComprobante("");
-    setPasoModal(1);
-    setModalReservaOpen(true);
+    if (lockExistente && lockExistente.user_id !== user.id) {
+      return mostrarNotificacion(
+        "Pista en proceso de reserva", 
+        "Alguien más está procesando el pago para esta pista ahora mismo. Si no completa la reserva en 10 minutos, volverá a estar disponible.", 
+        "warning"
+      );
+    }
+
+    // 2. CREAR BLOQUEO DE 10 MINUTOS
+    try {
+      setProcesandoReserva(true); // Usamos este estado momentáneamente como loading
+      
+      const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); // +10 minutos
+      
+      // Si el usuario tenía un lock previo aquí mismo, lo actualizamos. Si no, lo insertamos.
+      await supabase
+        .from("padel_locks")
+        .upsert({
+          court_id: cancha.id,
+          scheduled_at: fechaFija,
+          user_id: user.id,
+          expires_at: expiresAt
+        }, { onConflict: 'court_id, scheduled_at' });
+
+      // Iniciar el temporizador
+      setTiempoRestante(600); // 600 segundos = 10 minutos
+
+      const precioBaseTotal = precioCalculado || cancha.price_credits || 16;
+      const precioBaseInd = precioBaseTotal / 4;
+
+      setBloqueSeleccionado({
+        cancha,
+        dateObj: bloque.dateObj,
+        horaLabel: bloque.etiqueta,
+        precioBaseTotal,
+        precioBaseInd,
+      });
+
+      setTipoReserva("abierto");
+      setMetodoPago("pago_movil");
+      setMonedaAbono("USD");
+      setMontoAbono((precioBaseInd * 1.10).toFixed(2));
+      setNumReferencia("");
+      setPreviewComprobante("");
+      setPasoModal(1);
+      setModalReservaOpen(true);
+
+    } catch (e) {
+      console.error("Error al bloquear la pista:", e);
+      mostrarNotificacion("Error", "No se pudo iniciar la reserva, intenta nuevamente.", "error");
+    } finally {
+      setProcesandoReserva(false);
+    }
   };
 
   const handleCambioTipoReserva = (tipo) => {
@@ -396,12 +542,15 @@ export default function PublicClubDetailPage() {
         created_at: new Date().toISOString(),
       };
 
+      const d = bloqueSeleccionado.dateObj;
+      const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+
       const { data: newMatch, error: matchErr } = await supabase
         .from("padel_matches")
         .insert({
           club_id: clubId,
           court_id: bloqueSeleccionado.cancha.id,
-          scheduled_at: bloqueSeleccionado.dateObj.toISOString(),
+          scheduled_at: fechaFija,
           total_price: bloqueSeleccionado.precioBaseTotal,
           price_per_player: bloqueSeleccionado.precioBaseInd,
           app_fee: calculosPrecio.fee,
@@ -427,6 +576,16 @@ export default function PublicClubDetailPage() {
         team: "A",
       });
 
+      // ELIMINAR EL BLOQUEO AHORA QUE LA RESERVA ES OFICIAL
+      await supabase
+        .from("padel_locks")
+        .delete()
+        .match({
+          court_id: bloqueSeleccionado.cancha.id,
+          scheduled_at: fechaFija,
+        });
+
+      setTiempoRestante(null);
       setModalReservaOpen(false);
       
       mostrarNotificacion(
@@ -534,6 +693,14 @@ export default function PublicClubDetailPage() {
     }
   }
 
+  // Helper para mostrar minutos y segundos
+  const formatoTiempo = (segundos) => {
+    if (segundos === null) return "";
+    const m = Math.floor(segundos / 60);
+    const s = segundos % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -639,25 +806,24 @@ export default function PublicClubDetailPage() {
                 })}
               </div>
 
-                 {/* --- AVISO DE PROMOCIÓN --- */}
-        {promocionHoy && (
-          <div className="bg-rose-50 border border-rose-200 p-3 sm:p-4 rounded-2xl flex items-center gap-3 shadow-sm my-4">
-            <span className="text-3xl animate-bounce">🎁</span>
-            <div>
-              <h4 className="text-xs sm:text-sm font-black text-rose-900 uppercase tracking-tight">
-                {promocionHoy.name}
-              </h4>
-              <p className="text-[10px] sm:text-xs font-bold text-rose-700">
-                ¡Aprovecha! Precios especiales aplicados en las tarifas de hoy.
-              </p>
-            </div>
-          </div>
-        )}
-        {/* -------------------------- */}
+              {/* AVISO DE PROMOCIÓN */}
+              {promocionHoy && (
+                <div className="bg-rose-50 border border-rose-200 p-3 sm:p-4 rounded-2xl flex items-center gap-3 shadow-sm my-4">
+                  <span className="text-3xl animate-bounce">🎁</span>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-black text-rose-900 uppercase tracking-tight">
+                      {promocionHoy.name}
+                    </h4>
+                    <p className="text-[10px] sm:text-xs font-bold text-rose-700">
+                      ¡Aprovecha! Precios especiales aplicados en las tarifas de hoy.
+                    </p>
+                  </div>
+                </div>
+              )}
 
-        {/* GRILLA DE CANCHAS CON PRECIOS Y HORA PICO DINÁMICOS */}
-        <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
-          <div className="inline-min-w-full min-w-[500px] w-full">
+              {/* GRILLA DE CANCHAS CON PRECIOS Y HORA PICO DINÁMICOS */}
+              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
+                <div className="inline-min-w-full min-w-[500px] w-full">
                   
                   {/* CABECERA PISTAS */}
                   <div className="flex bg-slate-950 text-white border-b-2 border-slate-800 sticky top-0 z-30">
@@ -675,216 +841,155 @@ export default function PublicClubDetailPage() {
                   {bloquesHorarios.map((bloque, idx) => (
                     <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
                       
-                      {/* COLUMNA DE HORA STICKY */}
                       <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center sticky left-0 z-20 shadow-xs">
                         <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
                         <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
                       </div>
 
-                     {/* CELDAS PISTAS */}
-{canchas.map((cancha) => {
-  // ¿Hay un partido ocupando este bloque?
-  const partidoOcupado = partidosClub.find((m) => {
-    if (m.court_id !== cancha.id) return false;
-    const t = parsearFechaBD(m.scheduled_at);
-    return (
-      t.getFullYear() === fechaSeleccionada.getFullYear() &&
-      t.getMonth() === fechaSeleccionada.getMonth() &&
-      t.getDate() === fechaSeleccionada.getDate() &&
-      t.getHours() === bloque.horaInt &&
-      t.getMinutes() === bloque.minutosInt
-    );
-  });
+                      {/* CELDAS PISTAS */}
+                      {canchas.map((cancha) => {
+                        const ano = fechaSeleccionada.getFullYear();
+                        const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+                        const dia = String(fechaSeleccionada.getDate()).padStart(2, '0');
+                        const hora = String(bloque.horaInt).padStart(2, '0');
+                        const minutos = String(bloque.minutosInt).padStart(2, '0');
+                        const fechaSlotGrid = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
 
-  // --- LÓGICA NUEVA DE PRECIOS POR BLOQUE DINÁMICO ---
-  const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.dateObj);
-  let precioUSD = precioOriginal;
+                        const partidoOcupado = partidosClub.find((m) => {
+                          if (m.court_id !== cancha.id) return false;
+                          const fechaCitaDB = m.scheduled_at.substring(0, 16);
+                          return fechaCitaDB === fechaSlotGrid;
+                        });
 
-  if (promocionHoy) {
-    const hasBlocks =
-      promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
+                       // NUEVO: Verificación de Bloqueos en tiempo real (A prueba de espacios de Supabase)
+const lockOcupado = bloqueosActivos.find((l) => {
+  if (l.court_id !== cancha.id) return false;
+  const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
+  return fechaLockStr === fechaSlotGrid;
+});
 
-    if (hasBlocks) {
-      // Hora del bloque en formato HH:MM (ej: "07:00", "14:30")
-      const horaBotonStr = `${String(bloque.horaInt).padStart(2, "0")}:${String(
-        bloque.minutosInt
-      ).padStart(2, "0")}`;
+                        const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.dateObj);
+                        let precioUSD = precioOriginal;
 
-      const bloqueAplicable = promocionHoy.time_blocks.find((b) => {
-        return (
-          horaBotonStr >= (b.start_time || "00:00") &&
-          horaBotonStr < (b.end_time || "23:59")
-        );
-      });
+                        if (promocionHoy) {
+                          const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
+                          if (hasBlocks) {
+                            const horaBotonStr = `${hora}:${minutos}`;
+                            const bloqueAplicable = promocionHoy.time_blocks.find((b) => horaBotonStr >= (b.start_time || "00:00") && horaBotonStr < (b.end_time || "23:59"));
+                            if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
+                              precioUSD = parseFloat(bloqueAplicable.price); 
+                            } else {
+                              precioUSD = precioOriginal;
+                            }
+                          } else {
+                            const promoPrice = parseFloat(promocionHoy.price_normal);
+                            precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
+                          }
+                        }
 
-      if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
-        precioUSD = parseFloat(bloqueAplicable.price); 
-      } else {
-        precioUSD = precioOriginal;
-      }
-    } else {
-      // Promo sin bloques: aplicamos precio promocional normal general
-      const promoPrice = parseFloat(promocionHoy.price_normal);
-      precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
-    }
-  }
+                        if (partidoOcupado) {
+                          const esPrivado = partidoOcupado.is_private || partidoOcupado.match_type === "privado";
+                          const totalAbonado = Array.isArray(partidoOcupado.payments_history)
+                            ? partidoOcupado.payments_history.filter((a) => a.status === "aprobado").reduce((sum, a) => sum + parseFloat(a.amount || 0), 0)
+                            : 0;
 
-  const precioBs = precioUSD * tasaBCV;
-  // --- FIN LÓGICA NUEVA DE PRECIOS ---
+                          const canchaBaseFee = (partidoOcupado.total_price || 15) + (partidoOcupado.app_fee || (partidoOcupado.total_price || 15) * 0.1);
+                          const canchaTotalmentePagada = partidoOcupado.payment_status === "aprobado" || totalAbonado >= canchaBaseFee - 0.5;
+                          const esPendiente = !canchaTotalmentePagada && (partidoOcupado.payment_status === "pendiente_aprobacion" || partidoOcupado.payment_status === "pago_en_sitio");
+                          const esMiReserva = !!user && (partidoOcupado.created_by === user.id || (Array.isArray(partidoOcupado.players) && partidoOcupado.players.some((p) => p.user_id === user.id)));
 
-  // Si hay partido, se pinta MI RESERVA / PRIVADO / ABIERTO
-  if (partidoOcupado) {
-    const esPrivado =
-      partidoOcupado.is_private || partidoOcupado.match_type === "privado";
-    const totalAbonado = Array.isArray(partidoOcupado.payments_history)
-      ? partidoOcupado.payments_history
-          .filter((a) => a.status === "aprobado")
-          .reduce((sum, a) => sum + parseFloat(a.amount || 0), 0)
-      : 0;
+                          if (esMiReserva) {
+                            return (
+                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <button
+                                  onClick={() => abrirModalMiReserva(partidoOcupado)}
+                                  className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+                                    esPendiente ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400" : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
+                                  }`}
+                                >
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
+                                      MI RESERVA
+                                    </span>
+                                  </div>
+                                  <div className="my-0.5">
+                                    <p className="text-[11px] sm:text-[12px] font-black truncate text-white">Ver / Agregar Pago</p>
+                                    <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
+                                  </div>
+                                </button>
+                              </div>
+                            );
+                          }
 
-    const canchaBaseFee =
-      (partidoOcupado.total_price || 15) +
-      (partidoOcupado.app_fee || (partidoOcupado.total_price || 15) * 0.1);
+                          if (esPrivado) {
+                            return (
+                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">PRIVADO</span>
+                                  </div>
+                                  <p className="text-[11px] sm:text-[12px] font-black text-slate-400">Pista Reservada</p>
+                                </div>
+                              </div>
+                            );
+                          }
 
-    const canchaTotalmentePagada =
-      partidoOcupado.payment_status === "aprobado" ||
-      totalAbonado >= canchaBaseFee - 0.5;
+                          return (
+                            <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                              <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
+                                <div className={`h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+                                  esPendiente ? "bg-amber-500 text-slate-950 border-amber-600" : "bg-slate-900 text-white border-slate-800 hover:border-blue-500"
+                                }`}>
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">ABIERTO</span>
+                                    <span className="text-[9px] font-black px-1 py-0.5 bg-white/10 rounded">{partidoOcupado.players?.length || 1} / 4</span>
+                                  </div>
+                                  <p className="text-[11px] sm:text-xs font-black truncate">Cat. {partidoOcupado.category_restriction || "Libre"}</p>
+                                </div>
+                              </Link>
+                            </div>
+                          );
+                        }
 
-    const esPendiente =
-      !canchaTotalmentePagada &&
-      (partidoOcupado.payment_status === "pendiente_aprobacion" ||
-        partidoOcupado.payment_status === "pago_en_sitio");
+                        // NUEVO: Pinta el bloque de naranja si alguien lo está pagando
+                        if (lockOcupado) {
+                          const esMiBloqueo = user && lockOcupado.user_id === user.id;
+                          
+                          if (!esMiBloqueo) {
+                            return (
+                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
+                                  <span className="text-xl animate-pulse">⏳</span>
+                                  <p className="text-[10px] sm:text-[11px] font-black text-amber-600 mt-1">En proceso...</p>
+                                  <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Alguien está pagando</p>
+                                </div>
+                              </div>
+                            );
+                          }
+                        }
 
-    const esMiReserva =
-      !!user &&
-      (partidoOcupado.created_by === user.id ||
-        (Array.isArray(partidoOcupado.players) &&
-          partidoOcupado.players.some((p) => p.user_id === user.id)));
-
-    // MI RESERVA
-    if (esMiReserva) {
-      return (
-        <div
-          key={cancha.id}
-          className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
-        >
-          <button
-            onClick={() => abrirModalMiReserva(partidoOcupado)}
-            className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-              esPendiente
-                ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400"
-                : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
-            }`}
-          >
-            <div className="flex justify-between items-center w-full">
-              <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
-                MI RESERVA
-              </span>
-            </div>
-            <div className="my-0.5">
-              <p className="text-[11px] sm:text-[12px] font-black truncate text-white">
-                Ver / Agregar Pago
-              </p>
-              <p className="text-[8px] text-slate-300 font-bold">
-                Haz clic para gestionar
-              </p>
-            </div>
-          </button>
-        </div>
-      );
-    }
-
-    // RESERVA PRIVADA DE OTRO USUARIO
-    if (esPrivado) {
-      return (
-        <div
-          key={cancha.id}
-          className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
-        >
-          <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
-            <div className="flex justify-between items-center w-full">
-              <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
-                PRIVADO
-              </span>
-            </div>
-            <p className="text-[11px] sm:text-[12px] font-black text-slate-400">
-              Pista Reservada
-            </p>
-          </div>
-        </div>
-      );
-    }
-
-    // PARTIDO ABIERTO PÚBLICO
-    return (
-      <div
-        key={cancha.id}
-        className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
-      >
-        <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
-          <div
-            className={`h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-              esPendiente
-                ? "bg-amber-500 text-slate-950 border-amber-600"
-                : "bg-slate-900 text-white border-slate-800 hover:border-blue-500"
-            }`}
-          >
-            <div className="flex justify-between items-center w-full">
-              <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">
-                ABIERTO
-              </span>
-              <span className="text-[9px] font-black px-1 py-0.5 bg-white/10 rounded">
-                {partidoOcupado.players?.length || 1} / 4
-              </span>
-            </div>
-            <p className="text-[11px] sm:text-xs font-black truncate">
-              Cat. {partidoOcupado.category_restriction || "Libre"}
-            </p>
-          </div>
-        </Link>
-      </div>
-    );
-  }
-
-  // --- TURNOS LIBRES (NO HAY PARTIDO EN ESTE BLOQUE) ---
-  return (
-    <div
-      key={cancha.id}
-      className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
-    >
-      <button
-        onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
-        className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
-      >
-        {/* BADGE PROMO */}
-        {promocionHoy && (
-          <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
-            Promo
-          </span>
-        )}
-
-        <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
-          + Agendar
-        </span>
-
-        {promocionHoy ? (
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <span className="text-[8px] font-bold text-slate-400 line-through">
-              ${precioOriginal.toFixed(2)}
-            </span>
-            <span className="text-[10px] sm:text-[11px] font-black text-rose-500">
-              ${precioUSD.toFixed(2)}
-            </span>
-          </div>
-        ) : (
-          <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">
-            ${precioUSD.toFixed(2)}
-          </span>
-        )}
-      </button>
-    </div>
-  );
-})}
+                        return (
+                          <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                            <button
+                              onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
+                              className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
+                            >
+                              {promocionHoy && (
+                                <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">Promo</span>
+                              )}
+                              <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">+ Agendar</span>
+                              {promocionHoy ? (
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
+                                  <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
+                                </div>
+                              ) : (
+                                <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
+                              )}
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   ))}
                 </div>
@@ -892,7 +997,6 @@ export default function PublicClubDetailPage() {
             </div>
           </div>
         </div>
-
       </div>
 
       {/* MODAL MI RESERVA (RENDERIZADO VÍA PORTAL) */}
@@ -910,22 +1014,29 @@ export default function PublicClubDetailPage() {
           const restante = Math.max(0, totalCancha - totalAbonado);
           const pagadoTotal = restante <= 0.05;
 
+          const dbDate = matchMiReservaSel.scheduled_at;
+          const [datePart, timePart] = dbDate.split("T");
+          const [year, month, day] = datePart.split("-").map(Number);
+          const [hour, minute] = timePart.split(":").map(Number);
+          
+          const visualDate = new Date(year, month - 1, day);
+          const formattedDate = visualDate.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
+          
+          const ampm = hour >= 12 ? 'PM' : 'AM';
+          const hora12 = hour % 12 || 12;
+          const formattedTime = `${hora12}:${String(minute).padStart(2, '0')} ${ampm}`;
+
           return (
             <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={() => setModalMiReservaOpen(false)}>
               <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-lg w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
                 
-                {/* CABECERA CON COMPLEJO Y HORARIO DESTACADOS */}
                 <div className="border-b pb-3 space-y-2">
                   <div className="flex justify-between items-start">
                     <div>
-                      <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">
-                        Gestionar Mi Reserva
-                      </span>
+                      <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">Gestionar Mi Reserva</span>
                       <div className="flex items-center gap-2 mt-0.5">
                         <h3 className="text-lg font-black text-slate-900">{matchMiReservaSel.court?.name || "Pista"}</h3>
-                        <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
-                          🏟️ {club?.name}
-                        </span>
+                        <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">🏟️ {club?.name}</span>
                       </div>
                     </div>
                     <button onClick={() => setModalMiReservaOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
@@ -936,15 +1047,12 @@ export default function PublicClubDetailPage() {
                       <span className="text-base shrink-0">📅</span>
                       <div className="min-w-0">
                         <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha de Juego</span>
-                        <p className="text-xs font-black truncate capitalize mt-0.5">
-                          {new Date(matchMiReservaSel.scheduled_at).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
-                        </p>
+                        <p className="text-xs font-black truncate capitalize mt-0.5">{formattedDate}</p>
                       </div>
                     </div>
-                    
                     <div className="bg-[#00FF9D] text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1 shadow-sm">
                       <span>⏰</span>
-                      <span>{new Date(matchMiReservaSel.scheduled_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: true })}</span>
+                      <span>{formattedTime}</span>
                     </div>
                   </div>
                 </div>
@@ -966,16 +1074,12 @@ export default function PublicClubDetailPage() {
                   </div>
                   <div className="flex justify-between text-xs pt-1 border-t border-slate-800/60">
                     <span className="text-emerald-400">Abonado: ${totalAbonado.toFixed(2)}</span>
-                    <span className={restante > 0 ? "text-amber-400 font-black" : "text-slate-400"}>
-                      Restante: ${restante.toFixed(2)}
-                    </span>
+                    <span className={restante > 0 ? "text-amber-400 font-black" : "text-slate-400"}>Restante: ${restante.toFixed(2)}</span>
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <h4 className="text-xs font-black uppercase text-slate-900 tracking-wider">
-                    Comprobantes Enviados ({historialAbonos.length}):
-                  </h4>
+                  <h4 className="text-xs font-black uppercase text-slate-900 tracking-wider">Comprobantes Enviados ({historialAbonos.length}):</h4>
                   {historialAbonos.length === 0 ? (
                     <p className="text-xs font-bold text-slate-400 bg-slate-50 p-3 rounded-xl text-center">Aún no hay comprobantes registrados.</p>
                   ) : (
@@ -996,9 +1100,7 @@ export default function PublicClubDetailPage() {
                 </div>
 
                 <div className="bg-blue-50/70 border border-blue-200 p-3.5 sm:p-4 rounded-2xl space-y-3">
-                  <h4 className="text-xs font-black text-blue-950 uppercase tracking-wide">
-                    + Adjuntar Nuevo Pago / Comprobante Extra
-                  </h4>
+                  <h4 className="text-xs font-black text-blue-950 uppercase tracking-wide">+ Adjuntar Nuevo Pago / Comprobante Extra</h4>
 
                   <div className="space-y-3 text-xs font-bold text-slate-700">
                     <div>
@@ -1084,13 +1186,12 @@ export default function PublicClubDetailPage() {
         document.body
       )}
 
-      {/* MODAL PASARELA DE PAGO CLIENTE (RENDERIZADO VÍA PORTAL) */}
+      {/* MODAL PASARELA DE PAGO CLIENTE CON TEMPORIZADOR INTEGRADO */}
       {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={() => setModalReservaOpen(false)}>
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={cerrarModalManual}>
           <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 sm:space-y-5 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
             
-            {/* CABECERA MEJORADA CON NOMBRE DEL COMPLEJO Y PANEL DE FECHA Y HORA DESTACADO */}
-            <div className="border-b pb-3 space-y-2.5">
+            <div className="border-b pb-3 space-y-2.5 relative">
               <div className="flex justify-between items-start">
                 <div>
                   <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">
@@ -1103,10 +1204,17 @@ export default function PublicClubDetailPage() {
                     </span>
                   </div>
                 </div>
-                <button onClick={() => setModalReservaOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
+                <button onClick={cerrarModalManual} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
               </div>
 
-              {/* PANEL DESTACADO DE FECHA Y HORA */}
+              {/* TEMPORIZADOR FLOTANTE */}
+              {tiempoRestante !== null && (
+                <div className={`absolute top-0 right-8 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-sm ${tiempoRestante < 60 ? 'bg-rose-100 text-rose-700 border-rose-200 animate-pulse' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>
+                  <span>⏳</span>
+                  <span>{formatoTiempo(tiempoRestante)}</span>
+                </div>
+              )}
+
               <div className="bg-slate-900 text-white p-2.5 rounded-2xl flex justify-between items-center text-xs font-bold shadow-sm">
                 <div className="flex items-center gap-2 min-w-0 pr-2">
                   <span className="text-base shrink-0">📅</span>
@@ -1167,7 +1275,6 @@ export default function PublicClubDetailPage() {
             {pasoModal === 2 && (
               <div className="space-y-4 text-xs font-bold text-slate-700">
                 
-                {/* 🧾 DESGLOSE MINI FACTURA (COLORES INVERTIDOS) */}
                 <div className="bg-slate-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs">
                   <div className="flex justify-between items-start text-[#00FF9D]">
                     <span>Cancha Base ({tipoReserva === "privado" ? "Pista Completa" : "Cuota Jugador"}):</span>
@@ -1198,14 +1305,11 @@ export default function PublicClubDetailPage() {
                   </div>
                 </div>
 
-                {/* CAMPO MONTO CON SWITCH USD / VES CON CONVERSIÓN EN TIEMPO REAL */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
                   <div className="flex justify-between items-center">
                     <label className="text-[10px] font-black uppercase text-slate-500">
                       Monto a Abonar Hoy ({monedaAbono === "USD" ? "$" : "Bs."}):
                     </label>
-                    
-                    {/* SWITCH DE MONEDA USD / VES */}
                     <div className="flex items-center bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
                       <button
                         type="button"
@@ -1238,7 +1342,6 @@ export default function PublicClubDetailPage() {
                     placeholder={monedaAbono === "USD" ? "Ej. 27.50" : "Ej. 1000.00"}
                   />
 
-                  {/* BOTONES PRESET SEGÚN LA MONEDA */}
                   <div className="flex gap-1.5 pt-1">
                     <button
                       type="button"
@@ -1262,7 +1365,6 @@ export default function PublicClubDetailPage() {
                     </button>
                   </div>
 
-                  {/* CONVERSIÓN EN TIEMPO REAL */}
                   {numIngresado > 0 && (
                     <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900 mt-2">
                       <span>🧮 Conversión Tasa BCV (Bs. {tasaBCV.toFixed(2)}):</span>

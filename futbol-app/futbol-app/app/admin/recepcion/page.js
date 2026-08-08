@@ -141,6 +141,7 @@ export default function RecepcionElite() {
   const [productos, setProductos] = useState([]);
   const [busquedaProducto, setBusquedaProducto] = useState("");
   const [promocionesPeriodo, setPromocionesPeriodo] = useState([]); 
+  const [bloqueosActivos, setBloqueosActivos] = useState([]); // NUEVO: Estado para bloqueos en tiempo real
 
   // Notificaciones
   const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
@@ -218,8 +219,11 @@ export default function RecepcionElite() {
     }
   }, [clubId, diasVisibles]);
 
+  // EFECTO PARA SUPABASE REALTIME (AGREGADO padel_locks)
   useEffect(() => {
     if (!clubId || !supabase) return;
+
+    cargarBloqueos(); // Carga inicial
 
     const channel = supabase
       .channel("pos-realtime-matches-full-v41")
@@ -232,6 +236,11 @@ export default function RecepcionElite() {
         "postgres_changes",
         { event: "*", schema: "public", table: "products", filter: `club_id=eq.${clubId}` },
         () => cargarDatosGenerales()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "padel_locks" },
+        () => cargarBloqueos()
       )
       .subscribe();
 
@@ -262,6 +271,20 @@ export default function RecepcionElite() {
       }
     } catch (e) {
       console.error("Fallo al consultar BCV:", e);
+    }
+  }
+
+  // NUEVO: Función para cargar los bloqueos activos de la BD
+  async function cargarBloqueos() {
+    try {
+      const ahoraISO = new Date().toISOString();
+      const { data } = await supabase
+        .from("padel_locks")
+        .select("*")
+        .gt("expires_at", ahoraISO); 
+      setBloqueosActivos(data || []);
+    } catch (error) {
+      console.error("Error cargando bloqueos en POS:", error);
     }
   }
 
@@ -335,26 +358,18 @@ export default function RecepcionElite() {
   async function cargarPartidosPeriodo() {
     if (!clubId || diasVisibles.length === 0) return;
 
-    let inicio = new Date(Date.UTC(
-      diasVisibles[0].getFullYear(),
-      diasVisibles[0].getMonth(),
-      diasVisibles[0].getDate(),
-      0, 0, 0, 0
-    ));
+    const dIni = diasVisibles[0];
+    const inicioFijo = `${dIni.getFullYear()}-${String(dIni.getMonth() + 1).padStart(2, '0')}-${String(dIni.getDate()).padStart(2, '0')}T00:00:00`;
 
-    let fin = new Date(Date.UTC(
-      diasVisibles[diasVisibles.length - 1].getFullYear(),
-      diasVisibles[diasVisibles.length - 1].getMonth(),
-      diasVisibles[diasVisibles.length - 1].getDate(),
-      23, 59, 59, 999
-    ));
+    const dFin = diasVisibles[diasVisibles.length - 1];
+    const finFijo = `${dFin.getFullYear()}-${String(dFin.getMonth() + 1).padStart(2, '0')}-${String(dFin.getDate()).padStart(2, '0')}T23:59:59`;
 
     const { data: matches, error: matchErr } = await supabase
       .from("padel_matches")
       .select("*, court:padel_courts(name)")
       .eq("club_id", clubId)
-      .gte("scheduled_at", inicio.toISOString())
-      .lte("scheduled_at", fin.toISOString())
+      .gte("scheduled_at", inicioFijo)
+      .lte("scheduled_at", finFijo)
       .neq("status", "cancelado");
 
     if (matchErr) {
@@ -413,8 +428,6 @@ export default function RecepcionElite() {
     nueva.setDate(nueva.getDate() + offset * salto);
     setFechaBase(nueva);
   };
-
-  const irAHoy = () => setFechaBase(new Date());
 
   const canchasFiltradas = useMemo(() => {
     if (canchaFiltro === "todas") return canchas;
@@ -564,33 +577,97 @@ export default function RecepcionElite() {
   const obtenerReserva = (canchaId, bloqueDateObj) => {
     return partidosPeriodo.find((p) => {
       if (p.court_id !== canchaId) return false;
-      const t = parsearFechaBD(p.scheduled_at);
-      return (
-        t.getUTCFullYear() === bloqueDateObj.getUTCFullYear() &&
-        t.getUTCMonth() === bloqueDateObj.getUTCMonth() &&
-        t.getUTCDate() === bloqueDateObj.getUTCDate() &&
-        t.getUTCHours() === bloqueDateObj.getUTCHours() &&
-        t.getUTCMinutes() === bloqueDateObj.getUTCMinutes()
-      );
+      const fechaCitaDB = p.scheduled_at.substring(0, 16); 
+      
+      const ano = bloqueDateObj.getUTCFullYear();
+      const mes = String(bloqueDateObj.getUTCMonth() + 1).padStart(2, '0');
+      const dia = String(bloqueDateObj.getUTCDate()).padStart(2, '0');
+      const hora = String(bloqueDateObj.getUTCHours()).padStart(2, '0');
+      const minutos = String(bloqueDateObj.getUTCMinutes()).padStart(2, '0');
+      
+      const fechaSlotGrid = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
+      return fechaCitaDB === fechaSlotGrid;
     });
   };
 
-  const abrirModalAgendarPOS = (cancha, dateObj, horaLabel, precioCalculado) => {
-    const precioBaseTotal = precioCalculado || cancha.price_credits || 15;
-    const feeSugerido = precioBaseTotal * 0.10;
-    const totalSugerido = precioBaseTotal + feeSugerido;
+  // MODIFICADO: abrirModalAgendarPOS ahora bloquea la pista en padel_locks
+  const abrirModalAgendarPOS = async (cancha, dateObj, horaLabel, precioCalculado) => {
+    if (!user) return;
 
-    setBloqueAgendar({ cancha, dateObj, horaLabel, precioBaseTotal });
-    setMonedaAgendarPOS("USD");
-    setFormAgendarPOS({
-      nombreCliente: "",
-      telefonoCliente: "",
-      metodoPago: "pago_movil",
-      montoCustomUSD: totalSugerido.toFixed(2),
-      numReferencia: "",
-      previewComprobante: "",
+    // Calcular fecha fija para la bd
+    const ano = dateObj.getUTCFullYear();
+    const mes = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
+    const dia = String(dateObj.getUTCDate()).padStart(2, '0');
+    const hora = String(dateObj.getUTCHours()).padStart(2, '0');
+    const minutos = String(dateObj.getUTCMinutes()).padStart(2, '0');
+    const fechaFija = `${ano}-${mes}-${dia}T${hora}:${minutos}:00`;
+
+    // 1. Verificamos si otro usuario (o cliente web) la tiene bloqueada
+    const lockExistente = bloqueosActivos.find((l) => {
+      if (l.court_id !== cancha.id) return false;
+      const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
+      return fechaLockStr === fechaFija.substring(0, 16);
     });
-    setModalAgendarOpen(true);
+
+    if (lockExistente && lockExistente.user_id !== user.id) {
+      return mostrarNotificacion(
+        "Pista ocupada temporalmente", 
+        "Un usuario u otro cajero está procesando el pago para esta pista en este momento. Intenta de nuevo en unos minutos.", 
+        "warning"
+      );
+    }
+
+    try {
+      setProcesando(true);
+      const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); 
+      
+      await supabase
+        .from("padel_locks")
+        .upsert({
+          court_id: cancha.id,
+          scheduled_at: fechaFija,
+          user_id: user.id,
+          expires_at: expiresAt
+        }, { onConflict: 'court_id, scheduled_at' });
+
+      const precioBaseTotal = precioCalculado || cancha.price_credits || 15;
+      const feeSugerido = precioBaseTotal * 0.10;
+      const totalSugerido = precioBaseTotal + feeSugerido;
+
+      setBloqueAgendar({ cancha, dateObj, horaLabel, precioBaseTotal });
+      setMonedaAgendarPOS("USD");
+      setFormAgendarPOS({
+        nombreCliente: "",
+        telefonoCliente: "",
+        metodoPago: "pago_movil",
+        montoCustomUSD: totalSugerido.toFixed(2),
+        numReferencia: "",
+        previewComprobante: "",
+      });
+      setModalAgendarOpen(true);
+    } catch (e) {
+      console.error("Error bloqueando la pista en POS:", e);
+    } finally {
+      setProcesando(false);
+    }
+  };
+
+  // NUEVO: Cerrar modal POS manualmente libera la pista
+  const cerrarModalAgendarPOS = async () => {
+    setModalAgendarOpen(false);
+    if (bloqueAgendar && user) {
+      const d = bloqueAgendar.dateObj;
+      const fechaFija = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:00`;
+      
+      await supabase
+        .from("padel_locks")
+        .delete()
+        .match({
+          court_id: bloqueAgendar.cancha.id,
+          scheduled_at: fechaFija,
+          user_id: user.id
+        });
+    }
   };
 
   const calculosAgendarPOS = useMemo(() => {
@@ -656,12 +733,14 @@ export default function RecepcionElite() {
       const pagoCompleto = montoUSD >= totalSugerido - 0.05;
       const estadoPagoInicial = pagoCompleto ? "aprobado" : "pendiente_aprobacion";
 
+      const scheduledAtFijo = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObj.getUTCDate()).padStart(2, '0')}T${String(dateObj.getUTCHours()).padStart(2, '0')}:${String(dateObj.getUTCMinutes()).padStart(2, '0')}:00`;
+
       const { data: newMatch, error: matchErr } = await supabase
         .from("padel_matches")
         .insert({
           club_id: clubId,
           court_id: cancha.id,
-          scheduled_at: dateObj.toISOString(),
+          scheduled_at: scheduledAtFijo,
           total_price: base,
           price_per_player: base / 4,
           app_fee: fee,
@@ -685,6 +764,15 @@ export default function RecepcionElite() {
         user_id: user.id,
         team: "A",
       });
+
+      // ELIMINAR EL BLOQUEO
+      await supabase
+        .from("padel_locks")
+        .delete()
+        .match({
+          court_id: cancha.id,
+          scheduled_at: scheduledAtFijo
+        });
 
       setModalAgendarOpen(false);
       mostrarNotificacion(
@@ -1575,6 +1663,20 @@ export default function RecepcionElite() {
                             const slotFechaStr = `${dateObjSlot.getUTCFullYear()}-${String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObjSlot.getUTCDate()).padStart(2, '0')}`;
                             const promoSlot = promocionesPeriodo.find(p => p.start_date <= slotFechaStr && p.end_date >= slotFechaStr);
 
+                            // NUEVO: Verificación de Bloqueos en tiempo real
+                            const ano = dateObjSlot.getUTCFullYear();
+                            const mes = String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0');
+                            const dia = String(dateObjSlot.getUTCDate()).padStart(2, '0');
+                            const hora = String(dateObjSlot.getUTCHours()).padStart(2, '0');
+                            const minutos = String(dateObjSlot.getUTCMinutes()).padStart(2, '0');
+                            const fechaFija = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
+
+                            const lockOcupado = bloqueosActivos.find((l) => {
+                              if (l.court_id !== col.cancha.id) return false;
+                              const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
+                              return fechaLockStr === fechaFija.substring(0, 16);
+                            });
+
                             let precioUSD = precioOriginal;
                             let esPromoAplicada = false;
 
@@ -1666,7 +1768,13 @@ export default function RecepcionElite() {
                                       )}
                                     </button>
                                   );
-                                })() : (
+                                })() : lockOcupado && (!user || lockOcupado.user_id !== user.id) ? (
+                                  <div className="h-full w-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
+                                    <span className="text-xl animate-pulse">⏳</span>
+                                    <p className="text-[10px] font-black text-amber-600 mt-1 leading-tight">En proceso...</p>
+                                    <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Cliente Agendando</p>
+                                  </div>
+                                ) : (
                                   <button
                                     onClick={() => abrirModalAgendarPOS(col.cancha, dateObjSlot, bloque.etiqueta, precioUSD)}
                                     className="h-full w-full hover:bg-emerald-50/90 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300/80 hover:border-emerald-500 transition-all shadow-2xs relative cursor-pointer opacity-80 hover:opacity-100"
@@ -1897,7 +2005,7 @@ export default function RecepcionElite() {
 
       {/* MODAL AGENDAR EN POS */}
       {mounted && modalAgendarOpen && bloqueAgendar && createPortal(
-        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-3 sm:p-4" onClick={() => setModalAgendarOpen(false)}>
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-3 sm:p-4" onClick={cerrarModalAgendarPOS}>
           <div className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center border-b pb-3">
               <div>
@@ -1905,7 +2013,7 @@ export default function RecepcionElite() {
                 <h3 className="text-base sm:text-lg font-black text-slate-900 mt-0.5">{bloqueAgendar.cancha.name}</h3>
                 <p className="text-xs font-bold text-slate-500">{bloqueAgendar.horaLabel}</p>
               </div>
-              <button onClick={() => setModalAgendarOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+              <button onClick={cerrarModalAgendarPOS} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
 
             <form onSubmit={ejecutarAgendarPOS} className="space-y-3.5 text-xs font-bold text-slate-700">

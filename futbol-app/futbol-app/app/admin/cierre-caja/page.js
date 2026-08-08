@@ -182,7 +182,12 @@ export default function CierreCajaPage() {
   const [clubInfo, setClubInfo] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   
-  const [fecha, setFecha] = useState(() => new Date().toLocaleDateString('en-CA'));
+  // Extraemos manualmente la fecha en formato YYYY-MM-DD sin toLocaleDateString()
+  // para evitar problemas si el usuario está en GMT muy distantes
+  const [fecha, setFecha] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
   
   const [ventas, setVentas] = useState([]);
   const [matches, setMatches] = useState([]);
@@ -278,7 +283,7 @@ export default function CierreCajaPage() {
 
     const cleanCliente = normalizarTexto(extraerTextoLimpio(itemCancha.item_detail));
     const cleanPista = normalizarTexto(extraerTextoLimpio(itemCancha.item_name));
-    const fechaVenta = new Date(venta.created_at).toDateString();
+    const fechaVenta = venta.created_at.substring(0, 10); // "YYYY-MM-DD"
 
     let bestMatch = null;
     let maxScore = 0;
@@ -288,7 +293,7 @@ export default function CierreCajaPage() {
       const mCliente = normalizarTexto(obtenerNombreClienteMatch(m));
       const mNotes = normalizarTexto(m.notes || "");
       const mCourt = normalizarTexto(m.court?.name || "");
-      const mDate = new Date(m.scheduled_at).toDateString();
+      const mDate = m.scheduled_at.substring(0, 10); // "YYYY-MM-DD"
 
       if (cleanPista && mCourt && (cleanPista.includes(mCourt) || mCourt.includes(cleanPista))) score += 3;
       if (cleanCliente && (mCliente.includes(cleanCliente) || cleanCliente.includes(mCliente) || mNotes.includes(cleanCliente))) score += 5;
@@ -333,9 +338,9 @@ export default function CierreCajaPage() {
 
       setClubInfo(clubData);
 
-      // ZONA HORARIA LOCAL EXACTA DENTRO DEL RANGO COMPLETO DEL DÍA
-      const startOfDay = new Date(`${fechaSeleccionada}T00:00:00`).toISOString();
-      const endOfDay = new Date(`${fechaSeleccionada}T23:59:59.999`).toISOString();
+      // ZONA HORARIA LOCAL EXACTA DENTRO DEL RANGO COMPLETO DEL DÍA FORZADO COMO STRING
+      const startOfDay = `${fechaSeleccionada}T00:00:00`;
+      const endOfDay = `${fechaSeleccionada}T23:59:59`;
 
       const { data: sales, error: errSales } = await supabase
         .from("sales")
@@ -370,7 +375,7 @@ export default function CierreCajaPage() {
         setEfectivoDeclarado(cierreExistente.total_declared ? cierreExistente.total_declared.toString() : "");
         setCierreGuardado({
           ...cierreExistente,
-          closure_time: cierreExistente.closure_time || new Date(cierreExistente.created_at).toLocaleTimeString("es-VE", { hour: '2-digit', minute: '2-digit', hour12: true }),
+          closure_time: cierreExistente.closure_time || cierreExistente.created_at.substring(11, 16) + " UTC",
           cashier_name: cierreExistente.cashier_name || "Cajero Responsable",
           other_total: cierreExistente.other_total || 0,
           tickets: sales || [],
@@ -573,12 +578,16 @@ export default function CierreCajaPage() {
         ? `${userProfile.nombre || ""} ${userProfile.apellido || ""}`.trim() || userProfile.email || "Cajero Mostrador"
         : "Cajero Mostrador";
 
+      // Formatear hora de cierre sin Timezone local del browser
+      const now = new Date();
+      const horaStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
       const datosCierre = {
         club_id: userProfile?.club_id,
         closed_by: user?.id,
         cashier_name: nombreCajero,
         closure_date: fecha,
-        closure_time: new Date().toLocaleTimeString("es-VE", { hour: '2-digit', minute: '2-digit', hour12: true }),
+        closure_time: horaStr,
         total_system: resumenFinanciero.totalSistema,
         total_declared: declarado,
         difference: diferencia,
@@ -754,7 +763,7 @@ export default function CierreCajaPage() {
                     <div className="border-t border-slate-800 pt-2 flex justify-between items-center font-black">
                       <span className="uppercase text-[10px] text-slate-400">Diferencia:</span>
                       <span className={`text-base ${(cierreGuardado?.difference || 0) < -0.05 ? "text-rose-400" : "text-[#00FF9D]"}`}>
-                        {(cierreGuardado?.difference || 0) >= 0 ? "+" : ""}${(cierreGuardado?.difference || 0).toFixed(2)} USD
+                        {(cierreGuardado?.difference || 0) >= 0 ? "+" : ""}{(cierreGuardado?.difference || 0).toFixed(2)} USD
                       </span>
                     </div>
                   </div>
@@ -933,6 +942,9 @@ export default function CierreCajaPage() {
                       const tasaAplicar = venta.exchange_rate ? venta.exchange_rate : tasaBcv;
                       const esExpandido = ticketExpandido === venta.id;
                       const itemsAgrupados = agruparItemsTicket(venta.sales_items);
+                      
+                      // Ajuste de visualización de hora desde la base de datos (string cortado)
+                      const horaVenta = venta.created_at.substring(11, 16); // HH:mm
 
                       return (
                         <div key={venta.id} className="p-4 hover:bg-slate-50/80 transition-colors">
@@ -946,7 +958,7 @@ export default function CierreCajaPage() {
                                   #{venta.id.split("-")[0].toUpperCase()}
                                 </span>
                                 <span className="text-xs font-bold text-slate-600">
-                                  ⏰ {new Date(venta.created_at).toLocaleTimeString("es-VE", { hour: '2-digit', minute: '2-digit', hour12: true })}
+                                  ⏰ {horaVenta}
                                 </span>
                               </div>
                               <div>
@@ -1176,7 +1188,7 @@ export default function CierreCajaPage() {
                       {cierreGuardado.tickets.map((t) => (
                         <tr key={t.id}>
                           <td className="p-1.5 font-mono">#{t.id.split("-")[0].toUpperCase()}</td>
-                          <td className="p-1.5">{new Date(t.created_at).toLocaleTimeString("es-VE", { hour: '2-digit', minute: '2-digit', hour12: true })}</td>
+                          <td className="p-1.5">{t.created_at.substring(11, 16)}</td>
                           <td className="p-1.5 uppercase">{t.payment_method || "Efectivo"}</td>
                           <td className="p-1.5 text-right font-black">${parseFloat(t.total_amount || 0).toFixed(2)}</td>
                           <td className="p-1.5 text-right text-slate-500">

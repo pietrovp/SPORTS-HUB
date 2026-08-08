@@ -229,7 +229,10 @@ export default function PromocionesPage() {
       });
     } else {
       setEditandoId(null);
-      const hoy = new Date().toISOString().split("T")[0];
+      // ARREGLO DE TIMEZONE: Obtener fecha exacta local en lugar de UTC
+      const d = new Date();
+      const hoy = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      
       setForm({
         name: "",
         start_date: hoy,
@@ -368,7 +371,9 @@ export default function PromocionesPage() {
     setModalAbierto(true);
   };
 
-  const hoyStr = new Date().toISOString().split("T")[0];
+  // ARREGLO DE TIMEZONE: Obtener fecha exacta local en lugar de UTC
+  const d2 = new Date();
+  const hoyStr = `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, '0')}-${String(d2.getDate()).padStart(2, '0')}`;
 
   const promocionesFiltradas = useMemo(() => {
     return promociones.filter((p) => {
