@@ -36,7 +36,7 @@ export default function PublicClubDetailPage() {
   const [club, setClub] = useState(null);
   const [canchas, setCanchas] = useState([]);
   const [partidosClub, setPartidosClub] = useState([]);
-  const [bloqueosActivos, setBloqueosActivos] = useState([]); // NUEVO: Estado para los bloqueos de 10 min
+  const [bloqueosActivos, setBloqueosActivos] = useState([]); 
 
   // 🇻🇪 Tasa BCV Oficial
   const [tasaBCV, setTasaBCV] = useState(36.65);
@@ -50,7 +50,6 @@ export default function PublicClubDetailPage() {
   const [bloqueSeleccionado, setBloqueSeleccionado] = useState(null);
   const [procesandoReserva, setProcesandoReserva] = useState(false);
   
-  // NUEVO: Temporizador del modal
   const [tiempoRestante, setTiempoRestante] = useState(null);
   
   const [tipoReserva, setTipoReserva] = useState("abierto");
@@ -89,11 +88,10 @@ export default function PublicClubDetailPage() {
     }
   }, [fechaSeleccionada, clubId, mounted, loading]);
 
-  // NUEVO: Efecto para escuchar la tabla de bloqueos en tiempo real
   useEffect(() => {
     if (!clubId || !supabase) return;
 
-    cargarBloqueos(); // Carga inicial
+    cargarBloqueos(); 
 
     const channel = supabase
       .channel("realtime-locks")
@@ -111,7 +109,6 @@ export default function PublicClubDetailPage() {
     };
   }, [clubId]);
 
-  // NUEVO: Efecto para el temporizador dentro del modal
   useEffect(() => {
     let intervalo;
     if (modalReservaOpen && tiempoRestante !== null && tiempoRestante > 0) {
@@ -146,14 +143,13 @@ export default function PublicClubDetailPage() {
     }
   }
 
-  // NUEVO: Función para cargar bloqueos vigentes
   async function cargarBloqueos() {
     try {
       const ahoraISO = new Date().toISOString();
       const { data } = await supabase
         .from("padel_locks")
         .select("*")
-        .gt("expires_at", ahoraISO); // Solo trae los que no han expirado
+        .gt("expires_at", ahoraISO); 
       
       setBloqueosActivos(data || []);
     } catch (error) {
@@ -161,7 +157,6 @@ export default function PublicClubDetailPage() {
     }
   }
 
-  // NUEVO: Cuando se agota el tiempo en el modal
   const cerrarModalPorTiempoAgotado = async () => {
     setModalReservaOpen(false);
     setTiempoRestante(null);
@@ -171,7 +166,6 @@ export default function PublicClubDetailPage() {
       "warning"
     );
     
-    // Si teníamos un bloque seleccionado, borramos su lock de la base de datos
     if (bloqueSeleccionado && user) {
       const d = bloqueSeleccionado.dateObj;
       const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
@@ -187,7 +181,6 @@ export default function PublicClubDetailPage() {
     }
   };
 
-  // NUEVO: Cerrar modal manualmente también libera la pista
   const cerrarModalManual = async () => {
     setModalReservaOpen(false);
     setTiempoRestante(null);
@@ -318,11 +311,10 @@ export default function PublicClubDetailPage() {
     }
   }
 
-  const calcularPrecioPorBloque = (cancha, dateObj) => {
+  // --- LÓGICA DE PRECIOS POR BLOQUE (SINCRONIZADA CON POS) ---
+  const calcularPrecioPorBloque = (cancha, horaInt, minutosInt) => {
     try {
-      const hora = dateObj.getHours();
-      const minutos = dateObj.getMinutes();
-      const horaFormateada = `${String(hora).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`;
+      const horaFormateada = `${String(horaInt).padStart(2, '0')}:${String(minutosInt).padStart(2, '0')}`;
 
       if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
         const precioNormal = parseFloat(cancha.price_normal);
@@ -382,7 +374,6 @@ export default function PublicClubDetailPage() {
     return bloques;
   }, [club, fechaSeleccionada]);
 
-  // MODIFICADO: abrirModalTurno ahora verifica y crea el bloqueo de 10 minutos
   const abrirModalTurno = async (cancha, bloque, precioCalculado) => {
     if (!user) {
       mostrarNotificacion("Inicia Sesión", "Debes iniciar sesión para reservar una pista.", "warning");
@@ -394,10 +385,11 @@ export default function PublicClubDetailPage() {
     const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
 
     // 1. VERIFICAR SI ALGUIEN YA LA BLOQUEÓ
-    const lockExistente = bloqueosActivos.find(l => 
-      l.court_id === cancha.id && 
-      l.scheduled_at.substring(0, 16) === fechaFija.substring(0, 16)
-    );
+    const lockExistente = bloqueosActivos.find(l => {
+      if (l.court_id !== cancha.id) return false;
+      const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
+      return fechaLockStr === fechaFija.substring(0, 16);
+    });
 
     if (lockExistente && lockExistente.user_id !== user.id) {
       return mostrarNotificacion(
@@ -409,11 +401,10 @@ export default function PublicClubDetailPage() {
 
     // 2. CREAR BLOQUEO DE 10 MINUTOS
     try {
-      setProcesandoReserva(true); // Usamos este estado momentáneamente como loading
+      setProcesandoReserva(true); 
       
-      const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); // +10 minutos
+      const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); 
       
-      // Si el usuario tenía un lock previo aquí mismo, lo actualizamos. Si no, lo insertamos.
       await supabase
         .from("padel_locks")
         .upsert({
@@ -423,10 +414,9 @@ export default function PublicClubDetailPage() {
           expires_at: expiresAt
         }, { onConflict: 'court_id, scheduled_at' });
 
-      // Iniciar el temporizador
-      setTiempoRestante(600); // 600 segundos = 10 minutos
+      setTiempoRestante(600); 
 
-      const precioBaseTotal = precioCalculado || cancha.price_credits || 16;
+      const precioBaseTotal = precioCalculado || cancha.price_normal || 16;
       const precioBaseInd = precioBaseTotal / 4;
 
       setBloqueSeleccionado({
@@ -576,7 +566,6 @@ export default function PublicClubDetailPage() {
         team: "A",
       });
 
-      // ELIMINAR EL BLOQUEO AHORA QUE LA RESERVA ES OFICIAL
       await supabase
         .from("padel_locks")
         .delete()
@@ -693,7 +682,6 @@ export default function PublicClubDetailPage() {
     }
   }
 
-  // Helper para mostrar minutos y segundos
   const formatoTiempo = (segundos) => {
     if (segundos === null) return "";
     const m = Math.floor(segundos / 60);
@@ -861,29 +849,36 @@ export default function PublicClubDetailPage() {
                           return fechaCitaDB === fechaSlotGrid;
                         });
 
-                       // NUEVO: Verificación de Bloqueos en tiempo real (A prueba de espacios de Supabase)
-const lockOcupado = bloqueosActivos.find((l) => {
-  if (l.court_id !== cancha.id) return false;
-  const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
-  return fechaLockStr === fechaSlotGrid;
-});
+                        // Verificación de Bloqueos en tiempo real
+                        const lockOcupado = bloqueosActivos.find((l) => {
+                          if (l.court_id !== cancha.id) return false;
+                          const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
+                          return fechaLockStr === fechaSlotGrid;
+                        });
 
-                        const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.dateObj);
+                        // --- LÓGICA DE PRECIOS SINCRONIZADA CON POS ---
+                        const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.horaInt, bloque.minutosInt);
                         let precioUSD = precioOriginal;
+
+                        let esPromoAplicada = false;
 
                         if (promocionHoy) {
                           const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
+
                           if (hasBlocks) {
                             const horaBotonStr = `${hora}:${minutos}`;
-                            const bloqueAplicable = promocionHoy.time_blocks.find((b) => horaBotonStr >= (b.start_time || "00:00") && horaBotonStr < (b.end_time || "23:59"));
+                            const bloqueAplicable = promocionHoy.time_blocks.find((b) => {
+                              return horaBotonStr >= (b.start_time || "00:00") && horaBotonStr < (b.end_time || "23:59");
+                            });
+
                             if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
                               precioUSD = parseFloat(bloqueAplicable.price); 
-                            } else {
-                              precioUSD = precioOriginal;
+                              esPromoAplicada = true;
                             }
                           } else {
                             const promoPrice = parseFloat(promocionHoy.price_normal);
                             precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
+                            esPromoAplicada = true;
                           }
                         }
 
@@ -951,7 +946,6 @@ const lockOcupado = bloqueosActivos.find((l) => {
                           );
                         }
 
-                        // NUEVO: Pinta el bloque de naranja si alguien lo está pagando
                         if (lockOcupado) {
                           const esMiBloqueo = user && lockOcupado.user_id === user.id;
                           
@@ -974,14 +968,22 @@ const lockOcupado = bloqueosActivos.find((l) => {
                               onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
                               className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative"
                             >
-                              {promocionHoy && (
-                                <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">Promo</span>
+                              {esPromoAplicada && (
+                                <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
+                                  Promo
+                                </span>
                               )}
-                              <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">+ Agendar</span>
-                              {promocionHoy ? (
-                                <div className="flex items-center gap-1.5 mt-0.5">
-                                  <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
-                                  <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
+
+                              <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
+                                + Agendar
+                              </span>
+
+                              {esPromoAplicada ? (
+                                <div className="flex flex-col items-center">
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
+                                    <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
+                                  </div>
                                 </div>
                               ) : (
                                 <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
