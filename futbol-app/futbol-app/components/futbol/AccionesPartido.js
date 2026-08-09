@@ -32,7 +32,7 @@ export default function AccionesPartido({ partidoId, cuposLibres, estado, inscri
       if (user) {
         const [{ data: insc }, { data: perfil }] = await Promise.all([
           supabase
-            .from("partido_jugadores")
+            .from("match_players")
             .select("id")
             .eq("partido_id", partidoId)
             .eq("user_id", user.id)
@@ -96,7 +96,7 @@ export default function AccionesPartido({ partidoId, cuposLibres, estado, inscri
     }
 
     const { data: nuevaInscripcion, error: inscripcionError } = await supabase
-      .from("partido_jugadores")
+      .from("match_players")
       .insert({ partido_id: partidoId, user_id: usuario.id })
       .select("id")
       .single();
@@ -124,7 +124,7 @@ export default function AccionesPartido({ partidoId, cuposLibres, estado, inscri
     setMensaje("");
 
     const { error: deleteError } = await supabase
-      .from("partido_jugadores")
+      .from("match_players")
       .delete()
       .eq("id", inscripcionId);
 
@@ -164,7 +164,7 @@ export default function AccionesPartido({ partidoId, cuposLibres, estado, inscri
     const updates = ordenados.map((jugador, idx) => {
       const vuelta = Math.floor(idx / 2) % 2;
       const equipo = vuelta === 0 ? (idx % 2 === 0 ? 1 : 2) : (idx % 2 === 0 ? 2 : 1);
-      return supabase.from("partido_jugadores").update({ equipo }).eq("id", jugador.id);
+      return supabase.from("match_players").update({ equipo }).eq("id", jugador.id);
     });
 
     const resultados = await Promise.all(updates);
@@ -177,7 +177,7 @@ export default function AccionesPartido({ partidoId, cuposLibres, estado, inscri
     }
 
     const { error: estadoError } = await supabase
-      .from("partidos")
+      .from("matches")
       .update({ estado: "equipos_listos" })
       .eq("id", partidoId);
 

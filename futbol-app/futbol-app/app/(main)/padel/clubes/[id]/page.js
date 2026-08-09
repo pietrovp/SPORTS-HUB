@@ -260,7 +260,7 @@ export default function PublicClubDetailPage() {
 
       const { data: clubData, error: cErr } = await supabase
         .from("clubs")
-        .select("*")
+        .select("id, name, city, address, image_url, amenities, open_time, close_time, slot_duration_minutes")
         .eq("id", clubId)
         .maybeSingle();
 
@@ -274,7 +274,7 @@ export default function PublicClubDetailPage() {
 
       const { data: courtsData } = await supabase
         .from("courts")
-        .select("*")
+        .select("id, name, sport_type, price_normal, pricing_blocks")
         .eq("club_id", clubId)
         .eq("is_active", true)
         .order("court_number", { ascending: true });

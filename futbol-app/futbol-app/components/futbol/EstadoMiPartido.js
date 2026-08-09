@@ -14,7 +14,7 @@ export default function EstadoMiPartido({ partidoId, golesEquipo1, golesEquipo2,
       if (!user) return;
 
       const { data } = await supabase
-        .from("partido_jugadores")
+        .from("match_players")
         .select("equipo")
         .eq("partido_id", partidoId)
         .eq("user_id", user.id)

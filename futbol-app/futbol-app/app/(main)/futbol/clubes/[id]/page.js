@@ -240,7 +240,7 @@ export default function FutbolClubDetailPage() {
 
       const { data: clubData, error: cErr } = await supabase
         .from("clubs")
-        .select("*")
+        .select("id, name, city, address, image_url, amenities, open_time, close_time, slot_duration_minutes")
         .eq("id", clubId)
         .maybeSingle();
 
@@ -255,7 +255,7 @@ export default function FutbolClubDetailPage() {
       // Cargar Canchas Públicas filtrando EXCLUSIVAMENTE las de Fútbol
       const { data: courtsData } = await supabase
         .from("courts")
-        .select("*")
+        .select("id, name, sport_type, price_normal, pricing_blocks")
         .eq("club_id", clubId)
         .eq("is_active", true)
         .order("court_number", { ascending: true });
@@ -592,15 +592,9 @@ export default function FutbolClubDetailPage() {
       setTiempoRestante(null);
       setModalReservaOpen(false);
 
-      mostrarNotificacion(
-        "🎉 ¡Reserva Registrada!",
-        metodoPago === "efectivo"
-          ? "Reserva creada con éxito. Pagará el monto restante directamente en recepción."
-          : "📩 Comprobante enviado. La reserva queda en estado 'PENDIENTE' hasta que el club valide tu pago.",
-        "success"
-      );
+      // REDIRECCIÓN DIRECTA A LA PÁGINA DEL PARTIDO RECIÉN CREADO
+      router.push(`/futbol/partidos/${newMatch.id}`);
 
-      await cargarDetalleClub();
     } catch (err) {
       console.error("Error al procesar reserva:", err);
       if (err.message && err.message.includes("unique_court_time")) {
@@ -917,10 +911,11 @@ export default function FutbolClubDetailPage() {
                             if (esMiReserva) {
                               return (
                                 <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                  <button
-                                    onClick={() => abrirModalMiReserva(partidoOcupado)}
-                                    className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-                                      esPendiente ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400" : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
+                                  {/* REDIRECCIÓN DIRECTA A LA PÁGINA DEL PARTIDO DESDE LA GRILLA */}
+                                  <Link
+                                    href={`/futbol/partidos/${partidoOcupado.id}`}
+                                    className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all block ${
+                                      esPendiente ? "bg-amber-500 text-slate-950 border-amber-600 hover:bg-amber-400" : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
                                     }`}
                                   >
                                     <div className="flex justify-between items-center w-full">
@@ -929,10 +924,10 @@ export default function FutbolClubDetailPage() {
                                       </span>
                                     </div>
                                     <div className="my-0.5">
-                                      <p className="text-[11px] sm:text-[12px] font-black truncate text-white">Ver / Agregar Pago</p>
+                                      <p className="text-[11px] sm:text-[12px] font-black truncate text-white">Ver Partido →</p>
                                       <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
                                     </div>
-                                  </button>
+                                  </Link>
                                 </div>
                               );
                             }
@@ -1002,7 +997,7 @@ export default function FutbolClubDetailPage() {
 
       </div>
 
-      {/* MODAL MI RESERVA */}
+      {/* MODAL MI RESERVA CON ENLACE AL PARTIDO */}
       {mounted && modalMiReservaOpen && matchMiReservaSel && createPortal(
         (() => {
           const precioBase = matchMiReservaSel.total_price || 30;
@@ -1058,6 +1053,15 @@ export default function FutbolClubDetailPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* BOTÓN DIRECTO AL CENTRO DEL PARTIDO */}
+                <Link
+                  href={`/futbol/partidos/${matchMiReservaSel.id}`}
+                  className="w-full py-3 bg-[#0B0C15] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 transition-all shadow-md"
+                >
+                  <span>⚽ Ir a la página del Partido</span>
+                  <span>→</span>
+                </Link>
 
                 <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold">
                   <div className="flex justify-between text-[#00FF9D]">

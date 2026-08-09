@@ -47,7 +47,7 @@ export default function JugadorDetalle() {
       const [{ data: fProfile }, { data: misInscripciones }, { data: logrosCatalogo }, { data: logrosUsuario }] =
         await Promise.all([
           supabase.from("futbol_profiles").select("*, profiles(nombre, apellido, pais, avatar_url, fecha_nacimiento)").eq("id", idJugador).maybeSingle(),
-          supabase.from("partido_jugadores").select("partido_id, goles, equipo").eq("user_id", idJugador),
+          supabase.from("match_players").select("partido_id, goles, equipo").eq("user_id", idJugador),
           supabase.from("logros").select("*").eq("activo", true).order("created_at", { ascending: true }),
           supabase.from("user_logros").select("logro_id").eq("user_id", idJugador),
         ]);
@@ -109,7 +109,7 @@ export default function JugadorDetalle() {
         const misPartidoIds = misInscripciones.map(i => i.partido_id);
 
         const { data: partidosData } = await supabase
-          .from("partidos")
+          .from("matches")
           .select("*")
           .in("id", misPartidoIds);
 

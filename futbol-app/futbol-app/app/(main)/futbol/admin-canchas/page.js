@@ -109,7 +109,7 @@ export default function AdminCanchasDashboard() {
       if (user) {
         setUsuarioActual(user);
         const { data: sedesData, error } = await supabase
-          .from("sedes")
+          .from("clubs")
           .select("*")
           .eq("owner_id", user.id)
           .order("created_at", { ascending: true });
@@ -140,7 +140,7 @@ export default function AdminCanchasDashboard() {
       setFranjas(franjasData || []);
 
       const { data: partidosData, error: pError } = await supabase
-        .from("partidos")
+        .from("matches")
         .select("*") 
         .eq("sede_id", sedeActiva.id)
         .eq("estado", "abierto")
@@ -156,7 +156,7 @@ export default function AdminCanchasDashboard() {
         const partidoIds = partidosData.map(p => p.id);
         
         const { data: jugadoresData } = await supabase
-          .from("partido_jugadores")
+          .from("match_players")
           .select("partido_id")
           .in("partido_id", partidoIds);
 
@@ -185,7 +185,7 @@ export default function AdminCanchasDashboard() {
 
     try {
       const { data: inscripciones, error: insError } = await supabase
-        .from("partido_jugadores")
+        .from("match_players")
         .select("id, user_id")
         .eq("partido_id", partido.id);
 
@@ -220,10 +220,10 @@ export default function AdminCanchasDashboard() {
             });
           }
         }
-        await supabase.from("partido_jugadores").delete().eq("partido_id", partido.id);
+        await supabase.from("match_players").delete().eq("partido_id", partido.id);
       }
 
-      const { error: updateError } = await supabase.from("partidos").update({ estado: "cancelado" }).eq("id", partido.id);
+      const { error: updateError } = await supabase.from("matches").update({ estado: "cancelado" }).eq("id", partido.id);
 
       if (updateError) throw updateError;
 
@@ -284,7 +284,7 @@ export default function AdminCanchasDashboard() {
 
       if (editandoSede) {
         const { data: sedeActualizada, error } = await supabase
-          .from("sedes")
+          .from("clubs")
           .update({
             nombre: formData.nombre,
             direccion: formData.direccion,
@@ -301,7 +301,7 @@ export default function AdminCanchasDashboard() {
         setSedeActiva(sedeActualizada);
       } else {
         const { data: nuevaSede, error } = await supabase
-          .from("sedes")
+          .from("clubs")
           .insert({
             owner_id: usuarioActual.id,
             nombre: formData.nombre,

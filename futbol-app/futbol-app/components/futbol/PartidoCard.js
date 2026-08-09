@@ -67,7 +67,7 @@ export default function PartidoCard({ partido }) {
       }
 
       const { data } = await supabase
-        .from("partido_jugadores")
+        .from("match_players")
         .select("id")
         .eq("partido_id", partido.id)
         .eq("user_id", user.id)
@@ -119,7 +119,7 @@ export default function PartidoCard({ partido }) {
     }
 
     const { data: yaInscrito } = await supabase
-      .from("partido_jugadores")
+      .from("match_players")
       .select("id")
       .eq("partido_id", partido.id)
       .eq("user_id", user.id)
@@ -147,7 +147,7 @@ export default function PartidoCard({ partido }) {
     }
 
     const { data: nuevaInscripcion, error: inscripcionError } = await supabase
-      .from("partido_jugadores")
+      .from("match_players")
       .insert({ partido_id: partido.id, user_id: user.id })
       .select("id")
       .single();
@@ -191,7 +191,7 @@ export default function PartidoCard({ partido }) {
     }
 
     const { error: deleteError } = await supabase
-      .from("partido_jugadores")
+      .from("match_players")
       .delete()
       .eq("id", inscripcionId);
 

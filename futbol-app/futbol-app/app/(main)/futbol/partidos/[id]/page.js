@@ -13,25 +13,30 @@ import {
   useDroppable,
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { cumpleRequisito } from "@/lib/futbol/logros";
 
-const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
-const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-
+// ==========================================
+// FUNCIONES DE FECHA FORZADAS A ZONA VENEZUELA
+// ==========================================
 function formatFechaCompleta(fechaStr) {
   if (!fechaStr) return "";
   const d = new Date(fechaStr);
-  return `${DIAS[d.getDay()]}, ${d.getDate()} de ${MESES[d.getMonth()]}`;
+  return d.toLocaleDateString("es-VE", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "America/Caracas",
+  });
 }
 
 function formatHora12(fechaStr) {
   if (!fechaStr) return "";
   const d = new Date(fechaStr);
-  const horas = d.getHours();
-  const m = String(d.getMinutes()).padStart(2, "0");
-  const ampm = horas >= 12 ? "PM" : "AM";
-  const h12 = horas % 12 || 12;
-  return `${h12}:${m} ${ampm}`;
+  return d.toLocaleTimeString("es-VE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Caracas",
+  }).toUpperCase();
 }
 
 function iniciales(nombre) {
@@ -149,6 +154,16 @@ export default function FutbolPartidoDetallePage() {
   const [procesando, setProcesando] = useState(false);
   const [mensaje, setMensaje] = useState("");
 
+  // ESTADOS GESTIÓN DE PAGO
+  const [modalPagoOpen, setModalPagoOpen] = useState(false);
+  const [formPago, setFormPago] = useState({
+    monto: "",
+    metodoPago: "pago_movil",
+    numReferencia: "",
+    previewComprobante: "",
+  });
+  const [enviandoPago, setEnviandoPago] = useState(false);
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const esCreador = usuarioActual?.id === partido?.created_by;
@@ -170,7 +185,31 @@ export default function FutbolPartidoDetallePage() {
   const partidoIniciado = partido?.status === "en_curso" || partido?.status === "jugado";
   const modoDnd = partido?.status === "jugado" ? "resultado" : partido?.status === "en_curso" ? "jugando" : "armar";
 
-  // CÁLCULO DEL RESULTADO FINAL Y MVP
+  // HORAS RESTANTES PARA EL PARTIDO (POLÍTICA DE CANCELACIÓN DE 6 HORAS)
+  const horasHastaPartido = useMemo(() => {
+    if (!partido?.scheduled_at) return 999;
+    const diffMs = new Date(partido.scheduled_at).getTime() - new Date().getTime();
+    return diffMs / (1000 * 60 * 60);
+  }, [partido]);
+
+  // CÁLCULOS DE PAGOS Y ABONOS
+  const calculosPagoReserva = useMemo(() => {
+    const base = Number(partido?.total_price) || 10;
+    const fee = Number(partido?.app_fee) || (base * 0.10);
+    const totalCancha = base + fee;
+
+    const historial = Array.isArray(partido?.payments_history) ? partido.payments_history : [];
+    const totalAbonado = historial
+      .filter((a) => a.status === "aprobado" || a.status === "pendiente")
+      .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+
+    const restante = Math.max(0, totalCancha - totalAbonado);
+    const estadoPago = partido?.payment_status || (totalAbonado > 0 ? "pendiente_aprobacion" : "pendiente");
+
+    return { totalCancha, totalAbonado, restante, historial, estadoPago };
+  }, [partido]);
+
+  // RESULTADO Y MVP
   const resultadoInfo = useMemo(() => {
     if (partido?.status !== "jugado") return null;
 
@@ -186,7 +225,7 @@ export default function FutbolPartidoDetallePage() {
       g2 = equipo2.reduce((acc, j) => acc + (Number(goles[j.id]) || Number(j.goles) || 0), 0);
     }
 
-    let equipoGanador = 0; // 0 = Empate, 1 = Equipo 1, 2 = Equipo 2
+    let equipoGanador = 0;
     if (g1 > g2) equipoGanador = 1;
     else if (g2 > g1) equipoGanador = 2;
 
@@ -243,7 +282,7 @@ export default function FutbolPartidoDetallePage() {
       const { data: partidoData, error: partidoError } = await supabase
         .from("matches")
         .select(`
-          *,
+          id, created_by, scheduled_at, status, is_private, price_per_player, total_price, app_fee, match_type, score_text, winner_team, payment_status, payments_history, payment_proof_urls,
           club:clubs(name, city, address, image_url),
           court:courts(name, sport_type)
         `)
@@ -256,7 +295,6 @@ export default function FutbolPartidoDetallePage() {
       }
       setPartido(partidoData);
 
-      // INCLUIDA LA COLUMNA "goals" EN LA CONSULTA SELECT
       const { data: inscripciones } = await supabase
         .from("match_players")
         .select("id, user_id, team, goals")
@@ -363,21 +401,6 @@ export default function FutbolPartidoDetallePage() {
     setMensaje("");
 
     try {
-      if (costoInscripcion > 0) {
-        const { data: perfil } = await supabase.from("profiles").select("creditos").eq("id", usuarioActual.id).single();
-        const creditosActuales = perfil?.creditos || 0;
-
-        if (creditosActuales < costoInscripcion) {
-          setMensaje(`No tienes créditos suficientes.`);
-          setProcesando(false);
-          return;
-        }
-
-        const nuevoBalance = creditosActuales - costoInscripcion;
-        await supabase.from("profiles").update({ creditos: nuevoBalance }).eq("id", usuarioActual.id);
-        await supabase.from("credit_ledger").insert({ user_id: usuarioActual.id, match_id: partido.id, delta: -costoInscripcion, reason: "join_public_match", balance_after: nuevoBalance });
-      }
-
       const { data: insData, error: insErr } = await supabase
         .from("match_players")
         .insert({
@@ -420,13 +443,6 @@ export default function FutbolPartidoDetallePage() {
 
       if (error) throw error;
 
-      if (costoInscripcion > 0) {
-        const { data: perfil } = await supabase.from("profiles").select("creditos").eq("id", usuarioActual.id).single();
-        const nuevoBalance = (perfil?.creditos || 0) + costoInscripcion;
-        await supabase.from("profiles").update({ creditos: nuevoBalance }).eq("id", usuarioActual.id);
-        await supabase.from("credit_ledger").insert({ user_id: usuarioActual.id, match_id: partido.id, delta: costoInscripcion, reason: "cancel_match_join", balance_after: nuevoBalance });
-      }
-
       setInscrito(false);
       setInscripcionId(null);
       setJugadores(jugadores.filter(j => j.user_id !== usuarioActual.id));
@@ -436,6 +452,37 @@ export default function FutbolPartidoDetallePage() {
       console.error("Error al cancelar:", err);
       setMensaje("Error al cancelar la inscripción.");
     } finally {
+      setProcesando(false);
+    }
+  }
+
+  // CANCELACIÓN DE RESERVA POR EL ORGANIZADOR (CON ALERTA DE 6 HORAS)
+  async function cancelarReservaOrganizador() {
+    if (!partido || !usuarioActual) return;
+
+    const esMenorA6Horas = horasHastaPartido < 6;
+    let mensajeConfirmacion = "¿Estás seguro de que deseas cancelar y anular esta reserva de cancha?";
+
+    if (esMenorA6Horas) {
+      mensajeConfirmacion = "⚠️ ATENCIÓN: Falta menos de 6 horas para la reserva. Según nuestras políticas, si cancelas ahora TU DINERO / ABONO NO SERÁ REEMBOLSADO.\n\n¿Deseas cancelar la reserva y liberar la cancha de todos modos?";
+    }
+
+    if (!confirm(mensajeConfirmacion)) return;
+
+    setProcesando(true);
+    try {
+      const { error } = await supabase
+        .from("matches")
+        .update({ status: "cancelado" })
+        .eq("id", matchId);
+
+      if (error) throw error;
+
+      alert("Reserva cancelada con éxito.");
+      router.push("/futbol");
+    } catch (err) {
+      console.error("Error al cancelar reserva:", err);
+      setMensaje("Error al cancelar la reserva.");
       setProcesando(false);
     }
   }
@@ -523,12 +570,6 @@ export default function FutbolPartidoDetallePage() {
       return;
     }
 
-    if (!data || data.length === 0) {
-      setMensaje("Error: Tu usuario no coincide con el organizador (created_by) de este partido.");
-      setProcesando(false);
-      return;
-    }
-
     setJugadores((prev) => prev.map((j) => ({ ...j, equipo: eq1Ids.includes(j.id) ? 1 : 2 })));
     setMensaje("Equipos sorteados de forma equilibrada.");
     setProcesando(false);
@@ -555,159 +596,9 @@ export default function FutbolPartidoDetallePage() {
       return;
     }
 
-    if (!data || data.length === 0) {
-      setMensaje("Error: No estás registrado en la base de datos como el creador (created_by) de esta cancha.");
-      setProcesando(false);
-      return;
-    }
-
     setPartido((prev) => ({ ...prev, status: "en_curso" }));
     setMensaje("¡El partido ha comenzado!");
     setProcesando(false);
-  }
-
-  async function recalcularEstadisticasJugador(uid, inscripcionesVivas, partidoEnVivo) {
-    try {
-      const { data: historialPJ } = await supabase
-        .from("match_players")
-        .select("id, match_id, team, goals")
-        .eq("user_id", uid);
-
-      if (!historialPJ || historialPJ.length === 0) return;
-
-      const partidoIds = historialPJ.map((h) => h.match_id).filter(Boolean);
-      
-      const { data: partidosData } = await supabase
-        .from("matches")
-        .select("id, score_text, status, is_private, created_at, winner_team")
-        .in("id", partidoIds);
-      
-      const partidosMap = new Map((partidosData || []).map((p) => [p.id, p]));
-
-      const listaLimpia = [];
-      
-      for (const i of historialPJ) {
-         const pDataDB = partidosMap.get(i.match_id);
-         if (!pDataDB) continue; 
-
-         const esLive = i.match_id === partidoEnVivo.id;
-         
-         const esPrivadoMatch = esLive ? partidoEnVivo.is_private : pDataDB.is_private;
-         const estado = esLive ? partidoEnVivo.status : pDataDB.status;
-
-         if (esPrivadoMatch) continue; 
-         if (!esLive && estado !== "jugado") continue;
-
-         const golesJugador = esLive ? (inscripcionesVivas[i.id]?.goles || 0) : (Number(i.goals) || 0);
-         const equipoJugador = esLive ? (inscripcionesVivas[i.id]?.equipo || null) : (i.team === "A" ? 1 : i.team === "B" ? 2 : null);
-         
-         if (!equipoJugador) continue; 
-         
-         let gano = false;
-         let esEmpate = false;
-
-         if (esLive) {
-           gano = (equipoJugador === 1 && partidoEnVivo.ganador === "A") || (equipoJugador === 2 && partidoEnVivo.ganador === "B");
-           esEmpate = partidoEnVivo.ganador === "EMPATE";
-         } else {
-           gano = (equipoJugador === 1 && pDataDB.winner_team === "A") || (equipoJugador === 2 && pDataDB.winner_team === "B");
-           esEmpate = pDataDB.winner_team === "EMPATE";
-         }
-
-         const fechaRealDB = new Date(pDataDB.created_at).getTime();
-
-         listaLimpia.push({
-           fechaRealDB,
-           goles: golesJugador,
-           esEmpate,
-           gano,
-           esLive
-         });
-      }
-      
-      listaLimpia.sort((a,b) => a.fechaRealDB - b.fechaRealDB);
-      
-      const partidos_jugados = listaLimpia.length;
-      const goles_total = listaLimpia.reduce((acc, p) => acc + p.goles, 0);
-      const victorias = listaLimpia.filter(p => p.gano).length;
-      const derrotas = listaLimpia.filter(p => !p.gano && !p.esEmpate).length;
-      const empates = listaLimpia.filter(p => p.esEmpate).length;
-
-      const { data: todosLosLogros } = await supabase.from("logros").select("*").eq("activo", true);
-      const { data: yaDesbloqueados } = await supabase.from("user_logros").select("logro_id").eq("user_id", uid);
-      
-      const idsDesbloqueados = new Set((yaDesbloqueados || []).map((d) => d.logro_id));
-      const nuevosDesbloqueos = [];
-      
-      for (const logro of (todosLosLogros || [])) {
-         if (idsDesbloqueados.has(logro.id)) continue;
-         
-         const timestampCreacionLogro = new Date(logro.created_at).getTime();
-         
-         const partidosValidosParaEsteLogro = listaLimpia.filter(p => {
-           return p.esLive || p.fechaRealDB >= timestampCreacionLogro;
-         });
-         
-         let rachaMax = 0;
-         let rachaActual = 0;
-         partidosValidosParaEsteLogro.forEach(p => {
-           if (p.gano) { rachaActual++; rachaMax = Math.max(rachaMax, rachaActual); }
-           else { rachaActual = 0; }
-         });
-         
-         const statsParaLogro = {
-            partidos_jugados: partidosValidosParaEsteLogro.length,
-            goles_total: partidosValidosParaEsteLogro.reduce((acc, p) => acc + p.goles, 0),
-            victorias: partidosValidosParaEsteLogro.filter(p => p.gano).length,
-            max_goles_partido: partidosValidosParaEsteLogro.reduce((acc, p) => Math.max(acc, p.goles), 0),
-            racha_victorias_max: rachaMax
-         };
-         
-         if (cumpleRequisito(logro, statsParaLogro)) {
-           nuevosDesbloqueos.push(logro);
-         }
-      }
-
-      if (nuevosDesbloqueos.length > 0) {
-        await supabase.from("user_logros").insert(
-          nuevosDesbloqueos.map((l) => ({ user_id: uid, logro_id: l.id }))
-        );
-        nuevosDesbloqueos.forEach((l) => idsDesbloqueados.add(l.id));
-      }
-
-      const { data: perfilActualBase } = await supabase.from("futbol_profiles").select("rating, ritmo, tiro, pase, regate, defensa, fisico").eq("id", uid).single();
-      let bonoRatingTotal = 0;
-      const bonosExtra = {};
-
-      (todosLosLogros || []).forEach((l) => {
-        if (idsDesbloqueados.has(l.id)) {
-          const stat = String(l.stat_mejora || "").toLowerCase().trim().replace(/\s+/g, "_");
-          const valor = Number(l.valor_mejora) || 0;
-          if (["rating", "media_general", "ovr", "media", "overall"].includes(stat)) { bonoRatingTotal += valor; } 
-          else if (stat) { bonosExtra[stat] = (bonosExtra[stat] || 0) + valor; }
-        }
-      });
-
-      const rating_final = Math.min(99, 64 + bonoRatingTotal);
-      
-      const updates = { 
-        partidos_jugados, 
-        goles: goles_total, 
-        victorias, 
-        derrotas, 
-        empates, 
-        rating: rating_final 
-      };
-
-      if (perfilActualBase && Object.keys(bonosExtra).length > 0) {
-        const camposExtra = ["ritmo", "tiro", "pase", "regate", "defensa", "fisico"];
-        camposExtra.forEach((campo) => {
-          if (bonosExtra[campo] != null) updates[campo] = Math.min(99, (Number(perfilActualBase[campo]) || 50) + bonosExtra[campo]);
-        });
-      }
-
-      await supabase.from("futbol_profiles").update(updates).eq("id", uid);
-    } catch (err) { console.error(err); }
   }
 
   async function finalizarPartido() {
@@ -717,7 +608,6 @@ export default function FutbolPartidoDetallePage() {
     const g1 = equipo1.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
     const g2 = equipo2.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
 
-    // GUARDAR GOLES INDIVIDUALES EN BD CON PROMISE.ALL
     const updatesGoles = jugadores.map((j) => {
       const cantGoles = Number(goles[j.id]) || 0;
       return supabase
@@ -741,37 +631,97 @@ export default function FutbolPartidoDetallePage() {
       return; 
     }
 
-    setJugadores((prev) =>
-      prev.map((j) => ({ ...j, goles: Number(goles[j.id]) || 0 }))
-    );
     setPartido((prev) => ({ ...prev, status: "jugado", score_text: `${g1} - ${g2}` }));
-
-    if (!esPrivado) {
-      const inscripcionesVivas = {};
-      jugadores.forEach((j) => { 
-        inscripcionesVivas[j.id] = {
-          goles: Number(goles[j.id]) || 0,
-          equipo: Number(j.equipo)
-        }; 
-      });
-      
-      const partidoEnVivo = {
-        id: matchId,
-        ganador: ganador,
-        status: "jugado",
-        is_private: false
-      };
-
-      const idsUnicos = [...new Set(jugadores.map((j) => j.user_id))];
-      await Promise.all(idsUnicos.map((uid) => recalcularEstadisticasJugador(uid, inscripcionesVivas, partidoEnVivo)));
-      setMensaje(`Partido finalizado y Stats actualizadas: ${g1} - ${g2}`);
-    } else {
-      setMensaje(`Partido Privado finalizado: ${g1} - ${g2} (No suma a las Stats)`);
-    }
-
+    setJugadores((prev) => prev.map((j) => ({ ...j, goles: Number(goles[j.id]) || 0 })));
+    setMensaje(`Partido finalizado: ${g1} - ${g2}`);
     setProcesando(false);
     await cargarDatos();
   }
+
+  async function enviarAbonoExtra() {
+    if (!usuarioActual || !partido) return;
+
+    const montoValido = parseFloat(formPago.monto);
+    if (isNaN(montoValido) || montoValido <= 0) {
+      setMensaje("Ingresa un monto válido.");
+      return;
+    }
+
+    if (formPago.metodoPago !== "efectivo" && !formPago.previewComprobante && !formPago.numReferencia.trim()) {
+      setMensaje("Adjunta la imagen del comprobante o el número de referencia.");
+      return;
+    }
+
+    try {
+      setEnviandoPago(true);
+
+      const { data: userProf } = await supabase
+        .from("profiles")
+        .select("nombre, apellido, telefono")
+        .eq("id", usuarioActual.id)
+        .maybeSingle();
+
+      const nombreUsuario = userProf ? `${userProf.nombre || ""} ${userProf.apellido || ""}`.trim() : usuarioActual.email;
+      const telefonoUsuario = userProf?.telefono || "Sin teléfono";
+
+      const nuevoAbono = {
+        id: `pay-${Date.now()}`,
+        user_id: usuarioActual.id,
+        user_name: nombreUsuario,
+        user_phone: telefonoUsuario,
+        amount: montoValido,
+        method: formPago.metodoPago,
+        reference: formPago.numReferencia.trim() || "S/R",
+        receipt_url: formPago.previewComprobante || null,
+        status: formPago.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
+        created_at: new Date().toISOString(),
+      };
+
+      const historialActual = Array.isArray(partido.payments_history) ? partido.payments_history : [];
+      const historialNuevo = [...historialActual, nuevoAbono];
+
+      const proofUrlsActuales = Array.isArray(partido.payment_proof_urls) ? partido.payment_proof_urls : [];
+      const proofUrlsNuevas = formPago.previewComprobante
+        ? [...proofUrlsActuales, formPago.previewComprobante]
+        : proofUrlsActuales;
+
+      const { error: updateErr } = await supabase
+        .from("matches")
+        .update({
+          payments_history: historialNuevo,
+          payment_proof_urls: proofUrlsNuevas,
+          payment_status: "pendiente_aprobacion",
+        })
+        .eq("id", partido.id);
+
+      if (updateErr) throw updateErr;
+
+      setModalPagoOpen(false);
+      setMensaje("¡Comprobante enviado con éxito!");
+      await cargarDatos();
+    } catch (err) {
+      console.error("Error enviando comprobante extra:", err);
+      setMensaje("Error al adjuntar el comprobante.");
+    } finally {
+      setEnviandoPago(false);
+    }
+  }
+
+  const handleSeleccionarImagen = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setMensaje("Por favor selecciona una imagen válida.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setFormPago((prev) => ({ ...prev, previewComprobante: reader.result }));
+    };
+    reader.readAsDataURL(file);
+  };
 
   if (cargando) {
     return <div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin" /></div>;
@@ -825,25 +775,104 @@ export default function FutbolPartidoDetallePage() {
           </div>
         </div>
 
-        {/* CREADOR / ENLACE DE COMPARTIR */}
-        {esCreador && esPrivado && !partidoIniciado && (
-          <div className="bg-indigo-50 border-2 border-indigo-100 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-xl">👑</span>
-                <h3 className="font-black text-indigo-900 text-lg">Eres el organizador</h3>
+        {/* ORGANIZADOR: BANNER DE PAGO + ALERTA DE CANCELACIÓN DE 6 HORAS */}
+        {esCreador && partido?.status !== "cancelado" && (
+          <div className="space-y-4">
+            
+            {/* CARD DE ESTADO DE PAGO DE RESERVA */}
+            <div className={`p-5 sm:p-6 rounded-3xl border flex flex-col space-y-4 shadow-sm transition-all ${
+              calculosPagoReserva.restante === 0
+                ? "bg-emerald-50 border-emerald-200 text-emerald-950"
+                : "bg-amber-50/80 border-amber-200 text-amber-950"
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-md border ${
+                      calculosPagoReserva.restante === 0
+                        ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                        : "bg-amber-100 text-amber-900 border-amber-300"
+                    }`}>
+                      {calculosPagoReserva.restante === 0
+                        ? "✅ PAGO COMPLETO"
+                        : calculosPagoReserva.totalAbonado > 0
+                        ? "⏳ PAGO PARCIAL / EN REVISIÓN"
+                        : "⚠️ RESERVA PENDIENTE DE PAGO"}
+                    </span>
+                  </div>
+
+                  <h4 className="font-black text-base sm:text-lg">
+                    Total Reserva: <span className="text-slate-900">${calculosPagoReserva.totalCancha.toFixed(2)} USD</span>
+                  </h4>
+
+                  <p className="text-xs font-semibold opacity-90">
+                    Abonado: <span className="font-black text-emerald-700">${calculosPagoReserva.totalAbonado.toFixed(2)} USD</span> • 
+                    Falta por Pagar: <span className="font-black text-rose-600">${calculosPagoReserva.restante.toFixed(2)} USD</span>
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      setFormPago((prev) => ({
+                        ...prev,
+                        monto: calculosPagoReserva.restante > 0 ? calculosPagoReserva.restante.toFixed(2) : "",
+                      }));
+                      setModalPagoOpen(true);
+                    }}
+                    className="bg-slate-900 hover:bg-black text-[#00FF9D] font-black text-xs uppercase px-4 py-3 rounded-2xl transition-all cursor-pointer shadow-md"
+                  >
+                    💳 Registrar Pago / Comprobante
+                  </button>
+
+                  <button
+                    onClick={cancelarReservaOrganizador}
+                    disabled={procesando}
+                    className="bg-rose-500/10 hover:bg-rose-500 text-rose-700 hover:text-white border border-rose-200 font-black text-xs uppercase px-4 py-3 rounded-2xl transition-all cursor-pointer shadow-xs"
+                  >
+                    🚫 Cancelar Reserva
+                  </button>
+                </div>
               </div>
-              <p className="text-indigo-700/80 text-sm font-medium">Copia y envía la URL de esta página a tus amigos para que se unan gratis a tu partido.</p>
+
+              {/* ALERTA DE POLÍTICA DE CANCELACIÓN (6 HORAS) */}
+              <div className={`p-3 rounded-2xl text-xs font-bold flex items-center gap-2 border ${
+                horasHastaPartido < 6 
+                  ? "bg-rose-100/90 text-rose-900 border-rose-200" 
+                  : "bg-amber-100/70 text-amber-900 border-amber-200"
+              }`}>
+                <span className="text-base">⚠️</span>
+                <span>
+                  {horasHastaPartido < 6
+                    ? "Quedan menos de 6 horas para el partido. Si cancelas ahora, tu abono/dinero no será reembolsado."
+                    : "Política de Cancelación: Si cancelas con menos de 6 horas de anticipación, tu abono/pago no será reembolsado."}
+                </span>
+              </div>
+
             </div>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(window.location.href);
-                setMensaje("Enlace copiado al portapapeles.");
-              }}
-              className="bg-indigo-600 text-white font-black text-xs uppercase px-4 py-2.5 rounded-xl hover:bg-indigo-700 transition-colors shadow-sm cursor-pointer shrink-0"
-            >
-              Copiar Enlace
-            </button>
+
+            {/* COMPARTIR ENLACE */}
+            {!partidoIniciado && (
+              <div className="bg-indigo-50 border-2 border-indigo-100 rounded-3xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xl">👑</span>
+                    <h3 className="font-black text-indigo-900 text-base">Eres el organizador</h3>
+                  </div>
+                  <p className="text-indigo-700/80 text-xs font-medium">Copia y envía la URL a tus amigos para armar los equipos.</p>
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(window.location.href);
+                    setMensaje("Enlace copiado al portapapeles.");
+                  }}
+                  className="bg-indigo-600 text-white font-black text-xs uppercase px-4 py-2.5 rounded-xl hover:bg-indigo-700 transition-colors shadow-sm cursor-pointer shrink-0"
+                >
+                  Copiar Enlace
+                </button>
+              </div>
+            )}
+
           </div>
         )}
 
@@ -860,7 +889,7 @@ export default function FutbolPartidoDetallePage() {
             </div>
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Fecha</p>
-              <p className="text-sm font-black text-gray-900">{formatFechaCompleta(partido.scheduled_at)}</p>
+              <p className="text-sm font-black text-gray-900 capitalize">{formatFechaCompleta(partido.scheduled_at)}</p>
             </div>
           </div>
           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm flex items-center gap-3">
@@ -874,11 +903,10 @@ export default function FutbolPartidoDetallePage() {
           </div>
         </div>
 
-        {/* DISEÑO MEJORADO DE RESULTADO FINAL Y MVP */}
+        {/* RESULTADO FINAL Y MVP */}
         {modoDnd === "resultado" && resultadoInfo && (
           <div className="space-y-4">
             
-            {/* BANNER PRINCIPAL DE GANADOR */}
             <div className={`rounded-3xl p-6 text-center text-white shadow-xl border overflow-hidden relative ${
               resultadoInfo.equipoGanador === 1 ? "bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 border-emerald-400/30" :
               resultadoInfo.equipoGanador === 2 ? "bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 border-indigo-500/30" :
@@ -909,7 +937,6 @@ export default function FutbolPartidoDetallePage() {
               </div>
             </div>
 
-            {/* TARJETA DESTACADA DEL MVP */}
             {resultadoInfo.mvp && (
               <div className="bg-gradient-to-br from-amber-500/10 via-amber-100/50 to-orange-500/10 border-2 border-amber-400/40 rounded-3xl p-5 shadow-sm relative overflow-hidden flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-4 text-center sm:text-left">
@@ -943,7 +970,6 @@ export default function FutbolPartidoDetallePage() {
                 </div>
               </div>
             )}
-
           </div>
         )}
 
@@ -975,7 +1001,6 @@ export default function FutbolPartidoDetallePage() {
           {esCreador && partido?.status !== "jugado" ? (
             <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 relative">
-                
                 {partidoIniciado && (
                   <div className="hidden sm:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-[#0B0C15] text-[#00FF9D] rounded-full items-center justify-center font-black text-xs uppercase tracking-widest z-10 shadow-xl border-4 border-white">
                     VS
@@ -1052,7 +1077,6 @@ export default function FutbolPartidoDetallePage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 relative">
                   <div className="hidden sm:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-[#0B0C15] text-[#00FF9D] rounded-full items-center justify-center font-black text-xs uppercase tracking-widest z-10 shadow-xl border-4 border-white">VS</div>
                   
-                  {/* COLUMNA EQUIPO 1 */}
                   <div className={`rounded-3xl p-5 border transition-all ${
                     resultadoInfo?.equipoGanador === 1 ? "bg-emerald-50/60 border-emerald-300 ring-2 ring-emerald-400/20" : "bg-gray-50 border-gray-100"
                   }`}>
@@ -1072,7 +1096,6 @@ export default function FutbolPartidoDetallePage() {
 
                   <div className="flex sm:hidden justify-center my-[-1.5rem] relative z-10"><div className="w-10 h-10 bg-[#0B0C15] text-[#00FF9D] rounded-full flex items-center justify-center font-black text-xs uppercase tracking-widest shadow-xl border-4 border-white">VS</div></div>
                   
-                  {/* COLUMNA EQUIPO 2 */}
                   <div className={`rounded-3xl p-5 border transition-all ${
                     resultadoInfo?.equipoGanador === 2 ? "bg-indigo-950 text-white border-indigo-500/40 ring-2 ring-indigo-500/20" : "bg-gray-900 border-gray-800 text-white"
                   }`}>
@@ -1091,24 +1114,12 @@ export default function FutbolPartidoDetallePage() {
                   </div>
                 </div>
               )}
-              {sinAsignar.length > 0 && partidoIniciado && (
-                <div className="mt-6 bg-yellow-50 border border-yellow-100 rounded-2xl p-4">
-                  <h4 className="font-black text-center text-yellow-800 text-xs uppercase tracking-widest mb-3">Sin equipo asignado</h4>
-                  <div className="flex flex-wrap justify-center gap-2">
-                    {sinAsignar.map((jugador) => (
-                      <div key={jugador.id} className="flex items-center gap-2 p-1.5 bg-white rounded-lg shadow-sm border border-yellow-200">
-                        <p className="text-xs font-bold text-gray-800">{jugador.nombre || "Usuario"}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>
       </main>
 
-      {/* BARRA INFERIOR DE ACCIÓN FLOTANTE */}
+      {/* BARRA INFERIOR FLOTANTE */}
       {!partidoIniciado && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-slate-900/95 text-white backdrop-blur-md p-3 rounded-2xl shadow-2xl border border-slate-800 z-40 flex items-center justify-between gap-3">
           {estaInscrito ? (
@@ -1153,6 +1164,135 @@ export default function FutbolPartidoDetallePage() {
           )}
         </div>
       )}
+
+      {/* MODAL GESTIÓN DE PAGO Y SUBIDA DE COMPROBANTES */}
+      {modalPagoOpen && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" onClick={() => setModalPagoOpen(false)}>
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start border-b pb-3">
+              <div>
+                <h3 className="text-lg font-black text-slate-900">Gestión de Pago de Reserva</h3>
+                <p className="text-xs font-semibold text-slate-500">Cancha: {partido.court?.name}</p>
+              </div>
+              <button onClick={() => setModalPagoOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
+            </div>
+
+            <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold">
+              <div className="flex justify-between text-[#00FF9D]">
+                <span>Total Reserva Cancha:</span>
+                <span className="font-black">${calculosPagoReserva.totalCancha.toFixed(2)} USD</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Total Abonado:</span>
+                <span>${calculosPagoReserva.totalAbonado.toFixed(2)} USD</span>
+              </div>
+              <div className="flex justify-between text-amber-400 font-black border-t border-slate-800 pt-2">
+                <span>Restante por Pagar:</span>
+                <span>${calculosPagoReserva.restante.toFixed(2)} USD</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-xs font-black uppercase text-slate-900">Comprobantes Registrados ({calculosPagoReserva.historial.length}):</h4>
+              <div className="space-y-2 max-h-32 overflow-y-auto">
+                {calculosPagoReserva.historial.length === 0 ? (
+                  <p className="text-xs text-slate-400 font-medium text-center py-2 bg-slate-50 rounded-xl">Aún no hay comprobantes registrados.</p>
+                ) : (
+                  calculosPagoReserva.historial.map((ab, idx) => (
+                    <div key={ab.id || idx} className="bg-slate-50 border p-2.5 rounded-xl flex justify-between items-center text-xs">
+                      <div>
+                        <p className="font-black text-slate-900">{ab.user_name || "Comprobante"}</p>
+                        <p className="text-[10px] text-slate-500 font-bold uppercase">{ab.method} • Ref: {ab.reference}</p>
+                      </div>
+                      <span className="font-black text-slate-900">${parseFloat(ab.amount || 0).toFixed(2)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="bg-emerald-50/70 border border-emerald-200 p-4 rounded-2xl space-y-3 text-xs font-bold">
+              <h4 className="font-black text-emerald-950 uppercase">+ Adjuntar Nuevo Comprobante / Abono</h4>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Monto que Pagas ($)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formPago.monto}
+                  onChange={(e) => setFormPago({ ...formPago, monto: e.target.value })}
+                  className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-black text-slate-900 outline-none"
+                  placeholder="Ej. 11.00"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Método de Pago</label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { id: "pago_movil", label: "📱 Pago Móvil" },
+                    { id: "zelle", label: "🇺🇸 Zelle" },
+                    { id: "efectivo", label: "💵 En Sitio" },
+                  ].map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setFormPago({ ...formPago, metodoPago: m.id })}
+                      className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all ${
+                        formPago.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-white text-slate-600 border-slate-200"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {formPago.metodoPago !== "efectivo" && (
+                <>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Número de Referencia</label>
+                    <input
+                      type="text"
+                      placeholder="Ej. #123456"
+                      value={formPago.numReferencia}
+                      onChange={(e) => setFormPago({ ...formPago, numReferencia: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Foto / Captura del Comprobante</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleSeleccionarImagen}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-slate-900 file:text-[#00FF9D]"
+                    />
+
+                    {formPago.previewComprobante && (
+                      <div className="mt-2 relative rounded-xl overflow-hidden border border-slate-200 max-h-28 bg-slate-950 flex items-center justify-center">
+                        <img src={formPago.previewComprobante} alt="Preview Comprobante" className="max-h-28 object-contain" />
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={enviarAbonoExtra}
+                disabled={enviandoPago}
+                className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-xl shadow-md mt-1 cursor-pointer"
+              >
+                {enviandoPago ? "Enviando Comprobante..." : "+ Enviar Comprobante Adicional"}
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

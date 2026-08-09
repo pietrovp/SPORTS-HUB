@@ -4,68 +4,90 @@ import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
-// COMPONENTE VISUAL PARA AVATARES DE JUGADORES EN LA TARJETA
+// COMPONENTE VISUAL MEJORADO PARA AVATARES DE JUGADORES
 function AvataresJugadores({ jugadores = [], cuposTotales = 14 }) {
-  const visibles = jugadores.slice(0, 4);
-  const sobrantes = Math.max(0, jugadores.length - 4);
-  const vacios = Math.max(0, Math.min(3, cuposTotales - jugadores.length));
+  const maxVisibles = 4;
+  const inscritosCount = jugadores.length;
+  const visibles = jugadores.slice(0, maxVisibles);
+  const sobrantes = Math.max(0, inscritosCount - maxVisibles);
+
+  // Círculos vacíos con opacidad decreciente (60%, 40%, 20%)
+  const vaciosAMostrar = Math.max(0, maxVisibles - visibles.length);
+  const opacidades = ["opacity-60", "opacity-40", "opacity-20"];
 
   return (
     <div className="bg-slate-50/80 p-3 rounded-2xl border border-slate-100 flex items-center justify-between">
       <div className="flex items-center gap-2 overflow-hidden">
-        <div className="flex -space-x-2 shrink-0">
+        <div className="flex -space-x-3 shrink-0">
+          {/* Avatares reales de jugadores inscritos */}
           {visibles.map((j, idx) => (
             <div
               key={j.id || idx}
-              className="w-9 h-9 rounded-full bg-slate-800 text-[#00FF9D] ring-2 ring-white flex items-center justify-center font-black text-xs overflow-hidden shadow-sm shrink-0"
-              title={j.profile?.nombre || "Jugador"}
+              className="w-10 h-10 rounded-full bg-slate-900 text-[#00FF9D] ring-2 ring-white flex items-center justify-center font-black text-xs overflow-hidden shadow-sm shrink-0 z-10"
+              title={j.profile?.nombre || j.nombre || "Jugador"}
             >
-              {j.profile?.avatar_url ? (
+              {j.profile?.avatar_url || j.avatarUrl ? (
                 <img
-                  src={j.profile.avatar_url}
+                  src={j.profile?.avatar_url || j.avatarUrl}
                   alt="Avatar"
                   className="w-full h-full object-cover"
                 />
               ) : (
-                (j.profile?.nombre?.[0] || "J").toUpperCase()
+                ((j.profile?.nombre || j.nombre || "J")[0]).toUpperCase()
               )}
             </div>
           ))}
 
-          {/* CÍRCULOS TRANSLÚCIDOS/PUNTEADOS PARA INDICAR CUPOS ABIERTOS */}
-          {Array.from({ length: vacios }).map((_, i) => (
+          {/* Círculos punteados con opacidad progresiva */}
+          {Array.from({ length: vaciosAMostrar }).map((_, i) => (
             <div
               key={`empty-${i}`}
-              className="w-9 h-9 rounded-full bg-white/70 border-2 border-dashed border-slate-200 text-slate-300 flex items-center justify-center shrink-0 opacity-60"
+              className={`w-10 h-10 rounded-full bg-slate-100/60 border-2 border-dashed border-slate-300 text-slate-300 flex items-center justify-center shrink-0 ${
+                opacidades[i] || "opacity-20"
+              }`}
             >
-              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+              <svg className="w-4 h-4 text-slate-400" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
               </svg>
             </div>
           ))}
         </div>
 
+        {/* Badge para mostrar cuántos jugadores adicionales hay */}
         {sobrantes > 0 && (
-          <span className="text-[10px] font-black text-slate-500 bg-slate-200/60 px-2 py-1 rounded-full shrink-0">
-            +{sobrantes} más
+          <span className="text-[11px] font-black text-emerald-800 bg-emerald-100/90 border border-emerald-200 px-2.5 py-1 rounded-full shrink-0 shadow-2xs ml-1">
+            +{sobrantes}
           </span>
         )}
       </div>
 
       <div className="text-right shrink-0">
-        <span className="text-[10px] font-black text-slate-400 block uppercase tracking-wider">Inscritos</span>
-        <span className="text-xs font-black text-slate-800">{jugadores.length}/{cuposTotales}</span>
+        <span className="text-[10px] font-black text-slate-400 block uppercase tracking-wider">INSCRITOS</span>
+        <span className="text-sm font-black text-slate-900">{inscritosCount}/{cuposTotales}</span>
       </div>
     </div>
   );
 }
 
-// TARJETA REUTILIZABLE DE PARTIDO DE FÚTBOL
+// TARJETA DE PARTIDO CON FORMATO HORARIO EN ZONA CARACAS
 function TarjetaFutbolPartido({ match, esHistorial = false }) {
   const esPrivado = match.is_private || match.match_type === "privado";
   const dateObj = new Date(match.scheduled_at);
-  const fechaFormat = dateObj.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" });
-  const horaFormat = dateObj.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: true });
+
+  // Formato forzado a la zona horaria de Venezuela (America/Caracas)
+  const fechaFormat = dateObj.toLocaleDateString("es-VE", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "America/Caracas",
+  });
+
+  const horaFormat = dateObj.toLocaleTimeString("es-VE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Caracas",
+  }).toUpperCase();
 
   const enCurso = match.status === "en_curso";
   const finalizado = match.status === "jugado";
@@ -79,7 +101,6 @@ function TarjetaFutbolPartido({ match, esHistorial = false }) {
         : "bg-white border-slate-200"
     }`}>
       <div className="space-y-3">
-        {/* HEADER DE LA TARJETA */}
         <div className="flex justify-between items-start gap-2">
           <span className={`text-[10px] font-black uppercase tracking-wider ${finalizado ? "text-slate-400" : "text-emerald-600"}`}>
             {match.club?.name || "Complejo Deportivo"}
@@ -100,7 +121,6 @@ function TarjetaFutbolPartido({ match, esHistorial = false }) {
           </div>
         </div>
 
-        {/* NOMBRE DE CANCHA Y HORARIO */}
         <h3 className={`text-base font-black truncate ${finalizado ? "text-white" : "text-slate-900"}`}>
           ⚽ {match.court?.name || "Cancha de Fútbol"}
         </h3>
@@ -108,23 +128,20 @@ function TarjetaFutbolPartido({ match, esHistorial = false }) {
         <div className={`p-2.5 rounded-2xl border flex justify-between items-center text-xs font-bold ${
           finalizado ? "bg-slate-800/80 border-slate-700 text-slate-300" : "bg-slate-50 border-slate-100 text-slate-700"
         }`}>
-          <span>📅 {fechaFormat}</span>
+          <span className="capitalize">📅 {fechaFormat}</span>
           <span>⏰ {horaFormat}</span>
         </div>
 
-        {/* SI ESTÁ FINALIZADO: MOSTRAR MARCADOR DE RESULTADO */}
         {finalizado ? (
           <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-3 text-center space-y-1">
             <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest block">Resultado Final</span>
             <span className="text-2xl font-black text-[#00FF9D] tracking-tight">{match.score_text || "Finalizado"}</span>
           </div>
         ) : (
-          /* MUESTRA DE AVATARES DE JUGADORES */
           <AvataresJugadores jugadores={match.players || []} cuposTotales={14} />
         )}
       </div>
 
-      {/* BOTÓN DE ACCIÓN */}
       <Link
         href={`/futbol/partidos/${match.id}`}
         className={`w-full py-3 font-black text-xs uppercase tracking-wider rounded-2xl text-center block transition-colors shadow-xs ${
@@ -233,18 +250,16 @@ export default function FutbolPartidosPage() {
     }
   }
 
-  // 1. MIS PARTIDOS ACTIVOS Y RESERVAS (Solo programados y en_curso)
   const misPartidosActivos = useMemo(() => {
     if (!user) return [];
     return matches.filter((m) => {
-      if (m.status === "jugado") return false; // Excluir partidos terminados
+      if (m.status === "jugado") return false;
       const soyCreador = m.created_by === user.id;
       const soyJugador = m.players?.some((p) => p.user_id === user.id);
       return soyCreador || soyJugador;
     });
   }, [matches, user]);
 
-  // 2. PARTIDOS ABIERTOS DE LA COMUNIDAD (Solo públicos programados)
   const partidosAbiertos = useMemo(() => {
     return matches.filter((m) => {
       if (m.status !== "programado") return false;
@@ -255,7 +270,6 @@ export default function FutbolPartidosPage() {
     });
   }, [matches, user]);
 
-  // 3. HISTORIAL DE PARTIDOS FINALIZADOS (Sección Inferior)
   const historialPartidos = useMemo(() => {
     return matches.filter((m) => m.status === "jugado");
   }, [matches]);
@@ -272,7 +286,6 @@ export default function FutbolPartidosPage() {
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 space-y-8">
       <div className="mx-auto max-w-7xl space-y-8">
 
-        {/* HEADER */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200/80 pb-5">
           <div>
             <span className="text-xs font-black uppercase tracking-widest text-emerald-600">Sports Hub · Fútbol</span>
@@ -290,7 +303,6 @@ export default function FutbolPartidosPage() {
           </Link>
         </div>
 
-        {/* 1. SECCIÓN: MIS PARTIDOS Y RESERVAS ACTIVAS */}
         {user && (
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
@@ -311,7 +323,7 @@ export default function FutbolPartidosPage() {
                 </Link>
               </div>
             ) : (
-              <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin scrollbar-thumb-slate-300">
+              <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin">
                 {misPartidosActivos.map((match) => (
                   <TarjetaFutbolPartido key={match.id} match={match} />
                 ))}
@@ -320,7 +332,6 @@ export default function FutbolPartidosPage() {
           </div>
         )}
 
-        {/* 2. SECCIÓN: PARTIDOS ABIERTOS (COMUNIDAD) */}
         <div className="space-y-4 pt-2">
           <div className="flex items-center gap-2 px-1">
             <span className="text-lg">🌐</span>
@@ -345,7 +356,7 @@ export default function FutbolPartidosPage() {
               </Link>
             </div>
           ) : (
-            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin scrollbar-thumb-slate-300">
+            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin">
               {partidosAbiertos.map((match) => (
                 <TarjetaFutbolPartido key={match.id} match={match} />
               ))}
@@ -353,7 +364,6 @@ export default function FutbolPartidosPage() {
           )}
         </div>
 
-        {/* 3. SECCIÓN: HISTORIAL DE PARTIDOS ANTERIORES (FINALIZADOS) */}
         {historialPartidos.length > 0 && (
           <div className="space-y-4 pt-6 border-t border-slate-200">
             <div className="flex items-center gap-2 px-1">
@@ -364,7 +374,7 @@ export default function FutbolPartidosPage() {
               </span>
             </div>
 
-            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin scrollbar-thumb-slate-300">
+            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin">
               {historialPartidos.map((match) => (
                 <TarjetaFutbolPartido key={match.id} match={match} esHistorial={true} />
               ))}
