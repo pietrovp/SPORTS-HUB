@@ -19,7 +19,7 @@ const NAV_POR_DEPORTE = {
     nombre: "Fútbol",
     items: [
       { href: "/futbol", label: "Partidos" },
-      { href: "/futbol/reservar", label: "Reservar" },
+      { href: "/futbol/clubes", label: "Clubes" },
       { href: "/futbol/jugadores", label: "Jugadores" },
       { href: "/futbol/perfil", label: "Mi carta" },
     ],
@@ -163,6 +163,7 @@ export default function Navbar() {
       <nav className="w-full bg-white/90 border-b border-gray-200 sticky top-0 z-[50] backdrop-blur-md shadow-sm relative">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           
+          {/* LOGO Y SELECTOR DE DEPORTE DESKTOP */}
           <div className="flex items-center gap-2 md:gap-4 shrink-0">
             <Link href="/" className="flex items-center gap-1.5 group whitespace-nowrap" onClick={() => setMenuOpen(false)}>
               <span className="text-xl md:text-2xl">🏟️</span>
@@ -191,6 +192,7 @@ export default function Navbar() {
             </div>
           </div>
 
+          {/* NAVEGACIÓN PRINCIPAL DESKTOP */}
           {mainNav.length > 0 && (
             <div className="hidden md:flex items-center p-1 bg-gray-100/80 rounded-full border border-gray-200/80 shrink-0">
               {mainNav.map(({ href, label }) => {
@@ -214,7 +216,8 @@ export default function Navbar() {
             </div>
           )}
 
-          <div className="flex items-center gap-2 shrink-0">
+          {/* ACCIONES DERECHA */}
+          <div className="flex items-center gap-2 shrink-0 relative" ref={userMenuRef}>
             
             {seccion === "padel" && (
               <Link
@@ -274,167 +277,206 @@ export default function Navbar() {
             )}
 
             {usuario ? (
-              <>
-                <div className="relative" ref={userMenuRef}>
-                  <button
-                    onClick={() => setMenuOpen(!menuOpen)}
-                    className={`flex items-center gap-2 text-xs font-bold pl-1.5 md:pr-3 pr-1.5 py-1.5 rounded-full transition-all border whitespace-nowrap shrink-0 ${
-                      menuOpen
-                        ? "bg-gray-100 border-gray-300 text-gray-900"
-                        : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300 hover:text-gray-900"
-                    }`}
-                  >
-                    <div className="w-6 h-6 rounded-full bg-[#0B0C15] flex items-center justify-center text-[#00FF9D] font-black text-[10px] shadow-sm overflow-hidden shrink-0">
-                      {avatarUrl ? (
-                        <img src={avatarUrl} alt="Foto de perfil" className="w-full h-full object-cover" />
-                      ) : (
-                        <span>{inicialAvatar}</span>
-                      )}
-                    </div>
-                    <span className="hidden md:inline">{cuenta?.nombre || "Mi cuenta"}</span>
-                    <span className="text-[10px] text-gray-400">▼</span>
-                  </button>
-
-                  {menuOpen && (
-                    <div className="absolute right-0 mt-2 w-60 bg-white border border-gray-200 rounded-2xl shadow-xl z-[110] overflow-hidden text-xs font-bold p-1.5 space-y-1 animate-in fade-in slide-in-from-top-2 duration-150">
-                      
-                      <div className="px-3 py-2 bg-gray-50/80 rounded-xl border border-gray-100/80 mb-1">
-                        <span className="text-[9px] uppercase font-black tracking-wider text-gray-400 block">
-                          Sesión iniciada
-                        </span>
-                        <p className="text-xs font-black text-gray-800 truncate">
-                          {cuenta?.nombre || usuario?.email}
-                        </p>
-                      </div>
-
-                      {(esGerente || esAdmin) && (
-                        <Link
-                          href="/admin/recepcion"
-                          onClick={() => setMenuOpen(false)}
-                          className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-900 text-[#00FF9D] font-black mb-1"
-                        >
-                          <span className="flex items-center gap-2">
-                            <span>🛒</span>
-                            <span>Sistema POS (Gerencia)</span>
-                          </span>
-                        </Link>
-                      )}
-
-                      <div className="px-3 pt-1 pb-0.5 text-[9px] font-black uppercase tracking-wider text-gray-400">
-                        Mis Fichas Deportivas
-                      </div>
-
-                      <Link
-                        href="/padel/perfil"
-                        onClick={() => setMenuOpen(false)}
-                        className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
-                          seccion === "padel"
-                            ? "bg-blue-50 text-blue-700 font-black border border-blue-100"
-                            : "text-gray-700 hover:bg-gray-50"
-                        }`}
-                      >
-                        <span className="flex items-center gap-2">
-                          <span>🎾</span>
-                          <span>Mi Ficha de Pádel</span>
-                        </span>
-                        {seccion === "padel" && (
-                          <span className="text-[9px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-full">
-                            ACTIVO
-                          </span>
-                        )}
-                      </Link>
-
-                      <Link
-                        href="/futbol/perfil"
-                        onClick={() => setMenuOpen(false)}
-                        className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
-                          seccion === "futbol"
-                            ? "bg-emerald-50 text-emerald-700 font-black border border-emerald-100"
-                            : "text-gray-700 hover:bg-gray-50"
-                        }`}
-                      >
-                        <span className="flex items-center gap-2">
-                          <span>⚽</span>
-                          <span>Mi Carta de Fútbol</span>
-                        </span>
-                        {seccion === "futbol" && (
-                          <span className="text-[9px] bg-emerald-600 text-white font-black px-2 py-0.5 rounded-full">
-                            ACTIVO
-                          </span>
-                        )}
-                      </Link>
-
-                      <div className="border-t border-gray-100 my-1" />
-
-                      {esAdmin && (
-                        <div className="md:hidden border-b border-gray-100 pb-1 bg-violet-50/30 rounded-xl p-1">
-                          <p className="px-2 pt-1 text-[9px] font-black text-violet-400 uppercase tracking-widest">Admin</p>
-                          <Link href="/admin/gerentes" className="block px-2 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>👥 Gestión Gerentes POS</Link>
-                          {seccion === "padel" ? (
-                            <Link href="/padel/admin/categorias" className="block px-2 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Revisión Categorías</Link>
-                          ) : (
-                            <>
-                              <Link href="/futbol/admin" className="block px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Crear partido</Link>
-                              <Link href="/futbol/admin/Logros" className="block px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 rounded-lg" onClick={() => setMenuOpen(false)}>Crear logros</Link>
-                            </>
-                          )}
-                        </div>
-                      )}
-
-                      <Link 
-                        href="/perfil" 
-                        className="flex items-center gap-2 px-3 py-2.5 text-gray-600 hover:bg-gray-50 rounded-xl transition-all" 
-                        onClick={() => setMenuOpen(false)}
-                      >
-                        <span>⚙️</span>
-                        <span>Ajustes de Cuenta Global</span>
-                      </Link>
-                      
-                      <div className="border-t border-gray-100 my-1" />
-
-                      <button 
-                        onClick={() => { setConfirmandoSalir(true); setMenuOpen(false); }} 
-                        className="w-full text-left flex items-center gap-2 px-3 py-2.5 text-rose-600 hover:bg-rose-50 rounded-xl transition-all font-black"
-                      >
-                        <span>🚪</span>
-                        <span>Cerrar Sesión</span>
-                      </button>
-                    </div>
+              <button
+                onClick={() => setMenuOpen(!menuOpen)}
+                className={`flex items-center gap-2 text-xs font-bold pl-1.5 md:pr-3 pr-1.5 py-1.5 rounded-full transition-all border whitespace-nowrap shrink-0 ${
+                  menuOpen
+                    ? "bg-gray-100 border-gray-300 text-gray-900"
+                    : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300 hover:text-gray-900"
+                }`}
+              >
+                <div className="w-6 h-6 rounded-full bg-[#0B0C15] flex items-center justify-center text-[#00FF9D] font-black text-[10px] shadow-sm overflow-hidden shrink-0">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="Foto de perfil" className="w-full h-full object-cover" />
+                  ) : (
+                    <span>{inicialAvatar}</span>
                   )}
                 </div>
+                <span className="hidden md:inline">{cuenta?.nombre || "Mi cuenta"}</span>
+                <span className="text-[10px] text-gray-400">▼</span>
+              </button>
+            ) : (
+              <>
+                <Link
+                  href="/login"
+                  className="hidden md:flex whitespace-nowrap px-4 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm"
+                >
+                  Ingresar
+                </Link>
 
                 <button
-                  onClick={() => setConfirmandoSalir(true)}
-                  title="Cerrar sesión"
-                  className="hidden md:block text-gray-400 hover:text-red-600 transition-colors p-1.5 rounded-full hover:bg-red-50 text-xs font-medium whitespace-nowrap shrink-0"
+                  className="md:hidden p-2 text-gray-700 hover:text-gray-900 focus:outline-none shrink-0"
+                  onClick={() => setMenuOpen(!menuOpen)}
+                  aria-label="Abrir menú"
                 >
-                  Salir
+                  {menuOpen ? (
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                  ) : (
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+                  )}
                 </button>
               </>
-            ) : (
-              <Link
-                href="/login"
-                className="hidden md:flex whitespace-nowrap px-4 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm"
-              >
-                Ingresar
-              </Link>
             )}
 
-            {!usuario && (
-              <button
-                className="md:hidden p-2 text-gray-500 hover:text-gray-900 focus:outline-none shrink-0"
-                onClick={() => setMenuOpen(!menuOpen)}
-              >
-                {menuOpen ? (
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            {menuOpen && (
+              <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-gray-200 rounded-2xl shadow-xl z-[110] overflow-hidden text-xs font-bold p-1.5 space-y-1 animate-in fade-in slide-in-from-top-2 duration-150">
+                {usuario ? (
+                  <>
+                    <div className="px-3 py-2 bg-gray-50/80 rounded-xl border border-gray-100/80 mb-1">
+                      <span className="text-[9px] uppercase font-black tracking-wider text-gray-400 block">
+                        Sesión iniciada
+                      </span>
+                      <p className="text-xs font-black text-gray-800 truncate">
+                        {cuenta?.nombre || usuario?.email}
+                      </p>
+                    </div>
+
+                    {(esGerente || esAdmin) && (
+                      <Link
+                        href="/admin/recepcion"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-900 text-[#00FF9D] font-black mb-1"
+                      >
+                        <span className="flex items-center gap-2">
+                          <span>🛒</span>
+                          <span>Sistema POS (Gerencia)</span>
+                        </span>
+                      </Link>
+                    )}
+
+                    <div className="px-3 pt-1 pb-0.5 text-[9px] font-black uppercase tracking-wider text-gray-400">
+                      Mis Fichas Deportivas
+                    </div>
+
+                    <Link
+                      href="/padel/perfil"
+                      onClick={() => setMenuOpen(false)}
+                      className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                        seccion === "padel"
+                          ? "bg-blue-50 text-blue-700 font-black border border-blue-100"
+                          : "text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>🎾</span>
+                        <span>Mi Ficha de Pádel</span>
+                      </span>
+                      {seccion === "padel" && (
+                        <span className="text-[9px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-full">
+                          ACTIVO
+                        </span>
+                      )}
+                    </Link>
+
+                    <Link
+                      href="/futbol/perfil"
+                      onClick={() => setMenuOpen(false)}
+                      className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                        seccion === "futbol"
+                          ? "bg-emerald-50 text-emerald-700 font-black border border-emerald-100"
+                          : "text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>⚽</span>
+                        <span>Mi Carta de Fútbol</span>
+                      </span>
+                      {seccion === "futbol" && (
+                        <span className="text-[9px] bg-emerald-600 text-white font-black px-2 py-0.5 rounded-full">
+                          ACTIVO
+                        </span>
+                      )}
+                    </Link>
+
+                    <div className="border-t border-gray-100 my-1" />
+
+                    <Link 
+                      href="/perfil" 
+                      className="flex items-center gap-2 px-3 py-2.5 text-gray-600 hover:bg-gray-50 rounded-xl transition-all" 
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      <span>⚙️</span>
+                      <span>Ajustes de Cuenta Global</span>
+                    </Link>
+                    
+                    <div className="border-t border-gray-100 my-1" />
+
+                    <button 
+                      onClick={() => { setConfirmandoSalir(true); setMenuOpen(false); }} 
+                      className="w-full text-left flex items-center gap-2 px-3 py-2.5 text-rose-600 hover:bg-rose-50 rounded-xl transition-all font-black"
+                    >
+                      <span>🚪</span>
+                      <span>Cerrar Sesión</span>
+                    </button>
+                  </>
                 ) : (
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+                  <>
+                    <div className="px-3 py-2 bg-blue-50/80 rounded-xl border border-blue-100/80 mb-1 text-center">
+                      <span className="text-[10px] uppercase font-black tracking-wider text-blue-500 block mb-1">
+                        ¡Bienvenido a Sports Hub!
+                      </span>
+                      <Link
+                        href="/login"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center justify-center gap-2 w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-xl text-xs shadow-md transition-all"
+                      >
+                        <span>🔑</span>
+                        <span>Iniciar Sesión / Ingresar</span>
+                      </Link>
+                    </div>
+
+                    <div className="px-3 pt-2 pb-1 text-[9px] font-black uppercase tracking-wider text-gray-400">
+                      Cambiar de Deporte
+                    </div>
+
+                    <Link
+                      href="/futbol"
+                      onClick={() => setMenuOpen(false)}
+                      className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                        seccion === "futbol"
+                          ? "bg-emerald-50 text-emerald-700 font-black border border-emerald-100"
+                          : "text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>⚽</span>
+                        <span>Fútbol</span>
+                      </span>
+                      {seccion === "futbol" && (
+                        <span className="text-[9px] bg-emerald-600 text-white font-black px-2 py-0.5 rounded-full">
+                          ACTIVO
+                        </span>
+                      )}
+                    </Link>
+
+                    <Link
+                      href="/padel"
+                      onClick={() => setMenuOpen(false)}
+                      className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                        seccion === "padel"
+                          ? "bg-blue-50 text-blue-700 font-black border border-blue-100"
+                          : "text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>🎾</span>
+                        <span>Pádel</span>
+                      </span>
+                      {seccion === "padel" && (
+                        <span className="text-[9px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-full">
+                          ACTIVO
+                        </span>
+                      )}
+                    </Link>
+                  </>
                 )}
-              </button>
+              </div>
             )}
+
           </div>
         </div>
 
+        {/* NAVEGACIÓN SECUNDARIA HORIZONTAL MÓVIL */}
         {mainNav.length > 0 && (
           <div
             ref={mobileNavRef}
@@ -463,6 +505,7 @@ export default function Navbar() {
         )}
       </nav>
 
+      {/* MODAL CERRAR SESIÓN */}
       {confirmandoSalir && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4" onClick={() => !cerrandoSesion && setConfirmandoSalir(false)}>
           <div className="bg-white rounded-3xl shadow-xl max-w-sm w-full p-6 flex flex-col gap-5 border border-gray-100" onClick={(e) => e.stopPropagation()}>

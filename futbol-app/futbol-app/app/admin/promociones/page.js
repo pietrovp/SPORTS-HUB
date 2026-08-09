@@ -189,7 +189,7 @@ export default function PromocionesPage() {
       setClubInfo(clubData || { peak_start_time: "17:00:00", peak_end_time: "22:00:00" });
 
       const { data: courts } = await supabase
-        .from("padel_courts")
+        .from("courts")
         .select("id, name")
         .eq("club_id", profile.club_id)
         .eq("is_active", true)

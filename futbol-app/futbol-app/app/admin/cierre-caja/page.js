@@ -357,7 +357,7 @@ export default function CierreCajaPage() {
 
       const { data: padelMatches } = await supabase
         .from("padel_matches")
-        .select("*, court:padel_courts(name)")
+        .select("*, court:courts(name)")
         .eq("club_id", clubId);
 
       setVentas(sales || []);

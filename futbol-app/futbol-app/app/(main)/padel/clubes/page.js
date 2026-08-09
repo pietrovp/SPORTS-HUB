@@ -24,7 +24,7 @@ export default function PadelClubsPage() {
         .from("padel_clubs")
         .select(`
           id, name, slug, city, address, image_url, is_active,
-          courts:padel_courts ( id )
+          courts:courts ( id )
         `);
 
       if (error) throw error;

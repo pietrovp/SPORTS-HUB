@@ -196,7 +196,7 @@ export default function HistorialVentasPage() {
         .from("padel_matches")
         .select(`
           *,
-          court:padel_courts(name)
+          court:courts(name)
         `)
         .eq("club_id", profile.club_id);
 

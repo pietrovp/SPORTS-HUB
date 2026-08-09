@@ -634,7 +634,7 @@ export default function PadelPerfilPage() {
             id, match_type, scheduled_at, status, category_restriction,
             gender_restriction, is_competitive, price_per_player, winner_team, score_text,
             club:padel_clubs ( name, city, address ),
-            court:padel_courts ( name )
+            court:courts ( name )
           `)
           .in("id", matchIds)
           .order("scheduled_at", { ascending: false });

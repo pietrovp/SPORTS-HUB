@@ -51,7 +51,7 @@ export default function PadelPartidosPage() {
           id, club_id, court_id, match_type, is_private, scheduled_at, status, category_restriction,
           gender_restriction, is_competitive, price_per_player, created_by, winner_team, score_status, score_text,
           club:padel_clubs ( name, city, address ),
-          court:padel_courts ( name )
+          court:courts ( name )
         `)
         .in("status", ["programado", "jugado"])
         .order("scheduled_at", { ascending: true });

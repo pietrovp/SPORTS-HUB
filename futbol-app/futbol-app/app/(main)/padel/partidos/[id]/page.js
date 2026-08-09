@@ -172,7 +172,7 @@ export default function PartidoDetallePage() {
           gender_restriction, is_competitive, price_per_player, total_price, created_by, winner_team,
           score_proposed, score_submitted_by, score_status, score_confirmations, score_text,
           club:padel_clubs ( name, city, address ),
-          court:padel_courts ( name )
+          court:courts ( name )
         `)
         .eq("id", matchId)
         .maybeSingle();

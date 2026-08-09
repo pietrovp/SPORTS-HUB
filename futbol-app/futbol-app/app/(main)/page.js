@@ -3,148 +3,35 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
-import PartidoPadelCard from "@/components/padel/PartidoPadelCard";
 
-const LABELS_CAT = {
-  rookies: "Rookies",
-  "7ma": "7ma",
-  "6ta": "6ta",
-  "5ta": "5ta",
-  "4ta": "4ta",
-  "3era": "3era",
-  "2da": "2da",
-  open: "Open",
-};
-
-export default function PadelHome() {
+export default function HomePresentation() {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
-  const [userCreditos, setUserCreditos] = useState(0);
-  const [padelProfile, setPadelProfile] = useState(null);
-  const [partidosAbiertos, setPartidosAbiertos] = useState([]);
-  
-  // Ranking
-  const [topRanking, setTopRanking] = useState([]);
-  const [miPosicionRanking, setMiPosicionRanking] = useState(null);
+  const [profile, setProfile] = useState(null);
 
   useEffect(() => {
-    cargarHomePadel();
+    cargarEstadoUsuario();
   }, []);
 
-  async function cargarHomePadel() {
+  async function cargarEstadoUsuario() {
     try {
       setLoading(true);
+      if (!supabase) return;
 
-      // 1. Cargar Usuario y Perfil de Pádel
       const { data: { user: authUser } } = await supabase.auth.getUser();
       setUser(authUser);
 
-      let currentPadelProf = null;
-
       if (authUser) {
-        const [{ data: prof }, { data: pProf }] = await Promise.all([
-          supabase.from("profiles").select("creditos").eq("id", authUser.id).maybeSingle(),
-          supabase.from("padel_profiles").select("rating, categoria_oficial, victorias, derrotas").eq("cuenta_id", authUser.id).maybeSingle(),
-        ]);
-
-        setUserCreditos(prof?.creditos ?? 0);
-        currentPadelProf = pProf || null;
-        setPadelProfile(currentPadelProf);
-      }
-
-      // 2. Cargar Próximos Partidos Abiertos
-      const { data: matchesData } = await supabase
-        .from("padel_matches")
-        .select(`
-          id, club_id, court_id, match_type, is_private, scheduled_at, status, category_restriction,
-          gender_restriction, is_competitive, price_per_player, created_by,
-          club:padel_clubs ( name, city, address ),
-          court:padel_courts ( name )
-        `)
-        .eq("status", "programado")
-        .eq("match_type", "abierto")
-        .order("scheduled_at", { ascending: true })
-        .limit(6);
-
-      const matchIds = (matchesData || []).map((m) => m.id);
-
-      if (matchIds.length > 0) {
-        const { data: playersData } = await supabase
-          .from("padel_match_players")
-          .select("id, match_id, user_id, team")
-          .in("match_id", matchIds);
-
-        const allUserIds = Array.from(new Set((playersData || []).map((p) => p.user_id).filter(Boolean)));
-
-        let profilesMap = {};
-        let padelProfilesMap = {};
-
-        if (allUserIds.length > 0) {
-          const [{ data: profsData }, { data: padelProfsData }] = await Promise.all([
-            supabase.from("profiles").select("id, nombre, apellido, avatar_url").in("id", allUserIds),
-            supabase.from("padel_profiles").select("cuenta_id, rating, categoria_oficial").in("cuenta_id", allUserIds),
-          ]);
-
-          (profsData || []).forEach((p) => { profilesMap[p.id] = p; });
-          (padelProfsData || []).forEach((pp) => { padelProfilesMap[pp.cuenta_id] = pp; });
-        }
-
-        const playersByMatch = {};
-        (playersData || []).forEach((p) => {
-          if (!playersByMatch[p.match_id]) playersByMatch[p.match_id] = [];
-          playersByMatch[p.match_id].push({
-            ...p,
-            profile: profilesMap[p.user_id] || null,
-            padel_profile: padelProfilesMap[p.user_id] || null,
-          });
-        });
-
-        const partidosFormatted = (matchesData || []).map((m) => ({
-          ...m,
-          players: playersByMatch[m.id] || [],
-        }));
-
-        setPartidosAbiertos(partidosFormatted);
-      } else {
-        setPartidosAbiertos([]);
-      }
-
-      // 3. Cargar Top 4 Ranking General
-      const { data: topData } = await supabase
-        .from("padel_profiles")
-        .select(`
-          cuenta_id, rating, categoria_oficial, victorias,
-          profile:cuenta_id ( nombre, apellido, avatar_url, ciudad )
-        `)
-        .order("rating", { ascending: false })
-        .limit(4);
-
-      setTopRanking(topData || []);
-
-      // 4. Calcular Puesto Exacto del Usuario en el Ranking
-      if (authUser && currentPadelProf) {
-        const { count } = await supabase
-          .from("padel_profiles")
-          .select("*", { count: "exact", head: true })
-          .gt("rating", currentPadelProf.rating || 0);
-
-        const rankExacto = (count || 0) + 1;
-
-        const { data: uProfile } = await supabase
+        const { data: prof } = await supabase
           .from("profiles")
-          .select("nombre, apellido, avatar_url, ciudad")
+          .select("nombre, apellido, is_gerente, is_admin, club_id")
           .eq("id", authUser.id)
           .maybeSingle();
 
-        setMiPosicionRanking({
-          ...currentPadelProf,
-          rank: rankExacto,
-          profile: uProfile,
-        });
+        setProfile(prof || null);
       }
-
     } catch (err) {
-      console.error("Error cargando home de pádel:", err);
+      console.error("Error cargando sesión en Home:", err);
     } finally {
       setLoading(false);
     }
@@ -158,323 +45,239 @@ export default function PadelHome() {
     );
   }
 
-  const top3 = topRanking.slice(0, 3);
-  const cuartoJugadorGeneral = topRanking[3] || null;
-  const usuarioFueraDelTop3 = miPosicionRanking && miPosicionRanking.rank > 3;
+  const esGerenteOAdmin = !!profile?.is_gerente || !!profile?.is_admin || !!profile?.club_id;
+  const nombreUsuario = profile?.nombre ? `${profile.nombre} ${profile.apellido || ""}`.trim() : (user?.email || "Deportista");
 
   return (
-    <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 space-y-8">
-      <div className="mx-auto max-w-7xl space-y-8">
+    <div className="min-h-screen bg-slate-50 text-slate-900 px-3 pt-2 sm:pt-4 pb-8 sm:pb-12 space-y-8 sm:space-y-12">
+      <div className="mx-auto max-w-7xl space-y-8 sm:space-y-12">
 
-        {/* 1. 🎾 HERO BANNER COMPACTO */}
-        <div className="relative w-full bg-gradient-to-r from-[#0B0C2A] via-[#161848] to-[#0B0C2A] rounded-[2.5rem] p-6 sm:p-8 text-white shadow-xl border border-blue-500/20 overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
-
-          <div className="relative z-10 space-y-2 max-w-xl">
-            <span className="bg-blue-500/30 border border-blue-400/30 text-blue-300 text-[10px] sm:text-xs font-black uppercase px-3.5 py-1 rounded-full tracking-wider inline-block">
-              🎾 Comunidad Oficial de Pádel
-            </span>
-            <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-white leading-tight">
-              Encuentra partidos y sube en el <span className="text-[#00FF9D]">Ranking Oficial</span>
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-300 font-medium">
-              Suma puntos en cada juego competitivo, compite contra rivales de tu categoría y reserva pistas en los mejores clubes.
-            </p>
-          </div>
-
-          <div className="relative z-10 flex flex-wrap sm:flex-nowrap items-center gap-3 shrink-0">
-            <Link
-              href="/padel/clubes"
-              className="flex-1 sm:flex-initial px-5 py-3.5 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg transition-all text-center active:scale-95"
-            >
-              ⚡ Reservar Pista
-            </Link>
-            <Link
-              href="/padel/partidos"
-              className="flex-1 sm:flex-initial px-5 py-3.5 bg-white/10 hover:bg-white/20 border border-white/15 text-white font-black text-xs uppercase tracking-wider rounded-2xl transition-all text-center"
-            >
-              🔍 Buscar Partidos
-            </Link>
-          </div>
-        </div>
-
-        {/* 2. 📅 SECCIÓN: PRÓXIMOS PARTIDOS ABIERTOS (SLIDER) */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between px-1">
-            <div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-blue-600 block">Comunidad</span>
-              <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
-                <span>🎾</span> Partidos Esperando Jugadores
-              </h2>
-            </div>
-            <Link href="/padel/partidos" className="text-xs font-black text-blue-600 hover:underline">
-              Ver Todos →
-            </Link>
-          </div>
-
-          {partidosAbiertos.length === 0 ? (
-            <div className="bg-white rounded-3xl p-8 text-center border border-dashed border-slate-200 space-y-3">
-              <span className="text-3xl block">🎾</span>
-              <h3 className="text-base font-black text-slate-800">No hay partidos abiertos programados hoy</h3>
-              <p className="text-xs text-slate-400 font-medium max-w-xs mx-auto">
-                Sé el primero en reservar una pista y abrir un partido para que otros se unan.
-              </p>
-              <Link
-                href="/padel/clubes"
-                className="inline-block px-5 py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-2xl"
-              >
-                + Abrir Partido en un Club
-              </Link>
-            </div>
-          ) : (
-            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin scrollbar-thumb-slate-300">
-              {partidosAbiertos.map((match) => (
-                <div key={match.id} className="w-[310px] sm:w-[350px] shrink-0 snap-start">
-                  <PartidoPadelCard
-                    match={match}
-                    currentUser={user}
-                    userCreditos={userCreditos}
-                    onUpdate={cargarHomePadel}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* 3. GRID 2 COLUMNAS: TOP RANKING (3 + TÚ) + TU FICHA DE JUGADOR */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-
-          {/* 🏆 COLUMNA IZQUIERDA: RANKING (TOP 3 + POSICIÓN DEL USUARIO EN 4TO LUGAR) */}
-          <div className="lg:col-span-7 bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        {/* BANNER B2B / POS (SÓLO VISIBLE PARA GERENTES Y ADMINS) */}
+        {esGerenteOAdmin && (
+          <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in duration-200">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl p-2 bg-slate-800 rounded-xl">🛒</span>
               <div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-amber-600 block">Líderes</span>
-                <h3 className="text-lg font-black text-slate-900 flex items-center gap-1.5">
-                  <span>🏆</span> Top Ranking Regional
-                </h3>
+                <span className="text-[9px] font-black uppercase text-[#00FF9D] tracking-widest block">
+                  Panel de Gerencia B2B Activo
+                </span>
+                <h4 className="text-xs sm:text-sm font-black text-white">
+                  Gestión de Recepción, Pistas & Punto de Venta (POS)
+                </h4>
               </div>
-              <Link href="/padel/ranking" className="text-xs font-black text-blue-600 hover:underline">
-                Ver Tabla Completa →
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <Link
+                href="/admin/recepcion"
+                className="flex-1 sm:flex-initial px-4 py-2 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all text-center shadow-sm"
+              >
+                Acceder al POS →
+              </Link>
+              <Link
+                href="/admin/mi-club"
+                className="flex-1 sm:flex-initial px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase rounded-xl transition-all text-center border border-slate-700"
+              >
+                Mi Complejo
               </Link>
             </div>
-
-            {top3.length === 0 ? (
-              <p className="text-xs font-bold text-slate-400 text-center py-4">Sin jugadores registrados aún.</p>
-            ) : (
-              <div className="space-y-2.5">
-                
-                {/* 🥇 🥈 🥉 DIBUJAR ÚNICAMENTE EL TOP 3 */}
-                {top3.map((p, idx) => {
-                  const nombre = p.profile ? `${p.profile.nombre} ${p.profile.apellido || ""}`.trim() : "Jugador";
-                  const avatar = p.profile?.avatar_url;
-                  const catLabel = LABELS_CAT[p.categoria_oficial] || "Rookies";
-                  const medalla = idx === 0 ? "👑" : idx === 1 ? "🥈" : "🥉";
-
-                  const esElUsuario = user && p.cuenta_id === user.id;
-
-                  return (
-                    <div
-                      key={p.cuenta_id || idx}
-                      className={`flex items-center justify-between p-3 rounded-2xl transition-colors ${
-                        esElUsuario
-                          ? "bg-blue-50/80 border-2 border-blue-400/50"
-                          : "bg-slate-50 border border-slate-100 hover:bg-slate-100"
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className="w-6 text-center font-black text-xs text-amber-600 shrink-0">
-                          {medalla}
-                        </span>
-
-                        <div className="w-10 h-10 rounded-full bg-slate-900 text-white font-black flex items-center justify-center overflow-hidden shrink-0">
-                          {avatar ? (
-                            <img src={avatar} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            nombre.charAt(0).toUpperCase()
-                          )}
-                        </div>
-
-                        <div className="min-w-0">
-                          <p className="text-xs font-black text-slate-900 truncate flex items-center gap-1.5">
-                            <span>{nombre}</span>
-                            {esElUsuario && (
-                              <span className="bg-blue-600 text-white text-[8px] font-black px-1.5 py-0.2 rounded-full uppercase">
-                                TÚ
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-[10px] font-bold text-slate-400">
-                            {p.profile?.ciudad || "Barquisimeto"} • {p.victorias || 0} victorias
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <span className="bg-[#00FF9D] text-slate-950 font-black text-xs px-2.5 py-0.5 rounded-full shadow-xs block">
-                          {Number(p.rating || 1.5).toFixed(2)} pts
-                        </span>
-                        <span className="text-[9px] font-bold text-slate-400 uppercase mt-0.5 block">
-                          Cat. {catLabel}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* 🎯 4º PUESTO: MOSTRAR POSICIÓN ACTUAL DEL USUARIO (SI NO ESTÁ EN EL TOP 3) O EL #4 DEL RANKING */}
-                {usuarioFueraDelTop3 ? (
-                  <div className="flex items-center justify-between p-3 rounded-2xl bg-blue-50/90 border-2 border-blue-400/60 shadow-xs">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-6 flex flex-col items-center justify-center shrink-0">
-                        <span className="font-black text-xs text-blue-700">
-                          #{miPosicionRanking.rank}
-                        </span>
-                        <span className="bg-blue-600 text-white text-[8px] font-black px-1.5 py-0.2 rounded-full uppercase">
-                          TÚ
-                        </span>
-                      </div>
-
-                      <div className="w-10 h-10 rounded-full bg-slate-900 text-white font-black flex items-center justify-center overflow-hidden shrink-0 border-2 border-blue-400">
-                        {miPosicionRanking.profile?.avatar_url ? (
-                          <img src={miPosicionRanking.profile.avatar_url} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          (miPosicionRanking.profile?.nombre || "U").charAt(0).toUpperCase()
-                        )}
-                      </div>
-
-                      <div className="min-w-0">
-                        <p className="text-xs font-black text-slate-900 truncate">
-                          {miPosicionRanking.profile ? `${miPosicionRanking.profile.nombre} ${miPosicionRanking.profile.apellido || ""}`.trim() : "Tu Perfil"}
-                        </p>
-                        <p className="text-[10px] font-bold text-blue-600">
-                          {miPosicionRanking.profile?.ciudad || "Tu Ciudad"} • {miPosicionRanking.victorias || 0} victorias
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="text-right shrink-0">
-                      <span className="bg-[#00FF9D] text-slate-950 font-black text-xs px-2.5 py-0.5 rounded-full shadow-xs block">
-                        {Number(miPosicionRanking.rating || 1.5).toFixed(2)} pts
-                      </span>
-                      <span className="text-[9px] font-bold text-slate-400 uppercase mt-0.5 block">
-                        Cat. {LABELS_CAT[miPosicionRanking.categoria_oficial] || "Rookies"}
-                      </span>
-                    </div>
-                  </div>
-                ) : cuartoJugadorGeneral ? (
-                  /* SI EL USUARIO YA ESTÁ EN EL TOP 3 O NO HA INICIADO SESIÓN, MOSTRAR EL #4 NORMAL */
-                  <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 border border-slate-100 hover:bg-slate-100 transition-colors">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="w-6 text-center font-black text-xs text-slate-400 shrink-0">
-                        #4
-                      </span>
-
-                      <div className="w-10 h-10 rounded-full bg-slate-900 text-white font-black flex items-center justify-center overflow-hidden shrink-0">
-                        {cuartoJugadorGeneral.profile?.avatar_url ? (
-                          <img src={cuartoJugadorGeneral.profile.avatar_url} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          (cuartoJugadorGeneral.profile?.nombre || "J").charAt(0).toUpperCase()
-                        )}
-                      </div>
-
-                      <div className="min-w-0">
-                        <p className="text-xs font-black text-slate-900 truncate">
-                          {cuartoJugadorGeneral.profile ? `${cuartoJugadorGeneral.profile.nombre} ${cuartoJugadorGeneral.profile.apellido || ""}`.trim() : "Jugador"}
-                        </p>
-                        <p className="text-[10px] font-bold text-slate-400">
-                          {cuartoJugadorGeneral.profile?.ciudad || "Barquisimeto"} • {cuartoJugadorGeneral.victorias || 0} victorias
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="text-right shrink-0">
-                      <span className="bg-[#00FF9D] text-slate-950 font-black text-xs px-2.5 py-0.5 rounded-full shadow-xs block">
-                        {Number(cuartoJugadorGeneral.rating || 1.5).toFixed(2)} pts
-                      </span>
-                      <span className="text-[9px] font-bold text-slate-400 uppercase mt-0.5 block">
-                        Cat. {LABELS_CAT[cuartoJugadorGeneral.categoria_oficial] || "Rookies"}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-              </div>
-            )}
           </div>
+        )}
 
-          {/* 🪪 COLUMNA DERECHA: TU FICHA DE JUGADOR */}
-          <div className="lg:col-span-5 bg-gradient-to-b from-[#0B0C2A] via-[#161848] to-[#0B0C2A] rounded-3xl p-6 text-white shadow-xl border border-blue-500/20 space-y-5">
-            <div className="flex justify-between items-center border-b border-white/10 pb-3">
-              <span className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D]">
-                Tu Ficha Oficial
-              </span>
-              <span className="text-xs font-bold text-blue-300">Pádel Profile</span>
-            </div>
+        {/* 1. HERO PRESENTACIÓN PRINCIPAL */}
+        <div className="relative w-full bg-gradient-to-br from-[#0B0C2A] via-[#161848] to-[#0B0C2A] rounded-3xl sm:rounded-[2.5rem] p-6 sm:p-10 text-white shadow-2xl border border-blue-500/20 overflow-hidden flex flex-col lg:flex-row lg:items-center justify-between gap-8">
+          <div className="absolute top-0 right-0 w-96 h-96 bg-[#00FF9D]/10 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute bottom-0 left-1/3 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
 
-            {user && padelProfile ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400 p-0.5 shrink-0">
-                    <div className="w-full h-full rounded-full bg-[#0B0C2A] overflow-hidden flex items-center justify-center font-black text-xl">
-                      {user.email ? user.email[0].toUpperCase() : "U"}
-                    </div>
-                  </div>
-                  <div>
-                    <h4 className="text-lg font-black text-white leading-tight">
-                      Level {Number(padelProfile.rating || 1.5).toFixed(2)}
-                    </h4>
-                    <span className="bg-blue-500/30 text-blue-300 border border-blue-400/30 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full inline-block mt-1">
-                      🎾 Categoría {LABELS_CAT[padelProfile.categoria_oficial] || "Rookies"}
-                    </span>
-                  </div>
-                </div>
+          <div className="relative z-10 space-y-4 max-w-2xl">
+            <span className="bg-[#00FF9D]/20 border border-[#00FF9D]/40 text-[#00FF9D] text-[10px] sm:text-xs font-black uppercase px-3.5 py-1.5 rounded-full tracking-wider inline-flex items-center gap-1.5">
+              <span>🏟️</span> Ecosistema Deportivo
+            </span>
+            <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
+              La plataforma para <span className="text-[#00FF9D]">Jugar</span>, <span className="text-blue-400">Competir</span> y <span className="text-amber-400">Reservar</span>
+            </h1>
+            <p className="text-xs sm:text-base text-slate-300 font-medium leading-relaxed">
+              Reserva pistas en tiempo real, encuentra partidas abiertas con jugadores de tu categoría y lleva el control oficial de tus estadísticas deportivas.
+            </p>
 
-                <div className="grid grid-cols-2 gap-2 bg-white/5 p-3 rounded-2xl border border-white/10 text-center">
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase block">Victorias</span>
-                    <span className="text-base font-black text-emerald-400">{padelProfile.victorias || 0} 🏆</span>
-                  </div>
-                  <div className="border-l border-white/10">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase block">Derrotas</span>
-                    <span className="text-base font-black text-rose-400">{padelProfile.derrotas || 0}</span>
+            <div className="pt-2 flex flex-wrap items-center gap-3">
+              {user ? (
+                <div className="bg-white/10 backdrop-blur-md border border-white/15 px-4 py-2.5 rounded-2xl flex items-center gap-3">
+                  <span className="text-lg">👋</span>
+                  <div className="text-left">
+                    <span className="text-[10px] font-bold text-slate-300 block uppercase leading-none">Hola</span>
+                    <span className="text-xs font-black text-[#00FF9D]">{nombreUsuario}</span>
                   </div>
                 </div>
-
-                <Link
-                  href="/padel/perfil"
-                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider rounded-2xl block text-center transition-all shadow-md active:scale-95"
-                >
-                  📊 Ver Mi Gráfica y Estadísticas →
-                </Link>
-              </div>
-            ) : user ? (
-              <div className="space-y-3 text-center py-2">
-                <p className="text-xs font-bold text-slate-300">
-                  Aún no has completado tu evaluación inicial para activar tu rating.
-                </p>
-                <Link
-                  href="/padel/perfil"
-                  className="w-full py-3.5 bg-[#00FF9D] text-slate-950 font-black text-xs uppercase rounded-2xl block text-center shadow-lg"
-                >
-                  ⚡ Activar mi Perfil de Pádel
-                </Link>
-              </div>
-            ) : (
-              <div className="space-y-3 text-center py-2">
-                <p className="text-xs font-bold text-slate-300">
-                  Inicia sesión para llevar tu nivel, partidos y competir en el Ranking.
-                </p>
+              ) : (
                 <Link
                   href="/login"
-                  className="w-full py-3.5 bg-blue-600 text-white font-black text-xs uppercase rounded-2xl block text-center shadow-lg"
+                  className="px-6 py-3.5 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg transition-all active:scale-95 flex items-center gap-2"
                 >
-                  Ingresar a mi Cuenta
+                  <span>🔑</span>
+                  <span>Iniciar Sesión / Registrarse</span>
                 </Link>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
+          {/* TARJETA DE ACCESO RÁPIDO JUGADORES */}
+          <div className="relative z-10 lg:w-80 shrink-0 bg-white/5 border border-white/10 backdrop-blur-md rounded-3xl p-5 space-y-4">
+            <div className="border-b border-white/10 pb-3 flex justify-between items-center">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Acceso Rápido</span>
+              <span className="text-xs">⚡</span>
+            </div>
+
+            <div className="space-y-2">
+              <Link
+                href="/padel/clubes"
+                className="w-full py-3 px-4 bg-blue-600/30 hover:bg-blue-600/50 border border-blue-400/30 rounded-xl flex items-center justify-between text-xs font-black transition-colors"
+              >
+                <span className="flex items-center gap-2"><span>🎾</span> Reservar Pádel</span>
+                <span>→</span>
+              </Link>
+
+              <Link
+                href="/padel/partidos"
+                className="w-full py-3 px-4 bg-slate-800/60 hover:bg-slate-800/80 border border-slate-700/60 rounded-xl flex items-center justify-between text-xs font-black transition-colors"
+              >
+                <span className="flex items-center gap-2"><span>🔍</span> Buscar Partidos</span>
+                <span>→</span>
+              </Link>
+
+              <Link
+                href="/futbol"
+                className="w-full py-3 px-4 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-400/30 rounded-xl flex items-center justify-between text-xs font-black transition-colors"
+              >
+                <span className="flex items-center gap-2"><span>⚽</span> Fútbol & Partidos</span>
+                <span>→</span>
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. MÓDULOS PRINCIPALES DE LA APLICACIÓN */}
+        <div className="space-y-4">
+          <div className="px-1">
+            <span className="text-[10px] font-black uppercase tracking-widest text-blue-600 block">Explora la WebApp</span>
+            <h2 className="text-xl sm:text-2xl font-black text-slate-900">Módulos Especializados</h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+            {/* CARD PÁDEL */}
+            <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 group">
+              <div className="space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">
+                  🎾
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Comunidad de Pádel</h3>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  Encuentra partidos abiertos nivelados por categoría, consulta la disponibilidad de pistas en clubes y sube tu rating en el Ranking Oficial.
+                </p>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+                <Link
+                  href="/padel/partidos"
+                  className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
+                >
+                  Ver Partidos Abiertos
+                </Link>
+                <Link
+                  href="/padel/clubes"
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
+                >
+                  Directorio de Clubes
+                </Link>
+              </div>
+            </div>
+
+            {/* CARD FÚTBOL */}
+            <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 group">
+              <div className="space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">
+                  ⚽
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Fútbol & Caimanas</h3>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  Arma partidos de fútbol, reserva canchas con tus amigos, crea tu carta de jugador personalizada y registra estadísticas de cada encuentro.
+                </p>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+                <Link
+                  href="/futbol"
+                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
+                >
+                  Ir a Fútbol
+                </Link>
+                <Link
+                  href="/futbol/perfil"
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
+                >
+                  Mi Carta de Jugador
+                </Link>
+              </div>
+            </div>
+
+            {/* CARD RANKINGS & ESTADÍSTICAS (PÚBLICO GENERAL) */}
+            <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 group">
+              <div className="space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">
+                  🏆
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Rankings & Nivel</h3>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  Suma puntos en encuentros competitivos oficiales, sube de categoría y consulta tu posición exacta en la tabla general de la región.
+                </p>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+                <Link
+                  href="/padel/ranking"
+                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
+                >
+                  Ver Ranking Oficial
+                </Link>
+                <Link
+                  href="/padel/perfil"
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
+                >
+                  Mi Ficha y Estadísticas
+                </Link>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* 3. VENTAJAS */}
+        <div className="bg-white rounded-3xl p-6 sm:p-10 border border-slate-200 shadow-sm space-y-6">
+          <div className="text-center max-w-xl mx-auto space-y-2">
+            <span className="text-[10px] font-black uppercase tracking-widest text-blue-600 block">Beneficios</span>
+            <h2 className="text-xl sm:text-3xl font-black text-slate-900">Todo tu deporte conectado en un solo lugar</h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pt-4">
+            <div className="space-y-2 text-center sm:text-left">
+              <span className="text-3xl block">⚡</span>
+              <h4 className="text-sm font-black text-slate-900">Reservas Inmediatas</h4>
+              <p className="text-xs text-slate-500 font-medium">Agenda en tiempo real sin esperas ni llamadas telefónicas.</p>
+            </div>
+
+            <div className="space-y-2 text-center sm:text-left">
+              <span className="text-3xl block">📊</span>
+              <h4 className="text-sm font-black text-slate-900">Fichas & Rankings</h4>
+              <p className="text-xs text-slate-500 font-medium">Lleva el registro de tus partidos, victorias, derrotas y nivel competitivo.</p>
+            </div>
+
+            <div className="space-y-2 text-center sm:text-left">
+              <span className="text-3xl block">🤝</span>
+              <h4 className="text-sm font-black text-slate-900">Partidos Abiertos</h4>
+              <p className="text-xs text-slate-500 font-medium">¿Te falta gente? Abre tu partido al público para completar la jugada rápidamente.</p>
+            </div>
+          </div>
         </div>
 
       </div>

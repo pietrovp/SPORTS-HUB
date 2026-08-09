@@ -1,402 +1,735 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
+import Link from "next/link";
+import { supabase } from "@/lib/supabaseClient";
 
-const DIAS_SEMANA = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+const AMENIDADES_MAP = {
+  equipment_rental: { label: "Alquiler de Equipo", icon: "⚽" },
+  free_parking: { label: "Estacionamiento Gratis", icon: "🚗" },
+  store: { label: "Tienda Deportiva", icon: "🛍️" },
+  restaurant: { label: "Restaurante", icon: "🍽️" },
+  cafeteria: { label: "Cafetería", icon: "☕" },
+  changing_room: { label: "Vestuarios y Duchas", icon: "🚿" },
+  wifi: { label: "WiFi Gratis", icon: "📶" },
+  lockers: { label: "Lockers / Casilleros", icon: "🔒" },
+};
 
-function formatHora12(hora24) {
-  if (!hora24) return "";
-  const [h, m] = hora24.split(":");
-  const horas = parseInt(h, 10);
-  const ampm = horas >= 12 ? "PM" : "AM";
-  const h12 = horas % 12 || 12;
-  return `${h12}:${m} ${ampm}`;
-}
-
-function generarPassword() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
-
-export default function ReservarCancha() {
+export default function FutbolReservarPage() {
   const router = useRouter();
-  const [cargando, setCargando] = useState(true);
-  const [sedes, setSedes] = useState([]);
-  const [sedeSeleccionada, setSedeSeleccionada] = useState(null);
-  
-  const [fechas, setFechas] = useState([]);
-  const [fechaSeleccionada, setFechaSeleccionada] = useState(null);
-  
-  const [franjas, setFranjas] = useState([]);
-  const [horasOcupadas, setHorasOcupadas] = useState([]);
-  const [franjaSeleccionada, setFranjaSeleccionada] = useState(null);
-  
-  const [tipoPago, setTipoPago] = useState("parte");
-  const [procesando, setProcesando] = useState(false);
-  const [mensaje, setMensaje] = useState("");
+
+  const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
+  const [user, setUser] = useState(null);
+
+  const [clubes, setClubes] = useState([]);
+  const [clubSeleccionadoId, setClubSeleccionadoId] = useState(null);
+  const [canchasFutbol, setCanchasFutbol] = useState([]);
+  const [partidosFutbol, setPartidosFutbol] = useState([]);
+  const [bloqueosActivos, setBloqueosActivos] = useState([]);
+
+  const [tasaBCV, setTasaBCV] = useState(36.65);
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
+  const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
+
+  const [modalReservaOpen, setModalReservaOpen] = useState(false);
+  const [bloqueSeleccionado, setBloqueSeleccionado] = useState(null);
+  const [procesandoReserva, setProcesandoReserva] = useState(false);
+  const [tiempoRestante, setTiempoRestante] = useState(null);
+
+  const [metodoPago, setMetodoPago] = useState("pago_movil");
+  const [monedaAbono, setMonedaAbono] = useState("USD"); 
+  const [montoAbono, setMontoAbono] = useState("");
+  const [numReferencia, setNumReferencia] = useState("");
+  const [previewComprobante, setPreviewComprobante] = useState("");
 
   useEffect(() => {
-    const proximosDias = [];
-    for (let i = 0; i < 14; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() + i);
-      proximosDias.push(d);
-    }
-    setFechas(proximosDias);
-    setFechaSeleccionada(proximosDias[0]);
-
-    async function cargarSedes() {
-      if (!supabase) return;
-      const { data, error } = await supabase.from("sedes").select("*");
-      if (!error && data) {
-        setSedes(data);
-        if (data.length > 0) setSedeSeleccionada(data[0]);
-      }
-      setCargando(false);
-    }
-    cargarSedes();
+    setMounted(true);
+    cargarDatosIniciales();
   }, []);
 
   useEffect(() => {
-    async function buscarDisponibilidad() {
-      if (!sedeSeleccionada || !fechaSeleccionada || !supabase) return;
-      
-      setFranjaSeleccionada(null);
-      const diaSemana = fechaSeleccionada.getDay();
-      const fechaStr = fechaSeleccionada.toISOString().split("T")[0];
-
-      const { data: franjasData } = await supabase
-        .from("franjas_horarias")
-        .select("*")
-        .eq("sede_id", sedeSeleccionada.id)
-        .eq("dia_semana", diaSemana)
-        .order("hora_inicio", { ascending: true });
-
-      if (franjasData) setFranjas(franjasData);
-
-      const { data: partidosData } = await supabase
-        .from("partidos")
-        .select("hora")
-        .eq("sede_id", sedeSeleccionada.id)
-        .eq("fecha", fechaStr)
-        .neq("estado", "cancelado");
-
-      if (partidosData) {
-        setHorasOcupadas(partidosData.map(p => p.hora));
-      } else {
-        setHorasOcupadas([]);
-      }
+    if (clubSeleccionadoId) {
+      cargarCanchasYPartidos(clubSeleccionadoId);
     }
+  }, [clubSeleccionadoId, fechaSeleccionada]);
 
-    buscarDisponibilidad();
-  }, [sedeSeleccionada, fechaSeleccionada]);
+  useEffect(() => {
+    if (!supabase) return;
+    cargarBloqueos();
 
-  async function confirmarReserva() {
-    if (!franjaSeleccionada || !sedeSeleccionada || !fechaSeleccionada) return;
-    setProcesando(true);
-    setMensaje("");
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setMensaje("Debes iniciar sesión para reservar.");
-      setProcesando(false);
-      return;
-    }
-
-    const cuposMaximos = franjaSeleccionada.cupos_maximos || 14;
-    const cuposMinimos = franjaSeleccionada.cupos_minimos || 10;
-    
-    const costoTotalCancha = franjaSeleccionada.precio_creditos;
-    const costoPorJugador = Math.ceil(costoTotalCancha / cuposMaximos);
-    const costoReserva = tipoPago === "todo" ? costoTotalCancha : costoPorJugador;
-    const precioParaUnirse = tipoPago === "todo" ? 0 : costoPorJugador;
-
-    const esPrivado = tipoPago === "todo";
-    const passwordPartido = esPrivado ? generarPassword() : null;
-
-    const { data: perfil } = await supabase.from("profiles").select("creditos").eq("id", user.id).single();
-    const creditosUser = perfil?.creditos || 0;
-
-    if (creditosUser < costoReserva) {
-      setMensaje(`No tienes créditos suficientes. Necesitas ${costoReserva} créditos.`);
-      setProcesando(false);
-      return;
-    }
-
-    const fechaStr = fechaSeleccionada.toISOString().split("T")[0];
-
-    // 1. CREAR EL PARTIDO
-    const { data: nuevoPartido, error: errorPartido } = await supabase
-      .from("partidos")
-      .insert({
-        sede_id: sedeSeleccionada.id,
-        creador_id: user.id,
-        titulo: `Partido en ${sedeSeleccionada.nombre}`,
-        cancha_lugar: sedeSeleccionada.nombre,
-        zona: sedeSeleccionada.zona,
-        fecha: fechaStr,
-        hora: franjaSeleccionada.hora_inicio,
-        precio_creditos: precioParaUnirse,
-        cupos_totales: cuposMaximos,
-        cupos_minimos: cuposMinimos,
-        estado: "abierto",
-        tipo_acceso: esPrivado ? "privado" : "publico", 
-        password: passwordPartido 
+    const channel = supabase
+      .channel("realtime-futbol-locks")
+      .on("postgres_changes", { event: "*", schema: "public", table: "padel_locks" }, () => cargarBloqueos())
+      .on("postgres_changes", { event: "*", schema: "public", table: "padel_matches" }, () => {
+        if (clubSeleccionadoId) cargarCanchasYPartidos(clubSeleccionadoId);
       })
-      .select()
-      .single();
+      .subscribe();
 
-    if (errorPartido) {
-      console.error("Error DB creando partido:", errorPartido);
-      setMensaje(`Error BD: ${errorPartido.message}`);
-      setProcesando(false);
-      return;
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [clubSeleccionadoId]);
+
+  useEffect(() => {
+    let intervalo;
+    if (modalReservaOpen && tiempoRestante !== null && tiempoRestante > 0) {
+      intervalo = setInterval(() => setTiempoRestante((prev) => prev - 1), 1000);
+    } else if (tiempoRestante === 0 && modalReservaOpen) {
+      cerrarModalPorTiempoAgotado();
     }
+    return () => clearInterval(intervalo);
+  }, [tiempoRestante, modalReservaOpen]);
 
-    // 2. ACTUALIZAR CRÉDITOS Y LEDGER
-    const nuevoBalance = creditosUser - costoReserva;
-    await supabase.from("profiles").update({ creditos: nuevoBalance }).eq("id", user.id);
-    
-    const { error: errorLedger } = await supabase.from("credit_ledger").insert({
-      user_id: user.id,
-      partido_id: nuevoPartido.id,
-      delta: -costoReserva,
-      reason: esPrivado ? "reserva_cancha_privada" : "reserva_cancha_compartida",
-      balance_after: nuevoBalance,
-    });
-    
-    if (errorLedger) console.error("Error insertando en ledger:", errorLedger);
+  const mostrarNotificacion = (title, message, type = "info") => {
+    setPopupNotif({ open: true, title, message, type });
+  };
 
-    // 3. INSCRIBIR AL CREADOR
-    const { error: errorInscripcion } = await supabase.from("partido_jugadores").insert({
-      partido_id: nuevoPartido.id,
-      user_id: user.id
-    });
-    
-    if (errorInscripcion) {
-      console.error("Error DB inscribiendo jugador:", errorInscripcion);
-      setMensaje(`Partido creado, pero error al inscribirte: ${errorInscripcion.message}`);
-      setProcesando(false);
-      return;
+  async function cargarDatosIniciales() {
+    try {
+      setLoading(true);
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      setUser(authUser);
+
+      try {
+        const res = await fetch("/api/bcv-rate");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.usdRate) setTasaBCV(parseFloat(data.usdRate));
+        }
+      } catch (e) {
+        console.warn("Usando tasa fallback BCV");
+      }
+
+      const { data: clubsData } = await supabase
+        .from("padel_clubs")
+        .select("*")
+        .eq("is_active", true);
+
+      const clubesConFutbol = (clubsData || []).filter((c) => {
+        const sports = Array.isArray(c.sports) ? c.sports : [];
+        return sports.includes("futbol");
+      });
+
+      setClubes(clubesConFutbol);
+      if (clubesConFutbol.length > 0) {
+        setClubSeleccionadoId(clubesConFutbol[0].id);
+      }
+    } catch (err) {
+      console.error("Error cargando datos iniciales fútbol:", err);
+    } finally {
+      setLoading(false);
     }
-
-    router.push(`/futbol/partido/${nuevoPartido.id}`);
   }
 
-  if (cargando) {
+  async function cargarCanchasYPartidos(cId) {
+    try {
+      const { data: courtsData } = await supabase
+        .from("courts")
+        .select("*")
+        .eq("club_id", cId)
+        .eq("is_active", true)
+        .order("court_number", { ascending: true });
+
+      const filtradasFutbol = (courtsData || []).filter((c) => c.sport_type === "futbol" || !c.sport_type);
+      setCanchasFutbol(filtradasFutbol);
+
+      const { data: matchesData } = await supabase
+        .from("padel_matches")
+        .select("*, court:courts(name)")
+        .eq("club_id", cId)
+        .neq("status", "cancelado");
+
+      setPartidosFutbol(matchesData || []);
+    } catch (e) {
+      console.error("Error cargando canchas y partidos de fútbol:", e);
+    }
+  }
+
+  async function cargarBloqueos() {
+    try {
+      const ahoraISO = new Date().toISOString();
+      const { data } = await supabase.from("padel_locks").select("*").gt("expires_at", ahoraISO);
+      setBloqueosActivos(data || []);
+    } catch (error) {
+      console.error("Error cargando bloqueos:", error);
+    }
+  }
+
+  const cerrarModalPorTiempoAgotado = async () => {
+    setModalReservaOpen(false);
+    setTiempoRestante(null);
+    mostrarNotificacion("⏳ Tiempo Expirado", "Han pasado los 10 minutos. La cancha ha sido liberada.", "warning");
+    if (bloqueSeleccionado && user) {
+      const d = bloqueSeleccionado.dateObj;
+      const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+      await supabase.from("padel_locks").delete().match({ court_id: bloqueSeleccionado.cancha.id, scheduled_at: fechaFija, user_id: user.id });
+      await cargarBloqueos();
+    }
+  };
+
+  const cerrarModalManual = async () => {
+    setModalReservaOpen(false);
+    setTiempoRestante(null);
+    if (bloqueSeleccionado && user) {
+      const d = bloqueSeleccionado.dateObj;
+      const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+      await supabase.from("padel_locks").delete().match({ court_id: bloqueSeleccionado.cancha.id, scheduled_at: fechaFija, user_id: user.id });
+      await cargarBloqueos();
+    }
+  };
+
+  const clubActual = useMemo(() => {
+    return clubes.find((c) => c.id === clubSeleccionadoId) || null;
+  }, [clubes, clubSeleccionadoId]);
+
+  const listAmenidades = useMemo(() => {
+    if (!clubActual) return [];
+    return Array.isArray(clubActual.amenities) ? clubActual.amenities : ["free_parking", "changing_room"];
+  }, [clubActual]);
+
+  const diasSiguientes = useMemo(() => {
+    const list = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() + i);
+      list.push(d);
+    }
+    return list;
+  }, []);
+
+  const bloquesHorarios = useMemo(() => {
+    if (!clubActual) return [];
+    const duracion = clubActual.slot_duration_minutes || 60;
+    const horaApertura = parseInt((clubActual.open_time || "07:00:00").split(":")[0], 10);
+    const horaCierre = parseInt((clubActual.close_time || "23:00:00").split(":")[0], 10);
+
+    const bloques = [];
+    let cur = new Date(fechaSeleccionada);
+    cur.setHours(horaApertura, 0, 0, 0);
+
+    const end = new Date(fechaSeleccionada);
+    end.setHours(horaCierre, 0, 0, 0);
+
+    while (cur <= end) {
+      if (cur.getHours() === horaCierre && cur.getMinutes() > 0) break;
+      const hStr = cur.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: true });
+      bloques.push({
+        etiqueta: hStr,
+        horaInt: cur.getHours(),
+        minutosInt: cur.getMinutes(),
+        dateObj: new Date(cur),
+      });
+      cur.setMinutes(cur.getMinutes() + duracion);
+    }
+    return bloques;
+  }, [clubActual, fechaSeleccionada]);
+
+  const calcularPrecioPorBloque = (cancha, horaInt, minutosInt) => {
+    const horaFormateada = `${String(horaInt).padStart(2, '0')}:${String(minutosInt).padStart(2, '0')}`;
+    if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
+      const precioNormal = parseFloat(cancha.price_normal);
+      return { precio: isNaN(precioNormal) ? 30 : precioNormal };
+    }
+    const bloqueEncontrado = cancha.pricing_blocks.find((b) => horaFormateada >= (b.start_time || "00:00") && horaFormateada < (b.end_time || "23:59"));
+    if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price))) {
+      return { precio: parseFloat(bloqueEncontrado.price) };
+    }
+    return { precio: parseFloat(cancha.pricing_blocks[0].price) || 30 };
+  };
+
+  const abrirModalTurno = async (cancha, bloque, precioCalculado) => {
+    if (!user) {
+      mostrarNotificacion("Inicia Sesión", "Debes iniciar sesión para reservar una cancha.", "warning");
+      setTimeout(() => router.push("/login"), 1800);
+      return;
+    }
+
+    const d = bloque.dateObj;
+    const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+
+    const lockExistente = bloqueosActivos.find((l) => l.court_id === cancha.id && l.scheduled_at.substring(0, 16) === fechaFija.substring(0, 16));
+
+    if (lockExistente) {
+      return mostrarNotificacion("Cancha en proceso de reserva", "Alguien más está procesando el pago para esta cancha. Intenta nuevamente en unos minutos.", "warning");
+    }
+
+    try {
+      setProcesandoReserva(true);
+      const expiresAt = new Date(Date.now() + 10 * 60000).toISOString();
+      const { error: lockErr } = await supabase.from("padel_locks").upsert({
+        court_id: cancha.id,
+        scheduled_at: fechaFija,
+        user_id: user.id,
+        expires_at: expiresAt
+      }, { onConflict: 'court_id,scheduled_at' });
+
+      if (lockErr) {
+        console.error("Error al bloquear la cancha:", lockErr);
+        setProcesandoReserva(false);
+        return mostrarNotificacion("Error al Bloquear", lockErr.message || "No se pudo registrar el bloqueo.", "error");
+      }
+
+      await cargarBloqueos();
+
+      setTiempoRestante(600);
+      setBloqueSeleccionado({
+        cancha,
+        dateObj: bloque.dateObj,
+        horaLabel: bloque.etiqueta,
+        precioBaseTotal: precioCalculado,
+      });
+
+      setMetodoPago("pago_movil");
+      setMonedaAbono("USD");
+      setMontoAbono(precioCalculado.toFixed(2));
+      setNumReferencia("");
+      setPreviewComprobante("");
+      setModalReservaOpen(true);
+    } catch (e) {
+      console.error(e);
+      mostrarNotificacion("Error", "Ocurrió un fallo al intentar bloquear la cancha.", "error");
+    } finally {
+      setProcesandoReserva(false);
+    }
+  };
+
+  async function confirmarReservaFutbol() {
+    if (!user || !bloqueSeleccionado) return;
+
+    const valIngresado = parseFloat(montoAbono);
+    if (isNaN(valIngresado) || valIngresado <= 0) {
+      return mostrarNotificacion("Monto Inválido", "Ingresa un monto válido a abonar.", "error");
+    }
+
+    if (metodoPago !== "efectivo" && !previewComprobante && !numReferencia.trim()) {
+      return mostrarNotificacion("Falta Comprobante", "Adjunta tu comprobante o ingresa el número de referencia.", "error");
+    }
+
+    const d = bloqueSeleccionado.dateObj;
+    const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+    const montoUSD = monedaAbono === "VES" ? valIngresado / tasaBCV : valIngresado;
+
+    try {
+      setProcesandoReserva(true);
+
+      const { data: matchExistente } = await supabase
+        .from("padel_matches")
+        .select("id")
+        .eq("court_id", bloqueSeleccionado.cancha.id)
+        .eq("scheduled_at", fechaFija)
+        .neq("status", "cancelado")
+        .maybeSingle();
+
+      if (matchExistente) {
+        await supabase.from("padel_locks").delete().match({ court_id: bloqueSeleccionado.cancha.id, scheduled_at: fechaFija });
+        await cargarBloqueos();
+        setModalReservaOpen(false);
+        return mostrarNotificacion("Cancha Ocupada", "Esta cancha acaba de ser reservada por otro usuario.", "warning");
+      }
+
+      const { data: userProf } = await supabase.from("profiles").select("nombre, apellido, telefono").eq("id", user.id).maybeSingle();
+      const nombreUsuario = userProf ? `${userProf.nombre || ""} ${userProf.apellido || ""}`.trim() : user.email;
+
+      const nuevoAbono = {
+        id: `pay-${Date.now()}`,
+        user_id: user.id,
+        user_name: nombreUsuario,
+        user_phone: userProf?.telefono || "Sin teléfono",
+        amount: montoUSD,
+        method: metodoPago,
+        reference: numReferencia.trim() || "S/R",
+        receipt_url: previewComprobante || null,
+        status: metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
+        created_at: new Date().toISOString(),
+      };
+
+      const { data: newMatch, error: matchErr } = await supabase
+        .from("padel_matches")
+        .insert({
+          club_id: clubSeleccionadoId,
+          court_id: bloqueSeleccionado.cancha.id,
+          scheduled_at: fechaFija,
+          total_price: bloqueSeleccionado.precioBaseTotal,
+          price_per_player: bloqueSeleccionado.precioBaseTotal / 10,
+          app_fee: bloqueSeleccionado.precioBaseTotal * 0.1,
+          match_type: "privado",
+          is_private: true,
+          status: "programado",
+          payment_status: metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion",
+          payment_method: metodoPago,
+          payment_proof_urls: previewComprobante ? [previewComprobante] : [],
+          payments_history: [nuevoAbono],
+          created_by: user.id,
+          notes: "Reserva Fútbol Caimana",
+        })
+        .select()
+        .single();
+
+      if (matchErr) throw matchErr;
+
+      await supabase.from("padel_match_players").insert({ match_id: newMatch.id, user_id: user.id, team: "A" });
+      await supabase.from("padel_locks").delete().match({ court_id: bloqueSeleccionado.cancha.id, scheduled_at: fechaFija });
+      await cargarBloqueos();
+
+      setTiempoRestante(null);
+      setModalReservaOpen(false);
+      mostrarNotificacion("🎉 ¡Cancha Reservada!", "Tu reserva de fútbol ha sido registrada exitosamente.", "success");
+      await cargarCanchasYPartidos(clubSeleccionadoId);
+    } catch (err) {
+      console.error(err);
+      if (err.message && err.message.includes("unique_court_time")) {
+        mostrarNotificacion("Cancha ya no disponible", "Alguien más acaba de confirmar una reserva para esta cancha.", "error");
+      } else {
+        mostrarNotificacion("Error", err.message || "Error al procesar la reserva.", "error");
+      }
+    } finally {
+      setProcesandoReserva(false);
+    }
+  }
+
+  const formatoTiempo = (segundos) => {
+    if (segundos === null) return "";
+    const m = Math.floor(segundos / 60);
+    const s = segundos % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
+  if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50/50 pb-40">
-      
-      <main className="max-w-5xl mx-auto px-4 pt-8 space-y-8">
-        
-        {/* ENCABEZADO ESTILO COMUNIDAD */}
-        <div className="border-b border-gray-200/80 pb-5">
-          <h1 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
-            Reservar cancha
-          </h1>
-          <p className="text-sm text-gray-500 mt-1 font-medium">
-            Elige tu complejo favorito, selecciona la fecha y aparta el horario de tu próximo juego.
-          </p>
-        </div>
-        
-        {/* SECCIÓN: ELIGE TU COMPLEJO */}
-        <div>
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">Elige tu complejo</h2>
-          <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide snap-x">
-            {sedes.map((sede) => (
-              <button
-                key={sede.id}
-                onClick={() => setSedeSeleccionada(sede)}
-                className={`snap-start shrink-0 w-64 rounded-3xl overflow-hidden border-2 transition-all text-left relative group ${
-                  sedeSeleccionada?.id === sede.id 
-                  ? "border-[#00FF9D] shadow-md ring-4 ring-[#00FF9D]/10" 
-                  : "border-transparent bg-white shadow-sm hover:shadow-md"
-                }`}
-              >
-                <div className="h-32 w-full bg-gray-200 relative overflow-hidden">
-                  <img 
-                    src={sede.imagen_url || "https://images.unsplash.com/photo-1518605368461-1ee7e53f090b?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80"} 
-                    alt={sede.nombre}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
-                  
-                  {sedeSeleccionada?.id === sede.id && (
-                    <div className="absolute top-3 right-3 bg-[#00FF9D] text-[#0B0C15] p-1.5 rounded-full shadow-lg">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
-                    </div>
-                  )}
-                </div>
-                <div className="p-4 bg-white">
-                  <p className="font-black text-gray-900 text-lg leading-tight truncate">{sede.nombre}</p>
-                  <div className="flex items-center gap-1 mt-1 text-gray-500">
-                    <svg className="w-3.5 h-3.5 text-[#00FF9D]" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" /></svg>
-                    <p className="text-xs font-semibold">{sede.zona}</p>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
+    <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 space-y-6">
+      <div className="mx-auto max-w-7xl space-y-6">
 
-        {/* SECCIÓN: FECHA */}
-        {sedeSeleccionada && (
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Fecha</h2>
-              <span className="text-xs font-black text-white bg-[#0B0C15] px-3 py-1.5 rounded-lg tracking-widest uppercase">
-                {MESES[fechaSeleccionada?.getMonth()]} {fechaSeleccionada?.getFullYear()}
+        {/* HERO BANNER CON INFORMACIÓN DEL CLUB */}
+        <div className="relative w-full h-52 sm:h-80 bg-slate-900 rounded-3xl sm:rounded-[2.5rem] overflow-hidden shadow-xl border border-slate-200">
+          {clubActual?.image_url ? (
+            <img src={clubActual.image_url} alt={clubActual.name} className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-950" />
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
+
+          <div className="absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-6 text-white flex flex-col md:flex-row md:items-end justify-between gap-3">
+            <div className="space-y-1 max-w-2xl">
+              <span className="bg-emerald-500 text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-full shadow-sm">
+                ⚽ Complejo de Fútbol Verificado
               </span>
+              <h1 className="text-xl sm:text-4xl font-black">{clubActual?.name || "Canchas de Fútbol"}</h1>
+              <p className="text-[11px] sm:text-sm text-slate-300 font-medium">
+                📍 {clubActual?.address || "Dirección del club"}, {clubActual?.city || "Ciudad"}
+              </p>
             </div>
-            
-            <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-hide snap-x">
-              {fechas.map((fecha, i) => {
-                const esHoy = i === 0;
-                const isSelected = fechaSeleccionada?.toDateString() === fecha.toDateString();
-                
-                return (
-                  <button
-                    key={i}
-                    onClick={() => setFechaSeleccionada(fecha)}
-                    className={`snap-start shrink-0 w-16 h-20 flex flex-col items-center justify-center rounded-2xl transition-all ${
-                      isSelected 
-                      ? "bg-[#00FF9D] shadow-lg shadow-[#00FF9D]/20 border-2 border-[#00FF9D]" 
-                      : "bg-gray-50 border-2 border-gray-100 hover:border-gray-200"
-                    }`}
-                  >
-                    <span className={`text-[10px] font-black uppercase tracking-widest ${isSelected ? "text-[#0B0C15]" : "text-gray-400"}`}>
-                      {esHoy ? "Hoy" : DIAS_SEMANA[fecha.getDay()]}
-                    </span>
-                    <span className={`text-2xl font-black mt-0.5 ${isSelected ? "text-[#0B0C15]" : "text-gray-900"}`}>
-                      {fecha.getDate()}
-                    </span>
-                  </button>
-                );
-              })}
+
+            <a
+              href="#reserva-pistas"
+              className="px-5 py-2.5 sm:px-6 sm:py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl sm:rounded-2xl shadow-lg transition-all text-center"
+            >
+              ⚡ Reservar Cancha
+            </a>
+          </div>
+        </div>
+
+        {/* LAYOUT EN 2 COLUMNAS */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
+          
+          {/* DETALLES Y AMENIDADES DEL CLUB */}
+          <div className="lg:col-span-4 space-y-6">
+            <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-4">
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Cambiar Complejo Deportivo</label>
+                <select
+                  value={clubSeleccionadoId || ""}
+                  onChange={(e) => setClubSeleccionadoId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-black text-slate-900 outline-none"
+                >
+                  {clubes.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name} — {c.city}</option>
+                  ))}
+                </select>
+              </div>
+
+              {clubActual?.description && (
+                <div className="border-t border-slate-100 pt-3">
+                  <h4 className="text-xs font-black text-slate-900 uppercase mb-1">Sobre el Complejo</h4>
+                  <p className="text-xs text-slate-500 leading-relaxed font-medium">{clubActual.description}</p>
+                </div>
+              )}
+
+              <div className="border-t border-slate-100 pt-3 space-y-2">
+                <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-tight">Amenidades</h3>
+                <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                  {listAmenidades.map((key) => {
+                    const am = AMENIDADES_MAP[key] || { label: key, icon: "✨" };
+                    return (
+                      <span key={key} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-800 text-[11px] font-bold">
+                        <span>{am.icon}</span>
+                        <span>{am.label}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </div>
-        )}
 
-        {/* SECCIÓN: HORARIOS DISPONIBLES */}
-        {sedeSeleccionada && fechaSeleccionada && (
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-5">Horarios disponibles</h2>
-            
-            {franjas.length === 0 ? (
-              <div className="text-center py-10 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
-                <p className="text-sm font-bold text-gray-400">No hay canchas para este día.</p>
+          {/* PARTE DERECHA: SELECCIÓN DE DÍAS Y GRILLA */}
+          <div className="lg:col-span-8 space-y-6" id="reserva-pistas">
+            <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-6 border border-slate-200 shadow-sm space-y-4">
+              <div className="flex justify-between items-center border-b pb-3">
+                <h2 className="text-base sm:text-lg font-black text-slate-900">Reserva tu Cancha en Tiempo Real</h2>
+                <span className="text-[11px] sm:text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">
+                  {canchasFutbol.length} canchas
+                </span>
               </div>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {franjas.map((franja) => {
-                  const isOcupada = horasOcupadas.includes(franja.hora_inicio);
-                  const isSelected = franjaSeleccionada?.id === franja.id;
-                  const cuposDisponibles = franja.cupos_maximos || 14;
 
+              {/* Selector de Días */}
+              <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-2">
+                {diasSiguientes.map((d, i) => {
+                  const isSel = fechaSeleccionada.toDateString() === d.toDateString();
                   return (
                     <button
-                      key={franja.id}
-                      disabled={isOcupada}
-                      onClick={() => setFranjaSeleccionada(franja)}
-                      className={`flex flex-col items-center justify-center py-4 px-2 rounded-2xl border-2 transition-all relative overflow-hidden ${
-                        isOcupada
-                        ? "bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed"
-                        : isSelected
-                        ? "border-[#0B0C15] bg-[#0B0C15] shadow-lg"
-                        : "border-gray-100 bg-white hover:border-[#00FF9D]/50"
+                      key={i}
+                      onClick={() => setFechaSeleccionada(d)}
+                      className={`shrink-0 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-center border transition-all ${
+                        isSel ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md" : "bg-slate-50 text-slate-600 border-slate-200 font-bold"
                       }`}
                     >
-                      <span className={`text-base font-black ${isOcupada ? "text-gray-400 line-through" : isSelected ? "text-[#00FF9D]" : "text-gray-900"}`}>
-                        {formatHora12(franja.hora_inicio)}
+                      <span className="text-[9px] sm:text-[10px] font-black uppercase block opacity-60">
+                        {i === 0 ? "Hoy" : d.toLocaleDateString("es-ES", { weekday: "short" })}
                       </span>
-                      {!isOcupada && (
-                        <span className={`text-[10px] font-bold mt-1 tracking-wider uppercase ${isSelected ? "text-white" : "text-gray-400"}`}>
-                          {cuposDisponibles} Cupos
-                        </span>
-                      )}
+                      <span className="text-xs sm:text-sm font-black block mt-0.5">
+                        {d.getDate()} {d.toLocaleDateString("es-ES", { month: "short" })}
+                      </span>
                     </button>
                   );
                 })}
               </div>
-            )}
-          </div>
-        )}
-      </main>
 
-      {/* FOOTER FLOTANTE PARA CONFIRMAR RESERVA */}
-      {franjaSeleccionada && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 pb-8 shadow-[0_-20px_40px_rgba(0,0,0,0.08)] z-50 rounded-t-3xl transition-transform transform translate-y-0">
-          <div className="max-w-2xl mx-auto">
-            
-            <div className="mb-4 space-y-2">
-              <div 
-                onClick={() => setTipoPago("parte")}
-                className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${tipoPago === "parte" ? "border-[#00FF9D] bg-[#00FF9D]/5" : "border-gray-100 bg-white hover:bg-gray-50"}`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${tipoPago === "parte" ? "border-[#00FF9D]" : "border-gray-300"}`}>
-                    {tipoPago === "parte" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full"></div>}
+              {/* GRILLA DE CANCHAS DE FÚTBOL */}
+              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
+                <div className="inline-min-w-full min-w-[500px] w-full">
+                  
+                  <div className="flex bg-slate-950 text-white border-b-2 border-slate-800 sticky top-0 z-30">
+                    <div className="w-16 sm:w-24 shrink-0 p-2 sm:p-3 font-black text-[10px] sm:text-[11px] text-slate-300 text-center uppercase tracking-wider border-r border-slate-800 bg-slate-950">
+                      Hora
+                    </div>
+                    {canchasFutbol.map((c) => (
+                      <div key={c.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-2 sm:p-3 text-center border-l border-slate-800 font-black text-[11px] sm:text-xs uppercase tracking-tight">
+                        ⚽ {c.name}
+                      </div>
+                    ))}
                   </div>
-                  <div>
-                    <p className="font-black text-gray-900 text-sm">Pagas tu parte</p>
-                    <p className="text-xs font-medium text-gray-500 mt-0.5">El partido será público</p>
-                  </div>
+
+                  {canchasFutbol.length === 0 ? (
+                    <div className="p-8 text-center text-xs font-bold text-slate-400">
+                      Este complejo aún no tiene canchas de fútbol configuradas.
+                    </div>
+                  ) : (
+                    bloquesHorarios.map((bloque, idx) => (
+                      <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
+                        <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center font-black text-xs text-slate-900">
+                          <span>{bloque.etiqueta.split(" ")[0]}</span>
+                          <span className="text-[9px] text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
+                        </div>
+
+                        {canchasFutbol.map((cancha) => {
+                          const ano = fechaSeleccionada.getFullYear();
+                          const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+                          const dia = String(fechaSeleccionada.getDate()).padStart(2, '0');
+                          const hora = String(bloque.horaInt).padStart(2, '0');
+                          const minutos = String(bloque.minutosInt).padStart(2, '0');
+                          const fechaSlotGrid = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
+
+                          const partidoOcupado = partidosFutbol.find((m) => m.court_id === cancha.id && m.scheduled_at.substring(0, 16) === fechaSlotGrid);
+                          const lockOcupado = bloqueosActivos.find((l) => l.court_id === cancha.id && l.scheduled_at.replace(" ", "T").substring(0, 16) === fechaSlotGrid);
+
+                          const { precio: precioUSD } = calcularPrecioPorBloque(cancha, bloque.horaInt, bloque.minutosInt);
+
+                          if (partidoOcupado) {
+                            return (
+                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <div className="h-full rounded-xl p-2 bg-slate-950 text-white flex flex-col justify-between shadow-xs border-2 border-slate-800 opacity-90 cursor-not-allowed">
+                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300 self-start">RESERVADO</span>
+                                  <p className="text-[11px] font-black text-slate-300">Cancha Reservada</p>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          if (lockOcupado) {
+                            return (
+                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
+                                  <span className="text-xl animate-pulse">⏳</span>
+                                  <p className="text-[10px] font-black text-amber-600 mt-1">En proceso...</p>
+                                  <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Alguien está pagando</p>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                              <button
+                                onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
+                                className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative cursor-pointer"
+                              >
+                                <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">+ Agendar</span>
+                                <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))
+                  )}
                 </div>
-                <span className="font-black text-lg text-gray-900">
-                  {Math.ceil(franjaSeleccionada.precio_creditos / (franjaSeleccionada.cupos_maximos || 14))} <span className="text-[10px] text-gray-400">créditos</span>
-                </span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* MODAL PASARELA DE PAGO FÚTBOL */}
+      {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={cerrarModalManual}>
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="border-b pb-3 space-y-2 relative">
+              <div className="flex justify-between items-start">
+                <div>
+                  <span className="text-[10px] font-black uppercase text-emerald-600 tracking-wider block">Reserva de Cancha de Fútbol</span>
+                  <h3 className="text-lg font-black text-slate-900">{bloqueSeleccionado.cancha.name}</h3>
+                </div>
+                <button onClick={cerrarModalManual} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
               </div>
 
-              <div 
-                onClick={() => setTipoPago("todo")}
-                className={`flex items-center justify-between p-4 rounded-2xl border-2 cursor-pointer transition-all ${tipoPago === "todo" ? "border-[#00FF9D] bg-[#00FF9D]/5" : "border-gray-100 bg-white hover:bg-gray-50"}`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${tipoPago === "todo" ? "border-[#00FF9D]" : "border-gray-300"}`}>
-                    {tipoPago === "todo" && <div className="w-2.5 h-2.5 bg-[#00FF9D] rounded-full"></div>}
-                  </div>
-                  <div>
-                    <p className="font-black text-gray-900 text-sm flex items-center gap-1.5">
-                      Reservar cancha completa
-                      <svg className="w-3.5 h-3.5 text-gray-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>
-                    </p>
-                    <p className="text-xs font-medium text-gray-500 mt-0.5">Cancha privada con contraseña</p>
-                  </div>
+              {tiempoRestante !== null && (
+                <div className={`absolute top-0 right-8 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-sm ${tiempoRestante < 60 ? 'bg-rose-100 text-rose-700 border-rose-200 animate-pulse' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>
+                  <span>⏳</span>
+                  <span>{formatoTiempo(tiempoRestante)}</span>
                 </div>
-                <span className="font-black text-lg text-gray-900">
-                  {franjaSeleccionada.precio_creditos} <span className="text-[10px] text-gray-400">créditos</span>
-                </span>
+              )}
+
+              <div className="bg-slate-900 text-white p-2.5 rounded-2xl flex justify-between items-center text-xs font-bold shadow-sm">
+                <span>📅 {fechaSeleccionada.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" })}</span>
+                <span className="bg-[#00FF9D] text-slate-950 px-2.5 py-1 rounded-xl font-black">{bloqueSeleccionado.horaLabel}</span>
               </div>
             </div>
 
-            {mensaje && <p className="text-xs text-red-500 font-bold mb-3 text-center bg-red-50 py-2 rounded-lg">{mensaje}</p>}
-            
-            <button
-              onClick={confirmarReserva}
-              disabled={procesando}
-              className="w-full bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-900 transition-colors disabled:opacity-70 shadow-lg shadow-gray-900/20"
-            >
-              {procesando ? (
-                "Procesando..."
-              ) : (
+            <div className="space-y-4 text-xs font-bold text-slate-700">
+              <div className="bg-slate-900 text-white p-3.5 rounded-2xl space-y-1.5">
+                <div className="flex justify-between items-start text-[#00FF9D]">
+                  <span>Total Cancha Fútbol:</span>
+                  <div className="text-right">
+                    <span className="font-black">${bloqueSeleccionado.precioBaseTotal.toFixed(2)}</span>
+                    <span className="text-[10px] text-emerald-400/80 block">Bs. {(bloqueSeleccionado.precioBaseTotal * tasaBCV).toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
+                <label className="text-[10px] font-black uppercase text-slate-500 block">Monto a Abonar Hoy ($ / Bs):</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  required
+                  value={montoAbono}
+                  onChange={(e) => setMontoAbono(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl p-3 text-lg font-black text-slate-900 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">Método de Pago</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: "pago_movil", label: "📱 Pago Móvil" },
+                    { id: "zelle", label: "🇺🇸 Zelle" },
+                    { id: "efectivo", label: "💵 En Sitio" },
+                  ].map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setMetodoPago(m.id)}
+                      className={`py-3 px-2 rounded-xl text-[10px] font-black uppercase border transition-all ${metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-slate-50 text-slate-600 border-slate-200"}`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {metodoPago !== "efectivo" && (
                 <>
-                  Confirmar y Pagar
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">N° Referencia</label>
+                    <input
+                      type="text"
+                      placeholder="Ej. #123456"
+                      value={numReferencia}
+                      onChange={(e) => setNumReferencia(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Comprobante (Imagen)</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onloadend = () => setPreviewComprobante(reader.result);
+                        reader.readAsDataURL(file);
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold outline-none"
+                    />
+                  </div>
                 </>
               )}
+
+              <button
+                type="button"
+                onClick={confirmarReservaFutbol}
+                disabled={procesandoReserva}
+                className="w-full py-4 bg-emerald-600 text-white font-black uppercase text-xs tracking-wider rounded-2xl shadow-md cursor-pointer"
+              >
+                {procesandoReserva ? "Procesando..." : "Confirmar Reserva de Fútbol"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* POPUP NOTIFICACIÓN */}
+      {mounted && popupNotif.open && createPortal(
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-3 text-center animate-in fade-in zoom-in-95 duration-150">
+            <h3 className="text-base font-black text-slate-900">{popupNotif.title}</h3>
+            <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
+            <button
+              onClick={() => setPopupNotif({ ...popupNotif, open: false })}
+              className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl hover:bg-slate-800 transition-colors"
+            >
+              Entendido
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

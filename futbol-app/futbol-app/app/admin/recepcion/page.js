@@ -219,14 +219,13 @@ export default function RecepcionElite() {
     }
   }, [clubId, diasVisibles]);
 
-  // EFECTO PARA SUPABASE REALTIME (AGREGADO padel_locks)
   useEffect(() => {
     if (!clubId || !supabase) return;
 
-    cargarBloqueos(); // Carga inicial
+    cargarBloqueos();
 
     const channel = supabase
-      .channel("pos-realtime-matches-full-v41")
+      .channel("pos-realtime-matches-full-v44")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "padel_matches", filter: `club_id=eq.${clubId}` },
@@ -342,7 +341,7 @@ export default function RecepcionElite() {
       const { data: clubData } = await supabase.from("padel_clubs").select("*").eq("id", targetClubId).maybeSingle();
       setClubInfo(clubData || { slot_duration_minutes: 60, open_time: "07:00:00", close_time: "23:00:00" });
 
-      const { data: courts } = await supabase.from("padel_courts").select("*").eq("club_id", targetClubId).eq("is_active", true).order("court_number");
+      const { data: courts } = await supabase.from("courts").select("*").eq("club_id", targetClubId).eq("is_active", true).order("court_number");
       setCanchas(courts || []);
 
       const { data: inventory } = await supabase.from("products").select("*").eq("club_id", targetClubId).order("name");
@@ -365,7 +364,7 @@ export default function RecepcionElite() {
 
     const { data: matches, error: matchErr } = await supabase
       .from("padel_matches")
-      .select("*, court:padel_courts(name)")
+      .select("*, court:courts(name)")
       .eq("club_id", clubId)
       .gte("scheduled_at", inicioFijo)
       .lte("scheduled_at", finFijo)
@@ -427,6 +426,8 @@ export default function RecepcionElite() {
     nueva.setDate(nueva.getDate() + offset * salto);
     setFechaBase(nueva);
   };
+
+  const irAHoy = () => setFechaBase(new Date());
 
   const canchasFiltradas = useMemo(() => {
     if (canchaFiltro === "todas") return canchas;
@@ -523,10 +524,11 @@ export default function RecepcionElite() {
     return "Cliente Mostrador";
   };
 
-  // --- LÓGICA DE PRECIOS POR BLOQUE (SINCRONIZADA CON POS Y PÚBLICO) ---
-  const calcularPrecioPorBloque = (cancha, horaInt, minutosInt) => {
+  const calcularPrecioPorBloque = (cancha, dateObj) => {
     try {
-      const horaFormateada = `${String(horaInt).padStart(2, '0')}:${String(minutosInt).padStart(2, '0')}`;
+      const hora = dateObj.getUTCHours();
+      const minutos = dateObj.getUTCMinutes();
+      const horaFormateada = `${String(hora).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`;
 
       if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
         const precioNormal = parseFloat(cancha.price_normal);
@@ -538,7 +540,7 @@ export default function RecepcionElite() {
       });
 
       if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price))) {
-        return { precio: parseFloat(bloqueEncontrado.price), esPico: false }; 
+        return { precio: parseFloat(bloqueEncontrado.price), esPico: false };
       }
 
       const primerPrecio = parseFloat(cancha.pricing_blocks[0].price);
@@ -579,7 +581,6 @@ export default function RecepcionElite() {
     return bloques;
   }, [clubInfo]);
 
-  // BÚSQUEDA DE RESERVA SIN CONVERSIÓN DE ZONA HORARIA LOCAL (SOLO UTC WALL-CLOCK)
   const obtenerReserva = (canchaId, bloqueDateObj) => {
     return partidosPeriodo.find((p) => {
       if (p.court_id !== canchaId) return false;
@@ -624,14 +625,22 @@ export default function RecepcionElite() {
       setProcesando(true);
       const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); 
       
-      await supabase
+      const { error: lockErr } = await supabase
         .from("padel_locks")
         .upsert({
           court_id: cancha.id,
           scheduled_at: fechaFija,
           user_id: user.id,
           expires_at: expiresAt
-        }, { onConflict: 'court_id, scheduled_at' });
+        }, { onConflict: 'court_id,scheduled_at' });
+
+      if (lockErr) {
+        console.error("Error al bloquear pista en POS:", lockErr);
+        setProcesando(false);
+        return mostrarNotificacion("Error al Bloquear", lockErr.message || "No se pudo registrar el bloqueo.", "error");
+      }
+
+      await cargarBloqueos();
 
       const precioBaseTotal = precioCalculado || cancha.price_credits || 15;
       const feeSugerido = precioBaseTotal * 0.10;
@@ -650,6 +659,7 @@ export default function RecepcionElite() {
       setModalAgendarOpen(true);
     } catch (e) {
       console.error("Error bloqueando la pista en POS:", e);
+      mostrarNotificacion("Error", "Ocurrió un fallo al intentar bloquear la pista.", "error");
     } finally {
       setProcesando(false);
     }
@@ -669,6 +679,8 @@ export default function RecepcionElite() {
           scheduled_at: fechaFija,
           user_id: user.id
         });
+
+      await cargarBloqueos();
     }
   };
 
@@ -709,12 +721,28 @@ export default function RecepcionElite() {
     }
 
     const montoUSD = monedaAgendarPOS === "VES" ? valIngresado / tasaBCV : valIngresado;
+    const { cancha, dateObj } = bloqueAgendar;
+    const scheduledAtFijo = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObj.getUTCDate()).padStart(2, '0')}T${String(dateObj.getUTCHours()).padStart(2, '0')}:${String(dateObj.getUTCMinutes()).padStart(2, '0')}:00`;
 
     try {
       setProcesando(true);
-      const { cancha, dateObj } = bloqueAgendar;
-      const { base, fee, totalSugerido } = calculosAgendarPOS;
 
+      const { data: matchExistente } = await supabase
+        .from("padel_matches")
+        .select("id")
+        .eq("court_id", cancha.id)
+        .eq("scheduled_at", scheduledAtFijo)
+        .neq("status", "cancelado")
+        .maybeSingle();
+
+      if (matchExistente) {
+        await supabase.from("padel_locks").delete().match({ court_id: cancha.id, scheduled_at: scheduledAtFijo, user_id: user.id });
+        await cargarBloqueos();
+        setModalAgendarOpen(false);
+        return mostrarNotificacion("Pista Ocupada", "Un usuario acaba de confirmar la reserva en esta pista para el mismo horario.", "warning");
+      }
+
+      const { base, fee, totalSugerido } = calculosAgendarPOS;
       const nombreCliente = formAgendarPOS.nombreCliente.trim() || "Cliente Mostrador";
       const telefonoCliente = formAgendarPOS.telefonoCliente.trim();
       const notaFinal = telefonoCliente ? `${nombreCliente} (${telefonoCliente})` : nombreCliente;
@@ -734,8 +762,6 @@ export default function RecepcionElite() {
 
       const pagoCompleto = montoUSD >= totalSugerido - 0.05;
       const estadoPagoInicial = pagoCompleto ? "aprobado" : "pendiente_aprobacion";
-
-      const scheduledAtFijo = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObj.getUTCDate()).padStart(2, '0')}T${String(dateObj.getUTCHours()).padStart(2, '0')}:${String(dateObj.getUTCMinutes()).padStart(2, '0')}:00`;
 
       const { data: newMatch, error: matchErr } = await supabase
         .from("padel_matches")
@@ -767,7 +793,6 @@ export default function RecepcionElite() {
         team: "A",
       });
 
-      // ELIMINAR EL BLOQUEO
       await supabase
         .from("padel_locks")
         .delete()
@@ -775,6 +800,8 @@ export default function RecepcionElite() {
           court_id: cancha.id,
           scheduled_at: scheduledAtFijo
         });
+
+      await cargarBloqueos();
 
       setModalAgendarOpen(false);
       mostrarNotificacion(
@@ -785,7 +812,6 @@ export default function RecepcionElite() {
       await cargarPartidosPeriodo();
     } catch (err) {
       console.error(err);
-      // CAPTURA DEL ERROR DE DUPLICIDAD (UNIQUE CONSTRAINT)
       if (err.message && err.message.includes("unique_court_time")) {
         mostrarNotificacion("Pista ya no disponible", "Alguien más acaba de confirmar una reserva para esta pista hace unos instantes.", "error");
       } else {
@@ -1466,13 +1492,13 @@ export default function RecepcionElite() {
           
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xl">🎾</span>
+              <span className="text-xl">🏟️</span>
               <h1 className="text-base sm:text-lg font-black text-slate-900 leading-tight">
-                Gestión de Pistas & Recepción POS
+                Gestión de Canchas & Recepción POS
               </h1>
             </div>
             <p className="text-[10px] sm:text-xs font-bold text-slate-400">
-              Agenda en vivo, control de reservas y ventas rápidas de mostrador
+              Agenda multideporte en vivo, control de reservas y ventas de mostrador
             </p>
           </div>
 
@@ -1532,10 +1558,10 @@ export default function RecepcionElite() {
               onChange={(e) => setCanchaFiltro(e.target.value)}
               className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 text-slate-800 font-bold rounded-xl text-xs outline-none cursor-pointer"
             >
-              <option value="todas">🎾 Todas las Pistas</option>
+              <option value="todas">🏟️ Todas las Canchas</option>
               {canchas.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
+                  {c.sport_type === "futbol" ? "⚽" : "🎾"} {c.name}
                 </option>
               ))}
             </select>
@@ -1592,16 +1618,12 @@ export default function RecepcionElite() {
         <div className="flex-1 overflow-auto p-2 sm:p-4 bg-slate-100 relative">
           <div className="flex gap-3 w-full min-w-full items-start relative">
             
-            {/* HORA STICKY EXTERNA (FONDO SÓLIDO LIMPIO SIN DEGRADADO) */}
             <div className="w-[72px] sm:w-[84px] shrink-0 sticky left-0 z-30 flex flex-col bg-slate-100 pr-3">
               <div className="bg-white rounded-2xl border-2 border-slate-300 shadow-md flex flex-col overflow-hidden mb-2">
-                
-                {/* ENCABEZADO "HORA" (48px + 40px = 88px) */}
                 <div className="h-[88px] bg-slate-900 text-[#00FF9D] font-black text-xs uppercase flex items-center justify-center border-b-4 border-[#00FF9D] shrink-0">
                   HORA
                 </div>
                 
-                {/* BLOQUES DE HORA (96px exactos por fila) */}
                 <div className="flex flex-col">
                   {bloquesHorarios.map((bloque, idx) => (
                     <div key={idx} className="h-24 flex flex-col items-center justify-center p-1 text-center border-b border-slate-100 last:border-b-0">
@@ -1613,7 +1635,6 @@ export default function RecepcionElite() {
               </div>
             </div>
 
-            {/* CONTENEDORES DE DÍAS QUE SE ADAPTAN SEGÚN LA VISTA */}
             <div className="flex-1 flex gap-3 min-w-0 w-full relative z-0">
               {bloquesPorDia.map((bloqueDia) => (
                 <div
@@ -1623,14 +1644,12 @@ export default function RecepcionElite() {
                   }`}
                 >
                   
-                  {/* ENCABEZADO DE TARJETA (DÍA) - ALTURA 48px */}
                   <div className="h-12 bg-slate-900 text-white px-3 flex items-center justify-center border-b-4 border-[#00FF9D]">
                     <h3 className="text-xs sm:text-sm font-black tracking-wider uppercase text-[#00FF9D] truncate">
                       {bloqueDia.nombreDiaLargoMayus}
                     </h3>
                   </div>
 
-                  {/* SUBENCABEZADO DE PISTAS - ALTURA 40px */}
                   <div className="h-10 flex border-b border-slate-200 bg-slate-100/80 items-center">
                     {bloqueDia.canchas.map((col) => (
                       <div
@@ -1639,12 +1658,14 @@ export default function RecepcionElite() {
                           vistaCalendario === "dia" ? "flex-1 min-w-[140px]" : "w-[160px] shrink-0"
                         }`}
                       >
-                        <span className="text-slate-900 text-[10px] sm:text-[11px] font-black">{col.cancha.name}</span>
+                        <span className="text-slate-900 text-[10px] sm:text-[11px] font-black flex items-center justify-center gap-1">
+                          <span>{col.cancha.sport_type === "futbol" ? "⚽" : "🎾"}</span>
+                          <span className="truncate">{col.cancha.name}</span>
+                        </span>
                       </div>
                     ))}
                   </div>
 
-                  {/* BLOQUES DE HORARIOS INTERNOS */}
                   <div className="flex flex-col">
                     {bloquesHorarios.map((bloque, idx) => {
                       const esFilaPar = idx % 2 === 0;
@@ -1663,30 +1684,10 @@ export default function RecepcionElite() {
 
                             const reservado = obtenerReserva(col.cancha.id, dateObjSlot);
 
-                            const { precio: precioOriginal } = calcularPrecioPorBloque(col.cancha, bloque.horaInt, bloque.minutosInt);
-                            let precioUSD = precioOriginal;
+                            const { precio: precioOriginal } = calcularPrecioPorBloque(col.cancha, dateObjSlot);
 
-                            // EVALUACIÓN DE PROMOCIÓN
                             const slotFechaStr = `${dateObjSlot.getUTCFullYear()}-${String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObjSlot.getUTCDate()).padStart(2, '0')}`;
                             const promoSlot = promocionesPeriodo.find(p => p.start_date <= slotFechaStr && p.end_date >= slotFechaStr);
-
-                            let esPromoAplicada = false;
-
-                            if (promoSlot) {
-                              const hasBlocks = promoSlot.time_blocks && promoSlot.time_blocks.length > 0;
-                              if (hasBlocks) {
-                                const horaBotonStr = `${String(bloque.horaInt).padStart(2, '0')}:${String(bloque.minutosInt).padStart(2, '0')}`;
-                                const bloqueAplicable = promoSlot.time_blocks.find(b => horaBotonStr >= b.start_time && horaBotonStr < b.end_time);
-                                if (bloqueAplicable) {
-                                  precioUSD = parseFloat(bloqueAplicable.price); 
-                                  esPromoAplicada = true;
-                                }
-                              } else {
-                                const promoPrice = parseFloat(promoSlot.price_normal);
-                                precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
-                                esPromoAplicada = true;
-                              }
-                            }
 
                             const ano = dateObjSlot.getUTCFullYear();
                             const mes = String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0');
@@ -1700,6 +1701,27 @@ export default function RecepcionElite() {
                               const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
                               return fechaLockStr === fechaFija.substring(0, 16);
                             });
+
+                            let precioUSD = precioOriginal;
+                            let esPromoAplicada = false;
+
+                            if (promoSlot) {
+                              esPromoAplicada = true;
+                              const hasBlocks = promoSlot.time_blocks && promoSlot.time_blocks.length > 0;
+                              if (hasBlocks) {
+                                const horaBotonStr = `${String(bloque.horaInt).padStart(2, '0')}:${String(bloque.minutosInt).padStart(2, '0')}`;
+                                const bloqueAplicable = promoSlot.time_blocks.find(b => horaBotonStr >= b.start_time && horaBotonStr < b.end_time);
+                                if (bloqueAplicable) {
+                                  precioUSD = parseFloat(bloqueAplicable.price); 
+                                } else {
+                                  esPromoAplicada = false;
+                                }
+                              } else {
+                                precioUSD = promoSlot.price_normal;
+                              }
+                            }
+
+                            const precioBs = precioUSD * tasaBCV;
 
                             return (
                               <div
@@ -1771,11 +1793,11 @@ export default function RecepcionElite() {
                                       )}
                                     </button>
                                   );
-                                })() : lockOcupado && (!user || lockOcupado.user_id !== user.id) ? (
+                                })() : lockOcupado ? (
                                   <div className="h-full w-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
                                     <span className="text-xl animate-pulse">⏳</span>
-                                    <p className="text-[10px] font-black text-amber-600 mt-1 leading-tight">En proceso...</p>
-                                    <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Cliente Agendando</p>
+                                    <p className="text-[10px] sm:text-[11px] font-black text-amber-600 mt-1 leading-tight">En proceso...</p>
+                                    <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Alguien está pagando</p>
                                   </div>
                                 ) : (
                                   <button
@@ -1796,7 +1818,7 @@ export default function RecepcionElite() {
                                       <div className="flex flex-col items-center">
                                         <div className="flex items-center gap-1">
                                           <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
-                                          <span className="text-[10px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
+                                          <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
                                         </div>
                                       </div>
                                     ) : (
@@ -2734,7 +2756,7 @@ export default function RecepcionElite() {
         document.body
       )}
 
-      {/* MODAL DE CONFIRMACIÓN ACCIÓN GENERAL (ANULAR RESERVA, ETC.) */}
+      {/* MODAL DE CONFIRMACIÓN ACCIÓN GENERAL */}
       {mounted && modalConfirm.open && createPortal(
         <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4 text-center">
