@@ -4,6 +4,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
+// Fotos libres de Unsplash (Unsplash License: uso comercial permitido, sin
+// atribución obligatoria). Si prefieres optimizarlas con next/image, agrega
+// "images.unsplash.com" a images.remotePatterns en next.config.js.
+const HERO_IMG = "https://images.unsplash.com/photo-1646651105426-e8c8ee9badde?auto=format&fit=crop&w=1740&q=80";
+const PADEL_IMG = "https://images.unsplash.com/photo-1646649851800-48dba35edc76?auto=format&fit=crop&w=900&q=80";
+const FUTBOL_IMG = "https://images.unsplash.com/photo-1598880513655-d1c6d4b2dfbf?auto=format&fit=crop&w=900&q=80";
+const TROFEO_IMG = "https://images.unsplash.com/photo-1578269174936-2709b6aeb913?auto=format&fit=crop&w=900&q=80";
+
 export default function HomePresentation() {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
@@ -40,7 +48,7 @@ export default function HomePresentation() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-10 h-10 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -49,16 +57,32 @@ export default function HomePresentation() {
   const nombreUsuario = profile?.nombre ? `${profile.nombre} ${profile.apellido || ""}`.trim() : (user?.email || "Deportista");
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 px-3 pt-2 sm:pt-4 pb-8 sm:pb-12 space-y-8 sm:space-y-12">
-      <div className="mx-auto max-w-7xl space-y-8 sm:space-y-12">
+    <div className="min-h-screen bg-slate-50 text-slate-900 px-3 pt-2 sm:pt-4 pb-8 sm:pb-12 space-y-6 sm:space-y-10">
+
+      {/* Tipografía de marca + única animación (ticker) */}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap');
+        .font-display { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.01em; }
+        .font-brand-mono { font-family: 'Space Mono', monospace; }
+        @keyframes marquee {
+          from { transform: translateX(0); }
+          to { transform: translateX(-50%); }
+        }
+        .animate-marquee { animation: marquee 24s linear infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .animate-marquee { animation: none; }
+        }
+      `}</style>
+
+      <div className="mx-auto max-w-7xl space-y-6 sm:space-y-10">
 
         {/* BANNER B2B / POS (SÓLO VISIBLE PARA GERENTES Y ADMINS) */}
         {esGerenteOAdmin && (
-          <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <span className="text-2xl p-2 bg-slate-800 rounded-xl">🛒</span>
               <div>
-                <span className="text-[9px] font-black uppercase text-[#00FF9D] tracking-widest block">
+                <span className="font-brand-mono text-[9px] uppercase text-[#00FF9D] tracking-widest block">
                   Panel de Gerencia B2B Activo
                 </span>
                 <h4 className="text-xs sm:text-sm font-black text-white">
@@ -84,23 +108,33 @@ export default function HomePresentation() {
           </div>
         )}
 
-        {/* 1. HERO PRESENTACIÓN PRINCIPAL */}
-        <div className="relative w-full bg-gradient-to-br from-[#0B0C2A] via-[#161848] to-[#0B0C2A] rounded-3xl sm:rounded-[2.5rem] p-6 sm:p-10 text-white shadow-2xl border border-blue-500/20 overflow-hidden flex flex-col lg:flex-row lg:items-center justify-between gap-8">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-[#00FF9D]/10 rounded-full blur-3xl pointer-events-none" />
-          <div className="absolute bottom-0 left-1/3 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+        {/* 1. HERO — foto real a pantalla completa, tipo cartel deportivo */}
+        <div className="relative w-full rounded-3xl sm:rounded-[2rem] overflow-hidden shadow-2xl min-h-[420px] sm:min-h-[560px] flex items-end">
+          <img
+            src={HERO_IMG}
+            alt="Jugador golpeando la bola en una pista de pádel"
+            className="absolute inset-0 w-full h-full object-cover object-[65%_25%]"
+          />
+          {/* Degradados para legibilidad: oscuro a la izquierda / abajo, imagen visible a la derecha */}
+          <div className="absolute inset-0 bg-gradient-to-r from-[#0B0C2A] via-[#0B0C2A]/80 to-transparent sm:to-[#0B0C2A]/10" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0B0C2A] via-[#0B0C2A]/20 to-transparent" />
 
-          <div className="relative z-10 space-y-4 max-w-2xl">
-            <span className="bg-[#00FF9D]/20 border border-[#00FF9D]/40 text-[#00FF9D] text-[10px] sm:text-xs font-black uppercase px-3.5 py-1.5 rounded-full tracking-wider inline-flex items-center gap-1.5">
-              <span>🏟️</span> Ecosistema Deportivo
+          <div className="relative z-10 p-6 sm:p-12 max-w-xl text-white space-y-5">
+            <span className="font-brand-mono text-[10px] sm:text-xs uppercase tracking-[0.3em] text-[#00FF9D]">
+              ● Ecosistema Deportivo
             </span>
-            <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
-              La plataforma para <span className="text-[#00FF9D]">Jugar</span>, <span className="text-blue-400">Competir</span> y <span className="text-amber-400">Reservar</span>
+
+            <h1 className="font-display uppercase text-6xl sm:text-8xl leading-[0.85] tracking-tight">
+              Juega.<br />
+              <span className="text-[#00FF9D]">Compite.</span><br />
+              Reserva.
             </h1>
-            <p className="text-xs sm:text-base text-slate-300 font-medium leading-relaxed">
-              Reserva pistas en tiempo real, encuentra partidas abiertas con jugadores de tu categoría y lleva el control oficial de tus estadísticas deportivas.
+
+            <p className="text-sm sm:text-base text-slate-200 font-medium leading-relaxed max-w-md">
+              Reserva pistas en tiempo real, encuentra partidas abiertas con jugadores de tu categoría y lleva el control oficial de tus estadísticas.
             </p>
 
-            <div className="pt-2 flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3 pt-1">
               {user ? (
                 <div className="bg-white/10 backdrop-blur-md border border-white/15 px-4 py-2.5 rounded-2xl flex items-center gap-3">
                   <span className="text-lg">👋</span>
@@ -112,170 +146,155 @@ export default function HomePresentation() {
               ) : (
                 <Link
                   href="/login"
-                  className="px-6 py-3.5 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg transition-all active:scale-95 flex items-center gap-2"
+                  className="px-7 py-3.5 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-[#00FF9D]/20 transition-all active:scale-95 flex items-center gap-2"
                 >
                   <span>🔑</span>
                   <span>Iniciar Sesión / Registrarse</span>
                 </Link>
               )}
             </div>
-          </div>
 
-          {/* TARJETA DE ACCESO RÁPIDO JUGADORES */}
-          <div className="relative z-10 lg:w-80 shrink-0 bg-white/5 border border-white/10 backdrop-blur-md rounded-3xl p-5 space-y-4">
-            <div className="border-b border-white/10 pb-3 flex justify-between items-center">
-              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Acceso Rápido</span>
-              <span className="text-xs">⚡</span>
-            </div>
-
-            <div className="space-y-2">
-              <Link
-                href="/padel/clubes"
-                className="w-full py-3 px-4 bg-blue-600/30 hover:bg-blue-600/50 border border-blue-400/30 rounded-xl flex items-center justify-between text-xs font-black transition-colors"
-              >
-                <span className="flex items-center gap-2"><span>🎾</span> Reservar Pádel</span>
-                <span>→</span>
+            {/* Accesos rápidos como chips, no como panel aparte */}
+            <div className="flex flex-wrap gap-2 pt-2">
+              <Link href="/padel/clubes" className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm text-[11px] font-black uppercase tracking-wide transition-colors">
+                🎾 Reservar Pádel
               </Link>
-
-              <Link
-                href="/padel/partidos"
-                className="w-full py-3 px-4 bg-slate-800/60 hover:bg-slate-800/80 border border-slate-700/60 rounded-xl flex items-center justify-between text-xs font-black transition-colors"
-              >
-                <span className="flex items-center gap-2"><span>🔍</span> Buscar Partidos</span>
-                <span>→</span>
+              <Link href="/padel/partidos" className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm text-[11px] font-black uppercase tracking-wide transition-colors">
+                🔍 Buscar Partidos
               </Link>
-
-              <Link
-                href="/futbol"
-                className="w-full py-3 px-4 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-400/30 rounded-xl flex items-center justify-between text-xs font-black transition-colors"
-              >
-                <span className="flex items-center gap-2"><span>⚽</span> Fútbol & Partidos</span>
-                <span>→</span>
+              <Link href="/futbol" className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm text-[11px] font-black uppercase tracking-wide transition-colors">
+                ⚽ Fútbol
               </Link>
             </div>
           </div>
         </div>
 
-        {/* 2. MÓDULOS PRINCIPALES DE LA APLICACIÓN */}
+        {/* TICKER — único acento de movimiento, tipo marcador deportivo */}
+        <div className="relative overflow-hidden rounded-2xl bg-[#0B0C2A] border border-white/10 py-3">
+          <div className="flex whitespace-nowrap animate-marquee w-max">
+            {[0, 1].map((rep) => (
+              <div key={rep} className="flex items-center gap-6 px-3 font-brand-mono text-[11px] uppercase tracking-[0.25em] text-[#00FF9D]">
+                <span>🎾 Comunidad de Pádel</span><span className="text-slate-600">✦</span>
+                <span>⚽ Fútbol & Caimanas</span><span className="text-slate-600">✦</span>
+                <span>🏆 Ranking Oficial</span><span className="text-slate-600">✦</span>
+                <span>📅 Reservas en tiempo real</span><span className="text-slate-600">✦</span>
+                <span>🤝 Partidos Abiertos</span><span className="text-slate-600">✦</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 2. MÓDULOS — tarjetas con foto real de fondo */}
         <div className="space-y-4">
           <div className="px-1">
-            <span className="text-[10px] font-black uppercase tracking-widest text-blue-600 block">Explora la WebApp</span>
-            <h2 className="text-xl sm:text-2xl font-black text-slate-900">Módulos Especializados</h2>
+            <span className="font-brand-mono text-[10px] uppercase tracking-[0.25em] text-blue-600 block">Explora la WebApp</span>
+            <h2 className="font-display uppercase text-3xl sm:text-4xl text-slate-900">Módulos Especializados</h2>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
             {/* CARD PÁDEL */}
-            <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 group">
-              <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">
-                  🎾
-                </div>
-                <h3 className="text-lg font-black text-slate-900">Comunidad de Pádel</h3>
-                <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                  Encuentra partidos abiertos nivelados por categoría, consulta la disponibilidad de pistas en clubes y sube tu rating en el Ranking Oficial.
+            <div className="relative rounded-3xl overflow-hidden shadow-lg h-[380px] group">
+              <img
+                src={PADEL_IMG}
+                alt="Jugador de pádel sosteniendo la raqueta en la pista"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-blue-950/95 via-blue-950/55 to-blue-950/10" />
+              <div className="relative z-10 h-full flex flex-col justify-end p-6 text-white space-y-3">
+                <span className="text-3xl">🎾</span>
+                <h3 className="font-display uppercase text-3xl leading-[0.9]">Comunidad<br />de Pádel</h3>
+                <p className="text-xs text-blue-100/90 font-medium leading-relaxed">
+                  Partidos abiertos nivelados por categoría, disponibilidad de pistas y tu rating en el Ranking Oficial.
                 </p>
-              </div>
-
-              <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
-                <Link
-                  href="/padel/partidos"
-                  className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
-                >
-                  Ver Partidos Abiertos
-                </Link>
-                <Link
-                  href="/padel/clubes"
-                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
-                >
-                  Directorio de Clubes
-                </Link>
+                <div className="flex flex-col gap-2 pt-2">
+                  <Link href="/padel/partidos" className="w-full py-2.5 bg-blue-500 hover:bg-blue-400 text-white font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors">
+                    Ver Partidos Abiertos
+                  </Link>
+                  <Link href="/padel/clubes" className="w-full py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm text-white font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors">
+                    Directorio de Clubes
+                  </Link>
+                </div>
               </div>
             </div>
 
             {/* CARD FÚTBOL */}
-            <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 group">
-              <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">
-                  ⚽
-                </div>
-                <h3 className="text-lg font-black text-slate-900">Fútbol & Caimanas</h3>
-                <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                  Arma partidos de fútbol, reserva canchas con tus amigos, crea tu carta de jugador personalizada y registra estadísticas de cada encuentro.
+            <div className="relative rounded-3xl overflow-hidden shadow-lg h-[380px] group">
+              <img
+                src={FUTBOL_IMG}
+                alt="Grupo de jugadores en un campo de fútbol"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-emerald-950/95 via-emerald-950/55 to-emerald-950/10" />
+              <div className="relative z-10 h-full flex flex-col justify-end p-6 text-white space-y-3">
+                <span className="text-3xl">⚽</span>
+                <h3 className="font-display uppercase text-3xl leading-[0.9]">Fútbol &<br />Caimanas</h3>
+                <p className="text-xs text-emerald-100/90 font-medium leading-relaxed">
+                  Arma partidos, reserva canchas, crea tu carta de jugador y registra estadísticas de cada encuentro.
                 </p>
-              </div>
-
-              <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
-                <Link
-                  href="/futbol"
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
-                >
-                  Ir a Fútbol
-                </Link>
-                <Link
-                  href="/futbol/perfil"
-                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
-                >
-                  Mi Carta de Jugador
-                </Link>
+                <div className="flex flex-col gap-2 pt-2">
+                  <Link href="/futbol" className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-white font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors">
+                    Ir a Fútbol
+                  </Link>
+                  <Link href="/futbol/perfil" className="w-full py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm text-white font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors">
+                    Mi Carta de Jugador
+                  </Link>
+                </div>
               </div>
             </div>
 
-            {/* CARD RANKINGS & ESTADÍSTICAS (PÚBLICO GENERAL) */}
-            <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4 group">
-              <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">
-                  🏆
-                </div>
-                <h3 className="text-lg font-black text-slate-900">Rankings & Nivel</h3>
-                <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                  Suma puntos en encuentros competitivos oficiales, sube de categoría y consulta tu posición exacta en la tabla general de la región.
+            {/* CARD RANKINGS & ESTADÍSTICAS */}
+            <div className="relative rounded-3xl overflow-hidden shadow-lg h-[380px] group">
+              <img
+                src={TROFEO_IMG}
+                alt="Trofeo dorado de campeón"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-amber-950/95 via-amber-950/60 to-amber-950/10" />
+              <div className="relative z-10 h-full flex flex-col justify-end p-6 text-white space-y-3">
+                <span className="text-3xl">🏆</span>
+                <h3 className="font-display uppercase text-3xl leading-[0.9]">Rankings<br />& Nivel</h3>
+                <p className="text-xs text-amber-100/90 font-medium leading-relaxed">
+                  Suma puntos en encuentros oficiales, sube de categoría y consulta tu posición en la tabla general.
                 </p>
-              </div>
-
-              <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
-                <Link
-                  href="/padel/ranking"
-                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
-                >
-                  Ver Ranking Oficial
-                </Link>
-                <Link
-                  href="/padel/perfil"
-                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors"
-                >
-                  Mi Ficha y Estadísticas
-                </Link>
+                <div className="flex flex-col gap-2 pt-2">
+                  <Link href="/padel/ranking" className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl text-center transition-colors">
+                    Ver Ranking Oficial
+                  </Link>
+                  <Link href="/padel/perfil" className="w-full py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm text-white font-bold text-xs uppercase tracking-wider rounded-xl text-center transition-colors">
+                    Mi Ficha y Estadísticas
+                  </Link>
+                </div>
               </div>
             </div>
 
           </div>
         </div>
 
-        {/* 3. VENTAJAS */}
-        <div className="bg-white rounded-3xl p-6 sm:p-10 border border-slate-200 shadow-sm space-y-6">
+        {/* 3. VENTAJAS — franja de íconos con círculos de color */}
+        <div className="bg-white rounded-3xl p-6 sm:p-10 border border-slate-200 shadow-sm space-y-8">
           <div className="text-center max-w-xl mx-auto space-y-2">
-            <span className="text-[10px] font-black uppercase tracking-widest text-blue-600 block">Beneficios</span>
-            <h2 className="text-xl sm:text-3xl font-black text-slate-900">Todo tu deporte conectado en un solo lugar</h2>
+            <span className="font-brand-mono text-[10px] uppercase tracking-[0.25em] text-blue-600 block">Beneficios</span>
+            <h2 className="font-display uppercase text-3xl sm:text-4xl text-slate-900">Todo tu deporte conectado en un solo lugar</h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pt-4">
-            <div className="space-y-2 text-center sm:text-left">
-              <span className="text-3xl block">⚡</span>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
+            <div className="flex flex-col items-center text-center gap-3">
+              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-200 flex items-center justify-center text-2xl">⚡</div>
               <h4 className="text-sm font-black text-slate-900">Reservas Inmediatas</h4>
-              <p className="text-xs text-slate-500 font-medium">Agenda en tiempo real sin esperas ni llamadas telefónicas.</p>
+              <p className="text-xs text-slate-500 font-medium max-w-[220px]">Agenda en tiempo real sin esperas ni llamadas telefónicas.</p>
             </div>
 
-            <div className="space-y-2 text-center sm:text-left">
-              <span className="text-3xl block">📊</span>
+            <div className="flex flex-col items-center text-center gap-3">
+              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-200 flex items-center justify-center text-2xl">📊</div>
               <h4 className="text-sm font-black text-slate-900">Fichas & Rankings</h4>
-              <p className="text-xs text-slate-500 font-medium">Lleva el registro de tus partidos, victorias, derrotas y nivel competitivo.</p>
+              <p className="text-xs text-slate-500 font-medium max-w-[220px]">Lleva el registro de tus partidos, victorias, derrotas y nivel competitivo.</p>
             </div>
 
-            <div className="space-y-2 text-center sm:text-left">
-              <span className="text-3xl block">🤝</span>
+            <div className="flex flex-col items-center text-center gap-3">
+              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-amber-500 to-amber-600 shadow-lg shadow-amber-200 flex items-center justify-center text-2xl">🤝</div>
               <h4 className="text-sm font-black text-slate-900">Partidos Abiertos</h4>
-              <p className="text-xs text-slate-500 font-medium">¿Te falta gente? Abre tu partido al público para completar la jugada rápidamente.</p>
+              <p className="text-xs text-slate-500 font-medium max-w-[220px]">¿Te falta gente? Abre tu partido al público para completar la jugada.</p>
             </div>
           </div>
         </div>

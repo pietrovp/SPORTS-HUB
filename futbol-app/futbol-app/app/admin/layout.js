@@ -85,7 +85,6 @@ export default function GerenciaLayout({ children }) {
     );
   }
 
-  // AQUÍ SE AGREGÓ "Cierre de Caja"
   const baseMenuItems = (hasClub || isAdmin) ? [
     { name: "Recepción (POS)", path: "/admin/recepcion", icon: "🎾" },
     { name: "Mi Complejo", path: "/admin/mi-club", icon: "🏟️" },
@@ -148,8 +147,8 @@ export default function GerenciaLayout({ children }) {
           })}
 
           <div className="pt-2 border-t border-slate-800 flex gap-2">
-            <Link href="/futbol" className="flex-1 text-center px-3 py-2 text-[10px] font-black uppercase text-slate-300 bg-slate-900 rounded-xl border border-slate-800">
-              🏟️ App
+            <Link href="/" className="flex-1 text-center px-3 py-2 text-[10px] font-black uppercase text-slate-300 bg-slate-900 rounded-xl border border-slate-800">
+              🏟️ Ir al Home
             </Link>
             <button onClick={handleLogout} className="flex-1 text-center px-3 py-2 text-[10px] font-black uppercase text-rose-400 bg-rose-950/40 rounded-xl border border-rose-900/50">
               🚪 Salir
@@ -199,8 +198,8 @@ export default function GerenciaLayout({ children }) {
         </nav>
 
         <div className="p-4 border-t border-slate-800 space-y-2">
-          <Link href="/futbol" className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase text-slate-400 hover:bg-slate-900 hover:text-white rounded-xl transition-all">
-            <span>🏟️</span> Volver a la App
+          <Link href="/" className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase text-slate-400 hover:bg-slate-900 hover:text-white rounded-xl transition-all">
+            <span>🏟️</span> Ir al Home
           </Link>
           <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all">
             <span>🚪</span> Cerrar Sesión
