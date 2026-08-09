@@ -96,7 +96,7 @@ export default function MiClubConfigPage() {
 
       if (!targetClubId) {
         const { data: clubCreado } = await supabase
-          .from("padel_clubs")
+          .from("clubs")
           .select("id")
           .eq("created_by", authUser.id)
           .maybeSingle();
@@ -106,7 +106,7 @@ export default function MiClubConfigPage() {
 
       if (targetClubId) {
         const { data: clubData } = await supabase
-          .from("padel_clubs")
+          .from("clubs")
           .select("*")
           .eq("id", targetClubId)
           .maybeSingle();
@@ -220,7 +220,7 @@ export default function MiClubConfigPage() {
 
       if (club) {
         const { data, error } = await supabase
-          .from("padel_clubs")
+          .from("clubs")
           .update(payload)
           .eq("id", club.id)
           .select()
@@ -230,7 +230,7 @@ export default function MiClubConfigPage() {
         clubGuardado = data;
       } else {
         const { data, error } = await supabase
-          .from("padel_clubs")
+          .from("clubs")
           .insert(payload)
           .select()
           .single();

@@ -166,12 +166,12 @@ export default function PartidoDetallePage() {
       setUser(authUser);
 
       const { data: matchData, error: matchError } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .select(`
           id, match_type, is_private, scheduled_at, status, category_restriction,
           gender_restriction, is_competitive, price_per_player, total_price, created_by, winner_team,
           score_proposed, score_submitted_by, score_status, score_confirmations, score_text,
-          club:padel_clubs ( name, city, address ),
+          club:clubs ( name, city, address ),
           court:courts ( name )
         `)
         .eq("id", matchId)
@@ -184,7 +184,7 @@ export default function PartidoDetallePage() {
 
       // 🛑 AQUÍ SE AÑADIÓ "has_evaluated" AL SELECT
       const { data: rawPlayers } = await supabase
-        .from("padel_match_players")
+        .from("match_players")
         .select("id, user_id, team, has_evaluated")
         .eq("match_id", matchId);
 
@@ -291,7 +291,7 @@ export default function PartidoDetallePage() {
 
       // 🛑 AQUÍ MARCAMOS EN LA BD QUE ESTE USUARIO YA LLENÓ SU ENCUESTA PARA ESTE PARTIDO
       await supabase
-        .from("padel_match_players")
+        .from("match_players")
         .update({ has_evaluated: true })
         .eq("match_id", match.id)
         .eq("user_id", user.id);
@@ -374,7 +374,7 @@ export default function PartidoDetallePage() {
       setProcesandoScore(true);
 
       const { error } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           score_proposed: propuestaData,
           score_submitted_by: user.id,
@@ -405,7 +405,7 @@ export default function PartidoDetallePage() {
 
       if (!aprobar) {
         await supabase
-          .from("padel_matches")
+          .from("matches")
           .update({
             score_proposed: null,
             score_submitted_by: null,
@@ -424,7 +424,7 @@ export default function PartidoDetallePage() {
       const diffGamesTotal = propuesta.diffGamesTotal || 4;
 
       const { error: matchErr } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           status: "jugado",
           winner_team: ganador,
@@ -493,7 +493,7 @@ export default function PartidoDetallePage() {
             .eq("cuenta_id", player.user_id);
 
           await supabase
-            .from("padel_match_players")
+            .from("match_players")
             .update({ rating_change: delta })
             .eq("match_id", match.id)
             .eq("user_id", player.user_id);
@@ -527,7 +527,7 @@ export default function PartidoDetallePage() {
       const costoTotalCancha = match.total_price || 16;
 
       if (soyCreador || esPrivado) {
-        await supabase.from("padel_matches").update({ status: "cancelado" }).eq("id", match.id);
+        await supabase.from("matches").update({ status: "cancelado" }).eq("id", match.id);
 
         if (esReembolsable) {
           for (const p of match.players || []) {
@@ -548,7 +548,7 @@ export default function PartidoDetallePage() {
           }
         }
       } else {
-        await supabase.from("padel_match_players").delete().eq("match_id", match.id).eq("user_id", user.id);
+        await supabase.from("match_players").delete().eq("match_id", match.id).eq("user_id", user.id);
 
         if (esReembolsable) {
           const { data: prof } = await supabase.from("profiles").select("creditos").eq("id", user.id).maybeSingle();

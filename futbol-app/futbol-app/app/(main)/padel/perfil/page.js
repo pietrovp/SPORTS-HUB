@@ -604,13 +604,13 @@ export default function PadelPerfilPage() {
 
       let myMatches = [];
       const { data: mData, error: mErr } = await supabase
-        .from("padel_match_players")
+        .from("match_players")
         .select("match_id, team, rating_change")
         .eq("user_id", authUser.id);
 
       if (mErr) {
         const { data: mDataBasic } = await supabase
-          .from("padel_match_players")
+          .from("match_players")
           .select("match_id, team")
           .eq("user_id", authUser.id);
         myMatches = mDataBasic || [];
@@ -629,18 +629,18 @@ export default function PadelPerfilPage() {
 
       if (matchIds.length > 0) {
         const { data: allMatches } = await supabase
-          .from("padel_matches")
+          .from("matches")
           .select(`
             id, match_type, scheduled_at, status, category_restriction,
             gender_restriction, is_competitive, price_per_player, winner_team, score_text,
-            club:padel_clubs ( name, city, address ),
+            club:clubs ( name, city, address ),
             court:courts ( name )
           `)
           .in("id", matchIds)
           .order("scheduled_at", { ascending: false });
 
         const { data: allPlayersData } = await supabase
-          .from("padel_match_players")
+          .from("match_players")
           .select("id, match_id, user_id, team")
           .in("match_id", matchIds);
 

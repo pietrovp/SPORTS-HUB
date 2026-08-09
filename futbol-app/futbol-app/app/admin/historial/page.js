@@ -193,7 +193,7 @@ export default function HistorialVentasPage() {
       const ventasRaw = historialVentas || [];
 
       const { data: padelMatches } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .select(`
           *,
           court:courts(name)

@@ -1,236 +1,378 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import PartidoCard from "@/components/futbol/PartidoCard";
-import { supabase } from "@/lib/supabaseClient";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+import { supabase } from "@/lib/supabaseClient";
 
-export default function Home() {
-  const [partidos, setPartidos] = useState([]);
-  const [usuarioId, setUsuarioId] = useState(null);
-  const [isUserLoggedIn, setIsUserLoggedIn] = useState(false);
-  const [cargando, setCargando] = useState(true);
+// COMPONENTE VISUAL PARA AVATARES DE JUGADORES EN LA TARJETA
+function AvataresJugadores({ jugadores = [], cuposTotales = 14 }) {
+  const visibles = jugadores.slice(0, 4);
+  const sobrantes = Math.max(0, jugadores.length - 4);
+  const vacios = Math.max(0, Math.min(3, cuposTotales - jugadores.length));
 
-  useEffect(() => {
-    async function cargarDatos() {
-      if (!supabase) return;
+  return (
+    <div className="bg-slate-50/80 p-3 rounded-2xl border border-slate-100 flex items-center justify-between">
+      <div className="flex items-center gap-2 overflow-hidden">
+        <div className="flex -space-x-2 shrink-0">
+          {visibles.map((j, idx) => (
+            <div
+              key={j.id || idx}
+              className="w-9 h-9 rounded-full bg-slate-800 text-[#00FF9D] ring-2 ring-white flex items-center justify-center font-black text-xs overflow-hidden shadow-sm shrink-0"
+              title={j.profile?.nombre || "Jugador"}
+            >
+              {j.profile?.avatar_url ? (
+                <img
+                  src={j.profile.avatar_url}
+                  alt="Avatar"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                (j.profile?.nombre?.[0] || "J").toUpperCase()
+              )}
+            </div>
+          ))}
 
-      const { data: { user } } = await supabase.auth.getUser();
-      setIsUserLoggedIn(!!user);
-      setUsuarioId(user?.id || null);
+          {/* CÍRCULOS TRANSLÚCIDOS/PUNTEADOS PARA INDICAR CUPOS ABIERTOS */}
+          {Array.from({ length: vacios }).map((_, i) => (
+            <div
+              key={`empty-${i}`}
+              className="w-9 h-9 rounded-full bg-white/70 border-2 border-dashed border-slate-200 text-slate-300 flex items-center justify-center shrink-0 opacity-60"
+            >
+              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+              </svg>
+            </div>
+          ))}
+        </div>
 
-      const { data: partidosData, error: partidosError } = await supabase
-        .from("partidos")
-        .select("*, sedes(imagen_url)")
-        .order("fecha", { ascending: true });
+        {sobrantes > 0 && (
+          <span className="text-[10px] font-black text-slate-500 bg-slate-200/60 px-2 py-1 rounded-full shrink-0">
+            +{sobrantes} más
+          </span>
+        )}
+      </div>
 
-      if (partidosError) {
-        console.error("Error al cargar partidos:", partidosError);
-      } else if (partidosData) {
-        
-        const { data: jugadoresData } = await supabase
-          .from("partido_jugadores")
-          .select("partido_id, user_id, equipo");
-
-        const conteoPorPartido = {};
-        const inscritosPorPartido = {}; 
-        const equipoDelUsuario = {}; 
-        
-        (jugadoresData || []).forEach((j) => {
-          conteoPorPartido[j.partido_id] = (conteoPorPartido[j.partido_id] || 0) + 1;
-          
-          if (!inscritosPorPartido[j.partido_id]) {
-            inscritosPorPartido[j.partido_id] = [];
-          }
-          inscritosPorPartido[j.partido_id].push(j.user_id);
-
-          if (user && j.user_id === user.id) {
-            equipoDelUsuario[j.partido_id] = Number(j.equipo);
-          }
-        });
-
-        const partidosCompletos = partidosData.map((p) => ({
-          ...p,
-          cupos_ocupados: conteoPorPartido[p.id] || 0,
-          jugadores_inscritos: inscritosPorPartido[p.id] || [],
-          mi_equipo: equipoDelUsuario[p.id] || null, 
-        }));
-        
-        setPartidos(partidosCompletos);
-      }
-      setCargando(false);
-    }
-
-    cargarDatos();
-  }, []);
-
-  const proximos = partidos.filter((p) => {
-    if (p.estado === "finalizado" || p.estado === "cancelado") return false;
-    
-    if (p.tipo_acceso === "privado") {
-      const soyCreador = p.creador_id === usuarioId;
-      const estoyInscrito = p.jugadores_inscritos.includes(usuarioId);
-      return soyCreador || estoyInscrito; 
-    }
-    return true;
-  });
-  
-  const jugados = partidos
-    .filter((p) => {
-      if (p.estado !== "finalizado") return false;
-      if (p.tipo_acceso === "privado") {
-        const soyCreador = p.creador_id === usuarioId;
-        const estoyInscrito = p.jugadores_inscritos.includes(usuarioId);
-        return soyCreador || estoyInscrito;
-      }
-      return true;
-    })
-    .sort((a, b) => {
-      const fechaA = new Date(`${a.fecha || ""}T${a.hora || "00:00:00"}`).getTime();
-      const fechaB = new Date(`${b.fecha || ""}T${b.hora || "00:00:00"}`).getTime();
-      return fechaB - fechaA;
-    })
-    .slice(0, 3); 
-
-  const comoFuncionaSection = (
-    <div className="w-full text-center mt-8">
-      <h2 className="text-2xl md:text-3xl font-black text-gray-900 uppercase tracking-tighter mb-8">¿Cómo funciona?</h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {[
-          { icon: <svg className="w-10 h-10 text-[#00FF9D]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>, title: "Busca un partido", desc: "Encuentra juegos en tu zona." },
-          { icon: <svg className="w-10 h-10 text-[#00FF9D]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>, title: "Reserva tu cupo", desc: "Usa tus créditos para unirte." },
-          { icon: <svg className="w-10 h-10 text-[#00FF9D]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>, title: "Juega y disfruta", desc: "Preséntate en la cancha y dale." },
-        ].map((item, i) => (
-          <div key={i} className="bg-white rounded-3xl p-8 shadow-xl shadow-gray-200/50 border border-gray-100 flex flex-col items-center text-center group hover:-translate-y-1 transition-transform duration-300">
-            <div className="w-20 h-20 rounded-full bg-[#0B0C15] flex items-center justify-center mb-6 shadow-lg shadow-gray-300 group-hover:scale-110 transition-transform duration-300">{item.icon}</div>
-            <h3 className="font-black text-lg text-gray-900 uppercase">{item.title}</h3>
-            <p className="text-gray-500 text-sm font-medium mt-2">{item.desc}</p>
-          </div>
-        ))}
+      <div className="text-right shrink-0">
+        <span className="text-[10px] font-black text-slate-400 block uppercase tracking-wider">Inscritos</span>
+        <span className="text-xs font-black text-slate-800">{jugadores.length}/{cuposTotales}</span>
       </div>
     </div>
   );
+}
+
+// TARJETA REUTILIZABLE DE PARTIDO DE FÚTBOL
+function TarjetaFutbolPartido({ match, esHistorial = false }) {
+  const esPrivado = match.is_private || match.match_type === "privado";
+  const dateObj = new Date(match.scheduled_at);
+  const fechaFormat = dateObj.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" });
+  const horaFormat = dateObj.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: true });
+
+  const enCurso = match.status === "en_curso";
+  const finalizado = match.status === "jugado";
 
   return (
-    <div className="flex flex-col gap-12 max-w-6xl mx-auto pb-12">
-      <div className="relative w-full min-h-[500px] md:min-h-[600px] bg-[#0B0C15] rounded-[2.5rem] overflow-hidden flex flex-col justify-center items-center text-center shadow-2xl border border-gray-800/50">
-        <img src="https://images.unsplash.com/photo-1574629810360-7efbbe195018?q=80&w=1893&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D" alt="Jugador de fútbol en la cancha" className="absolute inset-0 w-full h-full object-cover opacity-60" />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0B0C15] via-[#0B0C15]/70 to-[#0B0C15]/30 z-0"></div>
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0B0C15]/80 via-transparent to-[#0B0C15]/80 z-0"></div>
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] bg-[#00FF9D]/15 blur-[120px] pointer-events-none z-0"></div>
-        
-        <div className="relative z-10 max-w-3xl flex flex-col items-center px-6 mt-12 md:mt-0">
-          <span className="mb-4 px-4 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-white/90 text-xs font-bold uppercase tracking-widest shadow-lg">La cancha te espera</span>
-          <h1 className="text-5xl md:text-7xl font-black text-white uppercase tracking-tighter leading-[0.9] drop-shadow-2xl">Juega fútbol <br /><span className="text-[#00FF9D] drop-shadow-[0_0_25px_rgba(0,255,157,0.4)]">cuando quieras</span></h1>
-          <p className="mt-6 text-gray-300 text-sm md:text-lg max-w-lg font-medium drop-shadow-md">Únete a partidos organizados en Barquisimeto sin compromisos. ¿Sin equipo? No hay excusas. Reserva tu primer partido ahora.</p>
-          <div className="mt-10 flex gap-4">
-            <Link href="#partidos" className="px-8 py-4 bg-[#00FF9D] text-[#0B0C15] font-black uppercase tracking-widest rounded-full text-sm hover:bg-[#00e58d] transition-all transform hover:scale-105 shadow-[0_0_40px_rgba(0,255,157,0.4)]">Ver partidos</Link>
+    <div className={`w-[310px] sm:w-[350px] shrink-0 snap-start rounded-3xl border p-5 shadow-sm space-y-4 flex flex-col justify-between transition-all ${
+      finalizado 
+        ? "bg-slate-900 border-slate-800 text-white" 
+        : enCurso 
+        ? "bg-gradient-to-b from-blue-50/50 to-white border-blue-200 ring-2 ring-blue-500/20" 
+        : "bg-white border-slate-200"
+    }`}>
+      <div className="space-y-3">
+        {/* HEADER DE LA TARJETA */}
+        <div className="flex justify-between items-start gap-2">
+          <span className={`text-[10px] font-black uppercase tracking-wider ${finalizado ? "text-slate-400" : "text-emerald-600"}`}>
+            {match.club?.name || "Complejo Deportivo"}
+          </span>
+          <div className="flex gap-1">
+            {esPrivado && (
+              <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                🔒 Privado
+              </span>
+            )}
+            <span className={`text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full ${
+              finalizado ? "bg-emerald-400/20 text-emerald-300 border border-emerald-500/30" :
+              enCurso ? "bg-blue-500 text-white animate-pulse" :
+              "bg-slate-100 text-slate-700"
+            }`}>
+              {finalizado ? "🏆 Finalizado" : enCurso ? "▶ En Curso" : match.price_per_player === 0 || esPrivado ? "Gratis" : `$${match.price_per_player} USD`}
+            </span>
           </div>
         </div>
+
+        {/* NOMBRE DE CANCHA Y HORARIO */}
+        <h3 className={`text-base font-black truncate ${finalizado ? "text-white" : "text-slate-900"}`}>
+          ⚽ {match.court?.name || "Cancha de Fútbol"}
+        </h3>
+
+        <div className={`p-2.5 rounded-2xl border flex justify-between items-center text-xs font-bold ${
+          finalizado ? "bg-slate-800/80 border-slate-700 text-slate-300" : "bg-slate-50 border-slate-100 text-slate-700"
+        }`}>
+          <span>📅 {fechaFormat}</span>
+          <span>⏰ {horaFormat}</span>
+        </div>
+
+        {/* SI ESTÁ FINALIZADO: MOSTRAR MARCADOR DE RESULTADO */}
+        {finalizado ? (
+          <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-3 text-center space-y-1">
+            <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest block">Resultado Final</span>
+            <span className="text-2xl font-black text-[#00FF9D] tracking-tight">{match.score_text || "Finalizado"}</span>
+          </div>
+        ) : (
+          /* MUESTRA DE AVATARES DE JUGADORES */
+          <AvataresJugadores jugadores={match.players || []} cuposTotales={14} />
+        )}
       </div>
 
-      {!cargando && (
-        <>
-          {!isUserLoggedIn && comoFuncionaSection}
+      {/* BOTÓN DE ACCIÓN */}
+      <Link
+        href={`/futbol/partidos/${match.id}`}
+        className={`w-full py-3 font-black text-xs uppercase tracking-wider rounded-2xl text-center block transition-colors shadow-xs ${
+          finalizado
+            ? "bg-slate-800 hover:bg-slate-700 text-[#00FF9D] border border-slate-700"
+            : enCurso
+            ? "bg-blue-600 hover:bg-blue-700 text-white shadow-md"
+            : "bg-slate-900 hover:bg-slate-800 text-[#00FF9D]"
+        }`}
+      >
+        {finalizado ? "📊 Ver Resumen y MVP" : enCurso ? "▶ Ver Partido En Vivo" : "Ver Alineación →"}
+      </Link>
+    </div>
+  );
+}
 
-          <div id="partidos" className="scroll-mt-24 mt-4">
-            <div className="flex items-center justify-between mb-6 border-b border-gray-200 pb-4">
-              <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tighter">Próximos juegos</h2>
-              <span className="text-sm font-bold bg-[#00FF9D]/20 text-emerald-800 px-3 py-1 rounded-full">{proximos.length} disponibles</span>
+export default function FutbolPartidosPage() {
+  const [loading, setLoading] = useState(true);
+  const [matches, setMatches] = useState([]);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    cargarPartidos();
+  }, []);
+
+  async function cargarPartidos() {
+    try {
+      setLoading(true);
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      setUser(authUser);
+
+      let misPartidosIds = [];
+      if (authUser) {
+        const { data: misJugadoresData } = await supabase
+          .from("match_players")
+          .select("match_id")
+          .eq("user_id", authUser.id);
+        misPartidosIds = (misJugadoresData || []).map((m) => m.match_id).filter(Boolean);
+      }
+
+      const { data: matchesData, error: matchesErr } = await supabase
+        .from("matches")
+        .select(`
+          id, club_id, court_id, match_type, is_private, scheduled_at, status,
+          price_per_player, total_price, created_by, winner_team, score_text,
+          club:clubs ( name, city, address ),
+          court:courts!inner ( name, sport_type )
+        `)
+        .eq("court.sport_type", "futbol")
+        .in("status", ["programado", "en_curso", "jugado"])
+        .order("scheduled_at", { ascending: true });
+
+      if (matchesErr) throw matchesErr;
+
+      const partidosVisibles = (matchesData || []).filter((m) => {
+        const esPrivado = m.is_private || m.match_type === "privado";
+        if (!esPrivado) return true;
+        if (!authUser) return false;
+        return m.created_by === authUser.id || misPartidosIds.includes(m.id);
+      });
+
+      const matchIds = partidosVisibles.map((m) => m.id);
+
+      if (matchIds.length === 0) {
+        setMatches([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: playersData } = await supabase
+        .from("match_players")
+        .select("id, match_id, user_id, team")
+        .in("match_id", matchIds);
+
+      const allUserIds = Array.from(new Set((playersData || []).map((p) => p.user_id).filter(Boolean)));
+
+      let profilesMap = {};
+      if (allUserIds.length > 0) {
+        const { data: profsData } = await supabase
+          .from("profiles")
+          .select("id, nombre, apellido, avatar_url")
+          .in("id", allUserIds);
+
+        (profsData || []).forEach((p) => { profilesMap[p.id] = p; });
+      }
+
+      const playersByMatch = {};
+      (playersData || []).forEach((p) => {
+        if (!playersByMatch[p.match_id]) playersByMatch[p.match_id] = [];
+        playersByMatch[p.match_id].push({
+          ...p,
+          profile: profilesMap[p.user_id] || null,
+        });
+      });
+
+      const partidosFinales = partidosVisibles.map((m) => ({
+        ...m,
+        players: playersByMatch[m.id] || [],
+      }));
+
+      setMatches(partidosFinales);
+    } catch (error) {
+      console.error("Error cargando partidos de fútbol:", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // 1. MIS PARTIDOS ACTIVOS Y RESERVAS (Solo programados y en_curso)
+  const misPartidosActivos = useMemo(() => {
+    if (!user) return [];
+    return matches.filter((m) => {
+      if (m.status === "jugado") return false; // Excluir partidos terminados
+      const soyCreador = m.created_by === user.id;
+      const soyJugador = m.players?.some((p) => p.user_id === user.id);
+      return soyCreador || soyJugador;
+    });
+  }, [matches, user]);
+
+  // 2. PARTIDOS ABIERTOS DE LA COMUNIDAD (Solo públicos programados)
+  const partidosAbiertos = useMemo(() => {
+    return matches.filter((m) => {
+      if (m.status !== "programado") return false;
+      const esPrivado = m.is_private || m.match_type === "privado";
+      if (esPrivado) return false;
+      if (user && m.players?.some((p) => p.user_id === user.id)) return false;
+      return true;
+    });
+  }, [matches, user]);
+
+  // 3. HISTORIAL DE PARTIDOS FINALIZADOS (Sección Inferior)
+  const historialPartidos = useMemo(() => {
+    return matches.filter((m) => m.status === "jugado");
+  }, [matches]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 space-y-8">
+      <div className="mx-auto max-w-7xl space-y-8">
+
+        {/* HEADER */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200/80 pb-5">
+          <div>
+            <span className="text-xs font-black uppercase tracking-widest text-emerald-600">Sports Hub · Fútbol</span>
+            <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight">Centro de Partidos ⚽</h1>
+            <p className="text-xs text-slate-500 font-semibold mt-1">
+              Revisa tus reservas activas, caimanas o únete a partidos abiertos de la comunidad.
+            </p>
+          </div>
+
+          <Link
+            href="/futbol/clubes"
+            className="self-start md:self-auto px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-md transition-colors"
+          >
+            + Reservar Cancha / Abrir Partido
+          </Link>
+        </div>
+
+        {/* 1. SECCIÓN: MIS PARTIDOS Y RESERVAS ACTIVAS */}
+        {user && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">📌</span>
+                <h2 className="text-lg font-black text-slate-900">Mis Partidos y Reservas Activas</h2>
+                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-0.5 rounded-full">
+                  {misPartidosActivos.length}
+                </span>
+              </div>
             </div>
 
-            <div className="grid gap-6 md:grid-cols-2">
-              {proximos.length === 0 && (
-                <div className="col-span-2 bg-white rounded-3xl p-12 text-center border border-gray-200 shadow-sm">
-                  <span className="text-gray-300 mb-3 block"><svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></span>
-                  <p className="text-gray-500 font-medium text-lg">No hay partidos públicos próximos en este momento.</p>
-                </div>
-              )}
+            {misPartidosActivos.length === 0 ? (
+              <div className="bg-white rounded-3xl p-6 text-center border border-dashed border-slate-200 space-y-2">
+                <p className="text-xs font-bold text-slate-500">No tienes reservas activas ni caimanas programadas.</p>
+                <Link href="/futbol/clubes" className="inline-block text-xs font-black text-emerald-600 hover:underline">
+                  👉 Ir a clubes para reservar una cancha
+                </Link>
+              </div>
+            ) : (
+              <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin scrollbar-thumb-slate-300">
+                {misPartidosActivos.map((match) => (
+                  <TarjetaFutbolPartido key={match.id} match={match} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
-              {proximos.map((partido) => (
-                <PartidoCard
-                  key={partido.id}
-                  partido={{
-                    id: partido.id,
-                    cancha: partido.cancha_lugar || partido.cancha || partido.titulo || "Cancha",
-                    zona: partido.zona,
-                    fecha: partido.fecha,
-                    hora: partido.hora,
-                    cuposTotales: partido.cupos_totales || 14,
-                    cuposOcupados: partido.cupos_ocupados || 0,
-                    precio_creditos: partido.precio_creditos || 1,
-                    estado: partido.estado,
-                    imagenUrl: partido.sedes?.imagen_url || partido.imagen_url, 
-                  }}
-                />
+        {/* 2. SECCIÓN: PARTIDOS ABIERTOS (COMUNIDAD) */}
+        <div className="space-y-4 pt-2">
+          <div className="flex items-center gap-2 px-1">
+            <span className="text-lg">🌐</span>
+            <h2 className="text-lg font-black text-slate-900">Partidos Abiertos (Comunidad)</h2>
+            <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-0.5 rounded-full">
+              {partidosAbiertos.length} disponibles
+            </span>
+          </div>
+
+          {partidosAbiertos.length === 0 ? (
+            <div className="bg-white rounded-3xl p-8 text-center border border-dashed border-slate-300 space-y-3 max-w-xl mx-auto">
+              <span className="text-3xl block">⚽</span>
+              <h3 className="text-base font-black text-slate-800">No hay partidos públicos abiertos actualmente</h3>
+              <p className="text-xs text-slate-400 font-medium">
+                ¡Reserva una cancha en tu complejo favorito y organiza la caimana!
+              </p>
+              <Link
+                href="/futbol/clubes"
+                className="inline-block mt-2 px-5 py-2.5 bg-slate-900 text-[#00FF9D] text-xs font-black uppercase tracking-wider rounded-2xl shadow-md"
+              >
+                Ir a Clubes
+              </Link>
+            </div>
+          ) : (
+            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin scrollbar-thumb-slate-300">
+              {partidosAbiertos.map((match) => (
+                <TarjetaFutbolPartido key={match.id} match={match} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 3. SECCIÓN: HISTORIAL DE PARTIDOS ANTERIORES (FINALIZADOS) */}
+        {historialPartidos.length > 0 && (
+          <div className="space-y-4 pt-6 border-t border-slate-200">
+            <div className="flex items-center gap-2 px-1">
+              <span className="text-lg">🏆</span>
+              <h2 className="text-lg font-black text-slate-900">Historial de Partidos Anteriores</h2>
+              <span className="bg-slate-200 text-slate-700 text-[10px] font-black px-2.5 py-0.5 rounded-full">
+                {historialPartidos.length} jugados
+              </span>
+            </div>
+
+            <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin scrollbar-thumb-slate-300">
+              {historialPartidos.map((match) => (
+                <TarjetaFutbolPartido key={match.id} match={match} esHistorial={true} />
               ))}
             </div>
           </div>
+        )}
 
-          <div className="mt-4">
-            <div className="flex items-center justify-between mb-6 border-b border-gray-200 pb-4">
-              <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tighter">Resultados</h2>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              {jugados.length === 0 ? (
-                <div className="col-span-2 bg-white rounded-3xl p-12 text-center border border-gray-200 shadow-sm">
-                  <p className="text-gray-500 font-medium">Aún no hay resultados para mostrar.</p>
-                </div>
-              ) : (
-                jugados.map((partido) => {
-                  
-                  let resultadoTexto = partido.zona || "Amistoso"; 
-                  let colorBarra = "bg-gray-600"; 
-                  let colorTexto = "text-gray-400";
-
-                  if (partido.mi_equipo) {
-                    const g1 = partido.goles_equipo1 || 0;
-                    const g2 = partido.goles_equipo2 || 0;
-                    
-                    if (g1 === g2) {
-                      resultadoTexto = "Empate";
-                      colorBarra = "bg-yellow-400";
-                      colorTexto = "text-yellow-400";
-                    } else if (
-                      (partido.mi_equipo === 1 && g1 > g2) || 
-                      (partido.mi_equipo === 2 && g2 > g1)
-                    ) {
-                      resultadoTexto = "Victoria";
-                      colorBarra = "bg-[#00FF9D]";
-                      colorTexto = "text-[#00FF9D]";
-                    } else {
-                      resultadoTexto = "Derrota";
-                      colorBarra = "bg-red-500";
-                      colorTexto = "text-red-500";
-                    }
-                  }
-
-                  return (
-                    <Link key={partido.id} href={`/futbol/partido/${partido.id}`} className="group bg-[#0B0C15] rounded-3xl p-6 transition-all flex items-center justify-between shadow-xl hover:shadow-[#00FF9D]/10 hover:-translate-y-1 relative overflow-hidden border border-[#1a1c2d]">
-                      <div className={`absolute top-0 left-0 w-1.5 h-full ${colorBarra}`}></div>
-                      
-                      <div className="pl-4">
-                        <div className="flex items-center gap-2 mb-2"><p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Finalizado</p></div>
-                        <h3 className="font-black text-white text-xl leading-none uppercase">{partido.cancha_lugar || partido.cancha || partido.titulo || "Cancha"}</h3>
-                        
-                        <p className={`text-xs mt-2 font-bold uppercase tracking-wider ${colorTexto}`}>
-                          {resultadoTexto}
-                        </p>
-                      </div>
-                      
-                      <div className="bg-[#121422] rounded-2xl px-5 py-3 flex items-center justify-center border border-[#1f233a]">
-                        <p className="text-2xl font-black text-white tracking-wider">{partido.goles_equipo1 ?? 0}<span className="text-[#00FF9D] mx-2">-</span>{partido.goles_equipo2 ?? 0}</p>
-                      </div>
-                    </Link>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          {isUserLoggedIn && <div className="pt-12 mt-4 border-t border-gray-200/60">{comoFuncionaSection}</div>}
-        </>
-      )}
+      </div>
     </div>
   );
 }

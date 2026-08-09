@@ -331,7 +331,7 @@ export default function CierreCajaPage() {
       if (!clubId) return setLoading(false);
 
       const { data: clubData } = await supabase
-        .from("padel_clubs")
+        .from("clubs")
         .select("*")
         .eq("id", clubId)
         .maybeSingle();
@@ -356,7 +356,7 @@ export default function CierreCajaPage() {
       if (errSales) console.error("Error sales:", errSales);
 
       const { data: padelMatches } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .select("*, court:courts(name)")
         .eq("club_id", clubId);
 

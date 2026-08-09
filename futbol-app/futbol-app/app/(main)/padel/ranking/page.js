@@ -62,7 +62,7 @@ export default function PadelRankingPage() {
 
       // Cargar partidos para estadísticas de victorias
       const { data: matchPlayers } = await supabase
-        .from("padel_match_players")
+        .from("match_players")
         .select(`user_id, team, match:padel_matches!inner(status, winner_team)`);
 
       const statsMap = {};

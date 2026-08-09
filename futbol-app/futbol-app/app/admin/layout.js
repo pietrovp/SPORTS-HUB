@@ -44,7 +44,7 @@ export default function GerenciaLayout({ children }) {
 
       if (!clubId) {
         const { data: clubCreado } = await supabase
-          .from("padel_clubs")
+          .from("clubs")
           .select("id")
           .eq("created_by", user.id)
           .maybeSingle();

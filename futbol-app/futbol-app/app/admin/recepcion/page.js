@@ -327,7 +327,7 @@ export default function RecepcionElite() {
       let targetClubId = profile?.club_id;
       if (!targetClubId) {
         const { data: clubCreado } = await supabase
-          .from("padel_clubs")
+          .from("clubs")
           .select("id")
           .eq("created_by", authUser.id)
           .maybeSingle();
@@ -338,7 +338,7 @@ export default function RecepcionElite() {
       if (!targetClubId) return setLoading(false);
       setClubId(targetClubId);
 
-      const { data: clubData } = await supabase.from("padel_clubs").select("*").eq("id", targetClubId).maybeSingle();
+      const { data: clubData } = await supabase.from("clubs").select("*").eq("id", targetClubId).maybeSingle();
       setClubInfo(clubData || { slot_duration_minutes: 60, open_time: "07:00:00", close_time: "23:00:00" });
 
       const { data: courts } = await supabase.from("courts").select("*").eq("club_id", targetClubId).eq("is_active", true).order("court_number");
@@ -363,7 +363,7 @@ export default function RecepcionElite() {
     const finFijo = `${dFin.getFullYear()}-${String(dFin.getMonth() + 1).padStart(2, '0')}-${String(dFin.getDate()).padStart(2, '0')}T23:59:59`;
 
     const { data: matches, error: matchErr } = await supabase
-      .from("padel_matches")
+      .from("matches")
       .select("*, court:courts(name)")
       .eq("club_id", clubId)
       .gte("scheduled_at", inicioFijo)
@@ -379,7 +379,7 @@ export default function RecepcionElite() {
 
     if (matchIds.length > 0) {
       const { data: players } = await supabase
-        .from("padel_match_players")
+        .from("match_players")
         .select("id, match_id, user_id, team")
         .in("match_id", matchIds);
 
@@ -490,7 +490,7 @@ export default function RecepcionElite() {
         : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
 
       await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           extra_items: extrasBackup,
           payment_status: estadoPagoFinal,
@@ -728,7 +728,7 @@ export default function RecepcionElite() {
       setProcesando(true);
 
       const { data: matchExistente } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .select("id")
         .eq("court_id", cancha.id)
         .eq("scheduled_at", scheduledAtFijo)
@@ -764,7 +764,7 @@ export default function RecepcionElite() {
       const estadoPagoInicial = pagoCompleto ? "aprobado" : "pendiente_aprobacion";
 
       const { data: newMatch, error: matchErr } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .insert({
           club_id: clubId,
           court_id: cancha.id,
@@ -787,7 +787,7 @@ export default function RecepcionElite() {
 
       if (matchErr) throw matchErr;
 
-      await supabase.from("padel_match_players").insert({
+      await supabase.from("match_players").insert({
         match_id: newMatch.id,
         user_id: user.id,
         team: "A",
@@ -1041,7 +1041,7 @@ export default function RecepcionElite() {
         : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
 
       await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           payments_history: historialNuevo,
           payment_status: nuevoEstadoGeneral,
@@ -1090,7 +1090,7 @@ export default function RecepcionElite() {
       const historialNuevo = [...historialActual, nuevoAbono];
 
       await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           payments_history: historialNuevo,
         })
@@ -1138,7 +1138,7 @@ export default function RecepcionElite() {
         : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
 
       await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           payments_history: historialNuevo,
           payment_status: nuevoEstadoGeneral,
@@ -1217,7 +1217,7 @@ export default function RecepcionElite() {
 
     try {
       await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           extra_items: nuevosExtras,
           payment_status: nuevoEstadoGeneral,
@@ -1267,7 +1267,7 @@ export default function RecepcionElite() {
 
     try {
       await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           extra_items: nuevosExtras,
           payment_status: nuevoEstadoGeneral,
@@ -1403,7 +1403,7 @@ export default function RecepcionElite() {
       }
 
       await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           payments_history: historialNuevo,
           payment_status: "liquidado",
@@ -1441,7 +1441,7 @@ export default function RecepcionElite() {
           setProcesando(true);
 
           const { error: matchErr } = await supabase
-            .from("padel_matches")
+            .from("matches")
             .update({ status: "cancelado", payment_status: "cancelado" })
             .eq("id", match.id);
 

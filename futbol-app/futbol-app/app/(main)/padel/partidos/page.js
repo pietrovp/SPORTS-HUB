@@ -38,7 +38,7 @@ export default function PadelPartidosPage() {
       let misPartidosIds = [];
       if (authUser) {
         const { data: misJugadoresData } = await supabase
-          .from("padel_match_players")
+          .from("match_players")
           .select("match_id")
           .eq("user_id", authUser.id);
         misPartidosIds = (misJugadoresData || []).map((m) => m.match_id).filter(Boolean);
@@ -46,11 +46,11 @@ export default function PadelPartidosPage() {
 
       // 2. Consultar partidos programados Y jugados (Para no perder el historial)
       const { data: matchesData, error: matchesErr } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .select(`
           id, club_id, court_id, match_type, is_private, scheduled_at, status, category_restriction,
           gender_restriction, is_competitive, price_per_player, created_by, winner_team, score_status, score_text,
-          club:padel_clubs ( name, city, address ),
+          club:clubs ( name, city, address ),
           court:courts ( name )
         `)
         .in("status", ["programado", "jugado"])
@@ -76,7 +76,7 @@ export default function PadelPartidosPage() {
 
       // 3. Jugadores e hidratación de perfiles
       const { data: playersData } = await supabase
-        .from("padel_match_players")
+        .from("match_players")
         .select("id, match_id, user_id, team")
         .in("match_id", matchIds);
 

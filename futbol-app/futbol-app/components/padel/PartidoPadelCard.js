@@ -90,7 +90,7 @@ export default function PartidoPadelCard({ match, currentUser, onUpdate }) {
       const equipoACount = players.filter((p) => p.team === "A").length;
       const teamAsignado = equipoACount < 2 ? "A" : "B";
 
-      const { error: playerErr } = await supabase.from("padel_match_players").insert({
+      const { error: playerErr } = await supabase.from("match_players").insert({
         match_id: match.id,
         user_id: currentUser.id,
         team: teamAsignado,
@@ -115,14 +115,14 @@ export default function PartidoPadelCard({ match, currentUser, onUpdate }) {
 
       if (soyCreador || esPrivado) {
         const { error: errMatch } = await supabase
-          .from("padel_matches")
+          .from("matches")
           .update({ status: "cancelado" })
           .eq("id", match.id);
 
         if (errMatch) throw errMatch;
       } else {
         const { error: errDel } = await supabase
-          .from("padel_match_players")
+          .from("match_players")
           .delete()
           .eq("match_id", match.id)
           .eq("user_id", currentUser.id);

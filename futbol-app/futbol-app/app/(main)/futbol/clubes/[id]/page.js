@@ -239,7 +239,7 @@ export default function FutbolClubDetailPage() {
       }
 
       const { data: clubData, error: cErr } = await supabase
-        .from("padel_clubs")
+        .from("clubs")
         .select("*")
         .eq("id", clubId)
         .maybeSingle();
@@ -268,7 +268,7 @@ export default function FutbolClubDetailPage() {
 
       // Cargar Reservas / Partidos de las canchas del club
       const { data: matchesData } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .select("*, court:courts(name)")
         .eq("club_id", clubId)
         .neq("status", "cancelado")
@@ -278,7 +278,7 @@ export default function FutbolClubDetailPage() {
 
       if (matchIds.length > 0) {
         const { data: playersData } = await supabase
-          .from("padel_match_players")
+          .from("match_players")
           .select("id, match_id, user_id, team")
           .in("match_id", matchIds);
 
@@ -549,7 +549,7 @@ export default function FutbolClubDetailPage() {
       const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
 
       const { data: newMatch, error: matchErr } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .insert({
           club_id: clubId,
           court_id: bloqueSeleccionado.cancha.id,
@@ -573,7 +573,7 @@ export default function FutbolClubDetailPage() {
 
       if (matchErr) throw new Error(matchErr.message || "Error guardando la reserva");
 
-      await supabase.from("padel_match_players").insert({
+      await supabase.from("match_players").insert({
         match_id: newMatch.id,
         user_id: user.id,
         team: "A",
@@ -680,7 +680,7 @@ export default function FutbolClubDetailPage() {
         : proofUrlsActuales;
 
       const { error: updateErr } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .update({
           payments_history: historialNuevo,
           payment_proof_urls: proofUrlsNuevas,

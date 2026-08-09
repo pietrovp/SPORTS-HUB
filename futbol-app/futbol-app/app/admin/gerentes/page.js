@@ -53,7 +53,7 @@ export default function AdminGerentesPage() {
 
       // Cargar lista de clubes
       const { data: clubesData } = await supabase
-        .from("padel_clubs")
+        .from("clubs")
         .select("id, name, city")
         .order("name", { ascending: true });
 

@@ -104,7 +104,7 @@ export default function FutbolReservarPage() {
       }
 
       const { data: clubsData } = await supabase
-        .from("padel_clubs")
+        .from("clubs")
         .select("*")
         .eq("is_active", true);
 
@@ -137,7 +137,7 @@ export default function FutbolReservarPage() {
       setCanchasFutbol(filtradasFutbol);
 
       const { data: matchesData } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .select("*, court:courts(name)")
         .eq("club_id", cId)
         .neq("status", "cancelado");
@@ -316,7 +316,7 @@ export default function FutbolReservarPage() {
       setProcesandoReserva(true);
 
       const { data: matchExistente } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .select("id")
         .eq("court_id", bloqueSeleccionado.cancha.id)
         .eq("scheduled_at", fechaFija)
@@ -347,7 +347,7 @@ export default function FutbolReservarPage() {
       };
 
       const { data: newMatch, error: matchErr } = await supabase
-        .from("padel_matches")
+        .from("matches")
         .insert({
           club_id: clubSeleccionadoId,
           court_id: bloqueSeleccionado.cancha.id,
@@ -370,7 +370,7 @@ export default function FutbolReservarPage() {
 
       if (matchErr) throw matchErr;
 
-      await supabase.from("padel_match_players").insert({ match_id: newMatch.id, user_id: user.id, team: "A" });
+      await supabase.from("match_players").insert({ match_id: newMatch.id, user_id: user.id, team: "A" });
       await supabase.from("padel_locks").delete().match({ court_id: bloqueSeleccionado.cancha.id, scheduled_at: fechaFija });
       await cargarBloqueos();
 

@@ -19,9 +19,9 @@ export default function PadelClubsPage() {
       setLoading(true);
       setErrorMsg("");
 
-      // Intenta cargar de padel_clubs o sedes
+      // Intenta cargar de clubs o sedes
       const { data: clubsData, error } = await supabase
-        .from("padel_clubs")
+        .from("clubs")
         .select(`
           id, name, slug, city, address, image_url, is_active,
           courts:courts ( id )

@@ -181,7 +181,7 @@ export default function PromocionesPage() {
       setClubId(profile.club_id);
 
       const { data: clubData } = await supabase
-        .from("padel_clubs")
+        .from("clubs")
         .select("*")
         .eq("id", profile.club_id)
         .maybeSingle();

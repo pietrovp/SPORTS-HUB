@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import PlayerCard from "@/components/futbol/PlayerCard";
-import PartidoCard from "@/components/futbol/PartidoCard";
 import LogroBadge from "@/components/futbol/LogroBadge";
 import { bonusLabel } from "@/lib/futbol/logros";
 import Link from "next/link";
@@ -50,12 +49,12 @@ async function getCroppedImg(imageSrc, pixelCrop) {
 
 function formatFechaCorta(fechaStr) {
   if (!fechaStr) return "";
-  const d = new Date(fechaStr + "T00:00:00");
+  const d = new Date(fechaStr);
+  if (isNaN(d.getTime())) return "";
   const meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
   return `${d.getDate()} ${meses[d.getMonth()]}`;
 }
 
-// Cálculo preciso de edad
 function calcularEdad(fechaNacimiento) {
   if (!fechaNacimiento) return "--";
   const hoy = new Date();
@@ -142,12 +141,12 @@ export default function Perfil() {
         ] = await Promise.all([
           supabase
             .from("futbol_profiles")
-            .select("*, profiles(nombre, apellido, telefono, pais, avatar_url, creditos, fecha_nacimiento)")
+            .select("*, profiles(nombre, apellido, telefono, pais, avatar_url, fecha_nacimiento)")
             .eq("id", user.id)
             .maybeSingle(),
           supabase.from("logros").select("*"),
           supabase.from("user_logros").select("logro_id").eq("user_id", user.id),
-          supabase.from("partido_jugadores").select("partido_id, equipo, goles").eq("user_id", user.id)
+          supabase.from("match_players").select("id, match_id, team, goals").eq("user_id", user.id)
         ]);
 
         if (perfilError) {
@@ -158,17 +157,15 @@ export default function Perfil() {
 
         // PROCESAMIENTO DEL PERFIL
         if (fProfile) {
-          // Asegurarnos de extraer nombre y apellido correctamente incluso si viene en Array
           const userData = Array.isArray(fProfile.profiles) ? fProfile.profiles[0] : (fProfile.profiles || {});
 
           const p = {
             ...fProfile,
             nombre: userData.nombre,
-            apellido: userData.apellido, // <--- EXTRACCIÓN SEGURA AQUÍ
+            apellido: userData.apellido,
             telefono: userData.telefono,
             nacionalidad: userData.pais,
             avatar_url: userData.avatar_url,
-            creditos: userData.creditos,
             fecha_nacimiento: userData.fecha_nacimiento,
             edad: calcularEdad(userData.fecha_nacimiento),
             posicion_preferida: fProfile.posicion,
@@ -182,7 +179,6 @@ export default function Perfil() {
           setEditPosicion(p.posicion_preferida || "MED");
           setEditPierna(p.pierna_buena || "Derecha");
           
-          // Dividir la fecha que viene de la base de datos en los 3 selectores
           if (p.fecha_nacimiento) {
             const partes = p.fecha_nacimiento.split("-");
             if (partes.length === 3) {
@@ -230,61 +226,69 @@ export default function Perfil() {
 
         setCargando(false);
 
-        // 2. CARGA DE PARTIDOS
+        // 2. CARGA DE PARTIDOS (USANDO LAS NUEVAS TABLAS 'matches', 'clubs', 'courts', 'match_players')
         if (misInscripciones && misInscripciones.length > 0) {
-          const misPartidoIds = misInscripciones.map(i => i.partido_id);
+          const misPartidoIds = misInscripciones.map(i => i.match_id).filter(Boolean);
 
-          const [{ data: partidosData }, { data: ocupacionData }] = await Promise.all([
-            supabase
-              .from("partidos")
-              .select("*, sedes(imagen_url)")
-              .in("id", misPartidoIds),
-            supabase
-              .from("partido_jugadores")
-              .select("partido_id")
-              .in("partido_id", misPartidoIds)
-          ]);
+          if (misPartidoIds.length > 0) {
+            const [{ data: partidosData }, { data: ocupacionData }] = await Promise.all([
+              supabase
+                .from("matches")
+                .select(`
+                  id, scheduled_at, status, score_text, winner_team, is_private,
+                  club:clubs(name, city, address, image_url),
+                  court:courts!inner(name, sport_type)
+                `)
+                .in("id", misPartidoIds)
+                .eq("court.sport_type", "futbol"),
+              supabase
+                .from("match_players")
+                .select("match_id")
+                .in("match_id", misPartidoIds)
+            ]);
 
-          const conteoPorPartido = {};
-          (ocupacionData || []).forEach(row => {
-             conteoPorPartido[row.partido_id] = (conteoPorPartido[row.partido_id] || 0) + 1;
-          });
-
-          if (partidosData) {
-            const proximos = [];
-            const jugados = [];
-            const ahora = new Date();
-
-            partidosData.forEach((partido) => {
-              const inscripcion = misInscripciones.find(i => String(i.partido_id) === String(partido.id));
-              if (!inscripcion) return;
-
-              const est = (partido.estado || "").toLowerCase().trim();
-              if (est === "cancelado" || est === "cancelada") return;
-
-              const partidoObj = {
-                ...partido,
-                mi_equipo: Number(inscripcion.equipo) || null,
-                mis_goles: Number(inscripcion.goles) || 0,
-                cancha: partido.cancha_lugar || partido.titulo || "Cancha",
-                cupos_ocupados: conteoPorPartido[partido.id] || 0
-              };
-
-              const fechaHoraPartido = new Date(`${partido.fecha}T${partido.hora || "00:00:00"}`);
-              const esPasado = fechaHoraPartido < ahora;
-
-              if (est === "finalizado" || est === "terminado" || est === "completado" || est === "jugado" || esPasado) {
-                jugados.push(partidoObj);
-              } else {
-                proximos.push(partidoObj);
-              }
+            const conteoPorPartido = {};
+            (ocupacionData || []).forEach(row => {
+               conteoPorPartido[row.match_id] = (conteoPorPartido[row.match_id] || 0) + 1;
             });
 
-            proximos.sort((a, b) => new Date(`${a.fecha}T${a.hora || "00:00:00"}`) - new Date(`${b.fecha}T${b.hora || "00:00:00"}`));
-            jugados.sort((a, b) => new Date(`${b.fecha}T${b.hora || "00:00:00"}`) - new Date(`${a.fecha}T${a.hora || "00:00:00"}`));
+            if (partidosData) {
+              const proximos = [];
+              const jugados = [];
+              const ahora = new Date();
 
-            setProximosPartidos(proximos);
-            setPartidosJugados(jugados);
+              partidosData.forEach((partido) => {
+                const inscripcion = misInscripciones.find(i => String(i.match_id) === String(partido.id));
+                if (!inscripcion) return;
+
+                const est = (partido.status || "").toLowerCase().trim();
+                if (est === "cancelado" || est === "cancelada") return;
+
+                const partidoObj = {
+                  ...partido,
+                  mi_equipo: inscripcion.team === "B" ? 2 : 1,
+                  mis_goles: Number(inscripcion.goals) || 0,
+                  cancha: partido.court?.name || partido.club?.name || "Cancha de Fútbol",
+                  club_nombre: partido.club?.name || "Complejo",
+                  cupos_ocupados: conteoPorPartido[partido.id] || 0
+                };
+
+                const fechaHoraPartido = new Date(partido.scheduled_at);
+                const esPasado = fechaHoraPartido < ahora;
+
+                if (est === "finalizado" || est === "terminado" || est === "jugado" || esPasado) {
+                  jugados.push(partidoObj);
+                } else {
+                  proximos.push(partidoObj);
+                }
+              });
+
+              proximos.sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+              jugados.sort((a, b) => new Date(b.scheduled_at) - new Date(a.scheduled_at));
+
+              setProximosPartidos(proximos);
+              setPartidosJugados(jugados);
+            }
           }
         }
         
@@ -431,15 +435,21 @@ export default function Perfil() {
   }
 
   const partidosHistorialProcesados = partidosJugados.map((partido) => {
-    const g1 = partido.goles_equipo1 || 0;
-    const g2 = partido.goles_equipo2 || 0;
+    let g1 = 0;
+    let g2 = 0;
+
+    if (partido.score_text && partido.score_text.includes("-")) {
+      const partes = partido.score_text.split("-");
+      g1 = Number(partes[0].trim()) || 0;
+      g2 = Number(partes[1].trim()) || 0;
+    }
+
     const eq = partido.mi_equipo;
-
     let esVictoria = false;
-    let esEmpate = g1 === g2;
+    let esEmpate = partido.winner_team === "EMPATE" || g1 === g2;
 
-    if (eq === 1 && g1 > g2) esVictoria = true;
-    if (eq === 2 && g2 > g1) esVictoria = true;
+    if (eq === 1 && (partido.winner_team === "A" || g1 > g2)) esVictoria = true;
+    if (eq === 2 && (partido.winner_team === "B" || g2 > g1)) esVictoria = true;
 
     const tipo = esEmpate ? "empate" : esVictoria ? "victoria" : "derrota";
 
@@ -545,7 +555,7 @@ export default function Perfil() {
   return (
     <div className="min-h-screen bg-gray-50/50 pb-24 pt-8 relative">
 
-      {/* MODAL ENGRANAJE: EDITAR FICHA DE FÚTBOL CON DROPDOWNS PARA FECHA */}
+      {/* MODAL ENGRANAJE: EDITAR FICHA */}
       {editandoPerfil && (
         <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm flex flex-col gap-4 shadow-2xl">
@@ -569,11 +579,9 @@ export default function Perfil() {
               </select>
             </div>
 
-            {/* SECCIÓN FECHA DE NACIMIENTO: TRES DROPDOWNS (UX SUPERIOR) */}
             <div className="flex flex-col gap-1.5">
               <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Fecha de Nacimiento</label>
               <div className="grid grid-cols-3 gap-2">
-                {/* Día */}
                 <select 
                   value={editDia} 
                   onChange={(e) => setEditDia(e.target.value)} 
@@ -586,7 +594,6 @@ export default function Perfil() {
                   })}
                 </select>
 
-                {/* Mes */}
                 <select 
                   value={editMes} 
                   onChange={(e) => setEditMes(e.target.value)} 
@@ -607,7 +614,6 @@ export default function Perfil() {
                   <option value="12">Dic</option>
                 </select>
 
-                {/* Año */}
                 <select 
                   value={editAno} 
                   onChange={(e) => setEditAno(e.target.value)} 
@@ -615,7 +621,7 @@ export default function Perfil() {
                 >
                   <option value="" disabled>Año</option>
                   {Array.from({ length: 100 }, (_, i) => {
-                    const year = new Date().getFullYear() - 10 - i; // Para que no empiecen en bebés
+                    const year = new Date().getFullYear() - 10 - i;
                     return <option key={year} value={year}>{year}</option>;
                   })}
                 </select>
@@ -703,7 +709,7 @@ export default function Perfil() {
 
       <main className="max-w-5xl mx-auto px-4 space-y-10">
 
-        {/* ENCABEZADO ESTILO COMUNIDAD */}
+        {/* ENCABEZADO */}
         <div className="border-b border-gray-200/80 pb-5">
           <h1 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
             Mi perfil de fútbol
@@ -713,17 +719,16 @@ export default function Perfil() {
           </p>
         </div>
 
-        {/* SECCIÓN SUPERIOR: CARTA + DATOS PERSONALES */}
+        {/* CARTA + DATOS PERSONALES */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
           
-          {/* COLUMNA IZQUIERDA: CARTA DIGITAL DE JUGADOR */}
+          {/* CARTA DIGITAL */}
           <div className="md:col-span-5 flex flex-col items-center">
             <div className="w-full flex items-center justify-between mb-3 px-1">
               <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Carta Oficial</span>
               <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">OVR {stats?.media_general || 64}</span>
             </div>
 
-            {/* 🔥 AQUÍ ESTABA EL ERROR: Faltaba pasar el apellido a PlayerCard 🔥 */}
             <PlayerCard
               nombre={perfil.nombre || "Jugador"}
               apellido={perfil.apellido || ""}
@@ -743,12 +748,11 @@ export default function Perfil() {
             />
           </div>
 
-          {/* COLUMNA DERECHA: DATOS, AVATAR Y ESTADÍSTICAS */}
+          {/* DATOS, AVATAR Y ESTADÍSTICAS */}
           <div className="md:col-span-7 flex flex-col gap-6">
             
             <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 flex flex-col gap-6">
               
-              {/* ENCABEZADO DE TARJETA CON BOTÓN ENGRANAJE EN LA ESQUINA DERECHA */}
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="relative group shrink-0">
@@ -794,25 +798,6 @@ export default function Perfil() {
                   {mensajeFoto}
                 </div>
               )}
-
-              {/* CRÉDITOS */}
-              <div className="flex items-center justify-between bg-yellow-50/60 border border-yellow-200/80 rounded-2xl p-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-yellow-100 flex items-center justify-center text-yellow-600">
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                      <path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34-.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z" />
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.843c-.391-.015-.776-.11-1.116-.281-.51-.255-.884-.71-.884-1.22a1 1 0 10-2 0c0 1.25-.96 2.38-2.215-2.875A4.535 4.535 0 009 14.908V15a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C13.398 13.766 14 12.991 14 12c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0011 9.092V7.249c.391.015.776.11 1.116.281.51.255.884.71.884 1.22a1 1 0 102 0c0-1.25-.96-2.38-2.215-2.875A4.535 4.535 0 0011 5.092V5z" clipRule="evenodd" />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Saldo de Créditos</p>
-                    <p className="font-black text-gray-900 text-xl leading-none mt-0.5">{perfil.creditos || 0} Créditos</p>
-                  </div>
-                </div>
-                <Link href="/futbol/creditos" className="px-4 py-2 bg-[#0B0C15] text-[#00FF9D] text-xs font-black uppercase tracking-wider rounded-xl hover:bg-gray-900 transition-colors shadow-sm">
-                  Recargar
-                </Link>
-              </div>
 
               {/* GRILLA DE ESTADÍSTICAS */}
               <div className="grid grid-cols-2 gap-3">
@@ -864,7 +849,7 @@ export default function Perfil() {
           </div>
         </div>
 
-        {/* SECCIÓN 2: LOGROS */}
+        {/* LOGROS */}
         <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 pb-4">
             <div>
@@ -897,7 +882,7 @@ export default function Perfil() {
           )}
         </div>
 
-        {/* SECCIÓN 3: PRÓXIMOS PARTIDOS */}
+        {/* PRÓXIMOS PARTIDOS */}
         <div className="space-y-4">
           <div className="flex items-center justify-between border-b border-gray-200/80 pb-3">
             <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Próximos Partidos</h2>
@@ -920,27 +905,26 @@ export default function Perfil() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {proximosPartidos.map((partido) => (
-                <PartidoCard
+                <Link
                   key={partido.id}
-                  partido={{
-                    id: partido.id,
-                    cancha: partido.cancha,
-                    zona: partido.zona,
-                    fecha: partido.fecha,
-                    hora: partido.hora,
-                    cuposTotales: partido.cupos_totales || 14,
-                    cuposOcupados: partido.cupos_ocupados || 0,
-                    precio_creditos: partido.precio_creditos || 1,
-                    estado: partido.estado,
-                    imagenUrl: partido.sedes?.imagen_url || partido.imagen_url,
-                  }}
-                />
+                  href={`/futbol/partidos/${partido.id}`}
+                  className="bg-white rounded-3xl p-5 border border-gray-100 shadow-sm flex items-center justify-between hover:border-gray-200 transition-all"
+                >
+                  <div className="space-y-1 min-w-0 flex-1">
+                    <span className="text-[10px] font-black uppercase text-emerald-600 block">{partido.club_nombre}</span>
+                    <h3 className="font-black text-gray-900 text-base truncate">{partido.cancha}</h3>
+                    <p className="text-xs text-gray-500 font-bold">{formatFechaCorta(partido.scheduled_at)}</p>
+                  </div>
+                  <span className="text-xs font-black bg-[#0B0C15] text-[#00FF9D] px-4 py-2.5 rounded-xl uppercase tracking-wider shrink-0 ml-3">
+                    Ver Partido →
+                  </span>
+                </Link>
               ))}
             </div>
           )}
         </div>
 
-        {/* SECCIÓN 4: HISTORIAL DE PARTIDOS JUGADOS */}
+        {/* HISTORIAL DE PARTIDOS JUGADOS */}
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-200/80 pb-3">
             <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Historial de Partidos</h2>
@@ -978,7 +962,7 @@ export default function Perfil() {
                   return (
                     <Link
                       key={partido.id}
-                      href={`/futbol/partido/${partido.id}`}
+                      href={`/futbol/partidos/${partido.id}`}
                       className="bg-[#0B0C15] text-white rounded-3xl p-5 shadow-sm relative overflow-hidden flex items-center justify-between group hover:border border-gray-700 transition-all"
                     >
                       <div className={`absolute top-0 left-0 w-1.5 h-full ${partido.esEmpate ? "bg-yellow-400" : partido.esVictoria ? "bg-[#00FF9D]" : "bg-red-500"}`}></div>
@@ -988,7 +972,7 @@ export default function Perfil() {
                           <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${partido.esEmpate ? "bg-yellow-400/20 text-yellow-400" : partido.esVictoria ? "bg-[#00FF9D]/20 text-[#00FF9D]" : "bg-red-500/20 text-red-400"}`}>
                             {partido.esEmpate ? "Empate" : partido.esVictoria ? "Victoria" : "Derrota"}
                           </span>
-                          <span className="text-[10px] text-gray-400 font-bold">{formatFechaCorta(partido.fecha)}</span>
+                          <span className="text-[10px] text-gray-400 font-bold">{formatFechaCorta(partido.scheduled_at)}</span>
                         </div>
 
                         <h3 className="font-black text-white text-base leading-tight uppercase truncate">{partido.cancha}</h3>

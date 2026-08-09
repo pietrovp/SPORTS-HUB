@@ -85,7 +85,7 @@ export default function PadelRecentActivity({ userId }) {
       setErrorMsg("");
 
       const { data, error } = await supabase
-        .from("padel_match_players")
+        .from("match_players")
         .select(`
           id,
           team,

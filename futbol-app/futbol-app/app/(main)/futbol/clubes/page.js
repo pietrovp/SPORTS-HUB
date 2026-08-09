@@ -19,7 +19,7 @@ export default function FutbolClubesDirectoryPage() {
       
       // 1. Cargar clubes activos
       const { data: clubsData, error: clubsErr } = await supabase
-        .from("padel_clubs")
+        .from("clubs")
         .select("*")
         .eq("is_active", true);
 
