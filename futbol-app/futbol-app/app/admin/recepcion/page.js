@@ -406,7 +406,6 @@ export default function RecepcionElite() {
         .select("id, match_id, user_id, team")
         .in("match_id", matchIds);
 
-      // GARANTIZAR OBTENCIÓN DE PERFILES TANTO DE JUGADORES COMO DEL CREADOR
       const allUserIds = Array.from(new Set([
         ...(matches || []).map(m => m.created_by),
         ...(players || []).map(p => p.user_id)
@@ -434,14 +433,14 @@ export default function RecepcionElite() {
         players: playersMap[m.id] || [],
       }));
 
-      setPartidosClub(finalMatches);
+      setPartidosPeriodo(finalMatches);
 
       if (matchSeleccionado) {
         const actualizado = finalMatches.find(m => m.id === matchSeleccionado.id);
         if (actualizado) setMatchSeleccionado(actualizado);
       }
     } else {
-      setPartidosClub(matches || []);
+      setPartidosPeriodo(matches || []);
     }
   }
 
@@ -543,7 +542,6 @@ export default function RecepcionElite() {
     mostrarNotificacion("Cambios Guardados", "✅ Se han conservado las modificaciones en la reserva.", "success");
   };
 
-  // EXTRACTOR ROBUSTO DE NOMBRE DE CLIENTE
   const obtenerNombreCliente = (reservado) => {
     if (!reservado) return "Cliente Mostrador";
     if (reservado.creator_profile?.nombre) {
@@ -565,7 +563,6 @@ export default function RecepcionElite() {
     return "Cliente Mostrador";
   };
 
-  // EXTRACTOR ROBUSTO DE TELÉFONO
   const obtenerTelefonoCliente = (reservado) => {
     if (!reservado) return "—";
     if (reservado.creator_profile?.telefono) return reservado.creator_profile.telefono;
@@ -1074,8 +1071,8 @@ export default function RecepcionElite() {
       const nuevoAbono = {
         id: `pay-pos-${Date.now()}`,
         user_id: user.id,
-        user_name: "Cliente Mostrador (POS)",
-        user_phone: "En sitio",
+        user_name: obtenerNombreCliente(match),
+        user_phone: obtenerTelefonoCliente(match),
         amount: montoFinalUSD,
         method: metodoAbonoManualPOS,
         reference: numRefAbonoManualPOS.trim() || (monedaCobroPOS === "VES" ? `Cobro Bs. ${valIngresado.toFixed(2)}` : "Cobro POS"),
@@ -1344,6 +1341,7 @@ export default function RecepcionElite() {
     return productos.filter(p => p.name.toLowerCase().includes(term) || (p.brand && p.brand.toLowerCase().includes(term)));
   }, [productos, busquedaProducto]);
 
+  // CERRAR TICKET Y LIQUIDAR RESERVA (CORREGIDO SIN DUPLICAR ABONOS)
   async function cerrarTicketYLiquidarReserva(match) {
     if (match.payment_status === "liquidado") {
       return mostrarNotificacion("Ya Liquidado", "Esta reserva ya fue liquidada e ingresada al historial de ventas.", "info");
@@ -1358,29 +1356,34 @@ export default function RecepcionElite() {
       const totalGranEsperado = precioBase + fee + totalExtras;
 
       const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
-      const totalAbonadoAprobado = historialActual
-        .filter((item) => item.status === "aprobado")
-        .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
 
+      // 1. APROBAR TODOS LOS PAGOS EXISTENTES
+      let historialNuevo = historialActual.map((item) => ({
+        ...item,
+        status: "aprobado",
+      }));
+
+      const totalAbonadoAprobado = historialNuevo.reduce(
+        (sum, item) => sum + (parseFloat(item.amount) || 0),
+        0
+      );
+
+      // 2. SOLO SI QUEDA UN SALDO REAL PENDIENTE, AGREGAR EL PAGO DE CIERRE
       const restante = Math.max(0, totalGranEsperado - totalAbonadoAprobado);
-
-      let historialNuevo = [...historialActual];
-      if (restante > 0) {
+      if (restante > 0.05) {
         historialNuevo.push({
           id: `pay-pos-close-${Date.now()}`,
           user_id: user.id,
-          user_name: "Liquidación Recepción POS",
-          user_phone: "En sitio",
+          user_name: obtenerNombreCliente(match),
+          user_phone: obtenerTelefonoCliente(match),
           amount: restante,
-          method: metodoAbonoManualPOS || "pago_movil",
+          method: metodoAbonoManualPOS || "efectivo",
           reference: numRefAbonoManualPOS.trim() || "Cierre de Ticket POS",
           receipt_url: previewAbonoManualPOS || null,
           status: "aprobado",
           created_at: new Date().toISOString(),
         });
       }
-
-      historialNuevo = historialNuevo.map((item) => ({ ...item, status: "aprobado" }));
 
       const { data: ventaCaja, error: errVenta } = await supabase
         .from("sales")
@@ -1488,14 +1491,14 @@ export default function RecepcionElite() {
     }
   }
 
-  // PROCESAR REEMBOLSO Y LIBERAR CANCHA (+6H) — RIGOR FINANCIERO ESTRICTO
+  // PROCESAR REEMBOLSO Y LIBERAR CANCHA (+6H)
   async function procesarDevolucionYLiberarCancha(match) {
     try {
       setProcesando(true);
 
       const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
       
-      // SUMAR ÚNICAMENTE DINERO QUE HAYA SIDO EFECTIVAMENTE APROBADO O LIQUIDADO EN CAJA
+      // SOLO SUMAR DINERO QUE HAYA SIDO EFECTIVAMENTE APROBADO O LIQUIDADO EN CAJA
       const totalAbonadoAprobado = historialActual
         .filter((item) => item.status === "aprobado" || item.status === "liquidado")
         .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
@@ -1529,7 +1532,7 @@ export default function RecepcionElite() {
         }
       }
 
-      // 2. MARCAR EL PARTIDO COMO CANCELADO (Satisface la consulta del POS .neq("status", "cancelado"))
+      // 2. MARCAR EL PARTIDO COMO CANCELADO
       const { error: errMatch } = await supabase
         .from("matches")
         .update({
@@ -1578,7 +1581,7 @@ export default function RecepcionElite() {
     }
   }
 
-  // CANCELACIÓN DIRECTA DE DESDE POS CON EVALUACIÓN DE 6 HORAS
+  // CANCELACIÓN DIRECTA DESDE POS CON EVALUACIÓN DE 6 HORAS
   async function cancelarReserva(match) {
     if (match.payment_status === "liquidado") {
       return mostrarNotificacion("Ticket Liquidado", "No se puede anular una reserva que ya fue liquidada e ingresada en las ventas oficiales.", "warning");
@@ -2461,7 +2464,7 @@ export default function RecepcionElite() {
 
           const historialAbonos = Array.isArray(matchSeleccionado.payments_history) ? matchSeleccionado.payments_history : [];
           
-          // 🧠 SUMAR ÚNICAMENTE PAGOS APROBADOS O LIQUIDADOS
+          // SUMAR ÚNICAMENTE PAGOS EFECTIVAMENTE APROBADOS O LIQUIDADOS
           const totalAbonadoAprobado = historialAbonos
             .filter((a) => a.status === "aprobado" || a.status === "liquidado")
             .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
