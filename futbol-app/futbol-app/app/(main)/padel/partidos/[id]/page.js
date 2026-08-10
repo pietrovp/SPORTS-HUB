@@ -8,6 +8,26 @@ import { supabase } from "@/lib/supabaseClient";
 
 const CATEGORIAS_ORDEN = ["rookies", "7ma", "6ta", "5ta", "4ta", "3era", "2da", "open"];
 
+const PRESETS_DUPLA_1 = [
+  { label: "6 - 0", gA: 6, gB: 0 },
+  { label: "6 - 1", gA: 6, gB: 1 },
+  { label: "6 - 2", gA: 6, gB: 2 },
+  { label: "6 - 3", gA: 6, gB: 3 },
+  { label: "6 - 4", gA: 6, gB: 4 },
+  { label: "7 - 5", gA: 7, gB: 5 },
+  { label: "7 - 6 (TB)", gA: 7, gB: 6 },
+];
+
+const PRESETS_DUPLA_2 = [
+  { label: "0 - 6", gA: 0, gB: 6 },
+  { label: "1 - 6", gA: 1, gB: 6 },
+  { label: "2 - 6", gA: 2, gB: 6 },
+  { label: "3 - 6", gA: 3, gB: 6 },
+  { label: "4 - 6", gA: 4, gB: 6 },
+  { label: "5 - 7", gA: 5, gB: 7 },
+  { label: "6 - 7 (TB)", gA: 6, gB: 7 },
+];
+
 function formatFechaLarga(fechaStr) {
   if (!fechaStr) return "";
   const d = parsearFechaVET(fechaStr);
@@ -20,7 +40,6 @@ function formatFechaLarga(fechaStr) {
   });
 }
 
-// 🇻🇪 HUSO HORARIO VENEZUELA (UTC-4)
 function parsearFechaVET(fechaStr) {
   if (!fechaStr) return new Date();
   const cleanStr = fechaStr.replace(" ", "T").substring(0, 19);
@@ -52,7 +71,10 @@ function validarCompatibilidadCategorias(jugadores) {
   
   const indices = jugadores
     .map((j) => {
-      const cat = j.padel_profile?.categoria_oficial || categoriaDesdeRating(j.padel_profile?.rating);
+      let catRaw = j.padel_profile?.categoria_oficial || categoriaDesdeRating(j.padel_profile?.rating);
+      if (!catRaw) return -1;
+      let cat = catRaw.toString().toLowerCase().trim();
+      if (cat === "3ra") cat = "3era";
       return CATEGORIAS_ORDEN.indexOf(cat);
     })
     .filter((idx) => idx !== -1);
@@ -168,28 +190,12 @@ export default function PartidoDetallePage() {
   const [modalCancelOpen, setModalCancelOpen] = useState(false);
   const [imagenEngrande, setImagenEngrande] = useState(null);
 
-  // DESPLEGABLE DE PAGOS
   const [pagosDesplegados, setPagosDesplegados] = useState(false);
 
-  // MARCADOR EN TIEMPO REAL Y ESTADO DE PARTIDO INICIADO
+  // ESTADO DE PARTIDO
   const [partidoIniciado, setPartidoIniciado] = useState(false);
-  const [liveScore, setLiveScore] = useState({
-    setActual: 1,
-    puntosA: "0",
-    puntosB: "0",
-    esTiebreak: false,
-    sets: [
-      { gA: 0, gB: 0, tbA: 0, tbB: 0 },
-      { gA: 0, gB: 0, tbA: 0, tbB: 0 },
-      { gA: 0, gB: 0, tbA: 0, tbB: 0 },
-    ],
-    setsGanadosA: 0,
-    setsGanadosB: 0,
-    saque: "A",
-    partidoTerminado: false,
-  });
 
-  // ESTADOS MODO 6 JUGADORES / SETS
+  // ESTADOS CARGA DE MARCADOR
   const [modalResultadoOpen, setModalResultadoOpen] = useState(false);
   const [setsRotacion, setSetsRotacion] = useState([
     { pA1: "", pA2: "", pB1: "", pB2: "", gA: 6, gB: 4, tbA: 0, tbB: 0 },
@@ -198,7 +204,7 @@ export default function PartidoDetallePage() {
 
   const [procesandoScore, setProcesandoScore] = useState(false);
 
-  // GESTIÓN DE DUPLAS Y BÚSQUEDA DE JUGADORES
+  // GESTIÓN DE JUGADORES
   const [modalAgregarJugadorOpen, setModalAgregarJugadorOpen] = useState(false);
   const [equipoObjetivoAdd, setEquipoObjetivoAdd] = useState("A");
   const [mostrarTerceraDupla, setMostrarTerceraDupla] = useState(false);
@@ -208,7 +214,7 @@ export default function PartidoDetallePage() {
   const [buscandoUsuarios, setBuscandoUsuarios] = useState(false);
   const [procesandoJugador, setProcesandoJugador] = useState(false);
 
-  // REGISTRO DE PAGOS EXTRAS
+  // REGISTRO PAGOS EXTRAS
   const [formPagoExtra, setFormPagoExtra] = useState({
     monto: "",
     metodoPago: "pago_movil",
@@ -217,17 +223,11 @@ export default function PartidoDetallePage() {
   });
   const [enviandoPagoExtra, setEnviandoPagoExtra] = useState(false);
 
-  // EVALUACIÓN DE NIVEL
-  const [evaluaciones, setEvaluaciones] = useState({});
-  const [encuestaEnviada, setEncuestaEnviada] = useState(false);
-  const [enviandoEncuesta, setEnviandoEncuesta] = useState(false);
-
   useEffect(() => {
     if (!matchId || !supabase) return;
 
     cargarDetallePartido();
     obtenerTasaBCV();
-    suscripcionRealtimeLiveScore();
 
     const channelMatches = supabase
       .channel(`realtime-match-detail-${matchId}`)
@@ -264,158 +264,30 @@ export default function PartidoDetallePage() {
     }
   }
 
-  function suscripcionRealtimeLiveScore() {
-    const channel = supabase.channel(`match-live-${matchId}`, {
-      config: { broadcast: { self: true } },
-    });
-
-    channel
-      .on("broadcast", { event: "score_update" }, (payload) => {
-        if (payload.payload) {
-          setLiveScore(payload.payload);
-          setPartidoIniciado(true);
-        }
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }
-
-  async function transmitirLiveScore(nuevoEstado) {
-    setLiveScore(nuevoEstado);
-    setPartidoIniciado(true);
-    const channel = supabase.channel(`match-live-${matchId}`);
-    await channel.send({
-      type: "broadcast",
-      event: "score_update",
-      payload: nuevoEstado,
-    });
-  }
-
-  function sumarPuntoLive(equipo) {
-    if (liveScore.partidoTerminado) return;
-
-    let score = JSON.parse(JSON.stringify(liveScore));
-    const setIdx = score.setActual - 1;
-    let curSet = score.sets[setIdx] || { gA: 0, gB: 0, tbA: 0, tbB: 0 };
-
-    if (score.esTiebreak) {
-      if (equipo === "A") curSet.tbA++;
-      else curSet.tbB++;
-
-      const totalTb = curSet.tbA + curSet.tbB;
-      if (totalTb % 2 === 1) {
-        score.saque = score.saque === "A" ? "B" : "A";
-      }
-
-      if (curSet.tbA >= 7 && (curSet.tbA - curSet.tbB) >= 2) {
-        curSet.gA = 7;
-        curSet.gB = 6;
-        score.esTiebreak = false;
-        score.setsGanadosA++;
-        finalizarONuevoSet(score);
-      } else if (curSet.tbB >= 7 && (curSet.tbB - curSet.tbA) >= 2) {
-        curSet.gB = 7;
-        curSet.gA = 6;
-        score.esTiebreak = false;
-        score.setsGanadosB++;
-        finalizarONuevoSet(score);
-      }
-    } else {
-      let pA = score.puntosA;
-      let pB = score.puntosB;
-
-      if (equipo === "A") {
-        if (pA === "0") pA = "15";
-        else if (pA === "15") pA = "30";
-        else if (pA === "30") pA = "40";
-        else if (pA === "40") {
-          if (pB === "40") pA = "VENTAJA";
-          else if (pB === "VENTAJA") pB = "40";
-          else return ganarJuego(score, "A");
-        } else if (pA === "VENTAJA") return ganarJuego(score, "A");
-      } else {
-        if (pB === "0") pB = "15";
-        else if (pB === "15") pB = "30";
-        else if (pB === "30") pB = "40";
-        else if (pB === "40") {
-          if (pA === "40") pB = "VENTAJA";
-          else if (pA === "VENTAJA") pA = "40";
-          else return ganarJuego(score, "B");
-        } else if (pB === "VENTAJA") return ganarJuego(score, "B");
-      }
-
-      score.puntosA = pA;
-      score.puntosB = pB;
-    }
-
-    score.sets[setIdx] = curSet;
-    transmitirLiveScore(score);
-  }
-
-  function ganarJuego(score, equipo) {
-    const setIdx = score.setActual - 1;
-    let curSet = score.sets[setIdx];
-
-    if (equipo === "A") curSet.gA++;
-    else curSet.gB++;
-
-    score.puntosA = "0";
-    score.puntosB = "0";
-    score.saque = score.saque === "A" ? "B" : "A";
-
-    const gA = curSet.gA;
-    const gB = curSet.gB;
-
-    if (gA === 6 && gB === 6) {
-      score.esTiebreak = true;
-      curSet.tbA = 0;
-      curSet.tbB = 0;
-    } else if ((gA >= 6 && (gA - gB) >= 2) || (gA === 7 && gB === 5)) {
-      score.setsGanadosA++;
-      finalizarONuevoSet(score);
-    } else if ((gB >= 6 && (gB - gA) >= 2) || (gB === 7 && gA === 5)) {
-      score.setsGanadosB++;
-      finalizarONuevoSet(score);
-    } else {
-      score.sets[setIdx] = curSet;
-    }
-
-    transmitirLiveScore(score);
-  }
-
-  function finalizarONuevoSet(score) {
-    score.puntosA = "0";
-    score.puntosB = "0";
-
-    if (score.setsGanadosA === 2 || score.setsGanadosB === 2) {
-      score.partidoTerminado = true;
-    } else if (score.setActual < 3) {
-      score.setActual++;
-    }
-  }
-
-  async function iniciarPartidoLive() {
+  async function iniciarPartido() {
     if (!puedeIniciarPartido) {
-      return mostrarNotificacion("advertencia", "Cancha no Saldada", "No se puede iniciar el partido hasta que el valor base de la pista esté totalmente abonado y aprobado.");
+      return mostrarNotificacion(
+        "advertencia",
+        "Cancha no Saldada",
+        "No se puede iniciar el partido hasta que la tarifa base de la pista esté abonada y aprobada por recepción."
+      );
     }
 
     try {
       setProcesandoScore(true);
       setPartidoIniciado(true);
-
-      await supabase
+      const { error } = await supabase
         .from("matches")
         .update({ status: "en_progreso" })
         .eq("id", match.id);
 
-      await transmitirLiveScore(liveScore);
-      mostrarNotificacion("exito", "¡Partido Iniciado!", "El contador de puntos reglamentario se ha activado.");
+      if (error) throw error;
+
+      mostrarNotificacion("exito", "¡Partido Iniciado!", "El partido ha comenzado. Al terminar, recuerden cargar el marcador final.");
+      await cargarDetallePartido();
     } catch (err) {
       console.error("Error al iniciar partido:", err);
-      mostrarNotificacion("error", "Error", "No se pudo iniciar el marcador.");
+      mostrarNotificacion("error", "Error", "No se pudo cambiar el estado del partido.");
     } finally {
       setProcesandoScore(false);
     }
@@ -448,7 +320,7 @@ export default function PartidoDetallePage() {
 
       const { data: rawPlayers } = await supabase
         .from("match_players")
-        .select("id, user_id, team, has_evaluated")
+        .select("id, user_id, team, has_evaluated, rating_change")
         .eq("match_id", matchId);
 
       const userIds = (rawPlayers || []).map((p) => p.user_id).filter(Boolean);
@@ -658,7 +530,7 @@ export default function PartidoDetallePage() {
       if (updateErr) throw updateErr;
 
       setFormPagoExtra({ monto: "", metodoPago: "pago_movil", numReferencia: "", previewComprobante: "" });
-      mostrarNotificacion("exito", "Comprobante Enviado", "✅ ¡Nuevo comprobante adjuntado con éxito! El club lo revisará en recepción.");
+      mostrarNotificacion("exito", "Comprobante Enviado", "✅ ¡Nuevo comprobante adjuntado con éxito!");
       await cargarDetallePartido();
     } catch (err) {
       mostrarNotificacion("error", "Error", "Error al adjuntar el comprobante.");
@@ -668,25 +540,36 @@ export default function PartidoDetallePage() {
   }
 
   function handleFinalizarPartidoClick() {
-    if (!puedeFinalizarPartido) {
-      return mostrarNotificacion(
-        "advertencia",
-        "Saldos Pendientes por Cobrar",
-        `Para dar por terminado el partido, todos los consumos extra y la cancha deben estar 100% pagados ($${restanteGranTotal.toFixed(2)} USD restantes) y aprobados por la recepción del club.`
-      );
-    }
-
-    if (liveScore.setActual > 1 || liveScore.sets[0].gA > 0 || liveScore.sets[0].gB > 0) {
-      const setsCargados = liveScore.sets.slice(0, liveScore.setActual).map((s) => ({
-        pA1: "", pA2: "", pB1: "", pB2: "",
-        gA: s.gA, gB: s.gB, tbA: s.tbA, tbB: s.tbB
-      }));
-      if (setsCargados.length > 0) {
-        setSetsRotacion(setsCargados);
-      }
-    }
-
     setModalResultadoOpen(true);
+  }
+
+  function seleccionarPresetSet(setIndex, gA, gB) {
+    const nuevosSets = [...setsRotacion];
+    nuevosSets[setIndex].gA = gA;
+    nuevosSets[setIndex].gB = gB;
+
+    if ((gA === 7 && gB === 6) || (gA === 6 && gB === 7)) {
+      if (nuevosSets[setIndex].tbA === 0 && nuevosSets[setIndex].tbB === 0) {
+        nuevosSets[setIndex].tbA = gA === 7 ? 7 : 5;
+        nuevosSets[setIndex].tbB = gB === 7 ? 7 : 5;
+      }
+    } else {
+      nuevosSets[setIndex].tbA = 0;
+      nuevosSets[setIndex].tbB = 0;
+    }
+
+    setSetsRotacion(nuevosSets);
+  }
+
+  function toggleAgregarQuitarSet3() {
+    if (setsRotacion.length === 2) {
+      setSetsRotacion([
+        ...setsRotacion,
+        { pA1: "", pA2: "", pB1: "", pB2: "", gA: 6, gB: 4, tbA: 0, tbB: 0 }
+      ]);
+    } else {
+      setSetsRotacion(setsRotacion.slice(0, 2));
+    }
   }
 
   async function enviarPropuestaResultado(e) {
@@ -707,29 +590,45 @@ export default function PartidoDetallePage() {
         return mostrarNotificacion("error", `Error en Set ${i + 1}`, val.msg);
       }
       setsValidados.push({ ...s, ganador: val.ganador });
-      marcadorTexto += `${i > 0 ? ", " : ""}${s.gA}-${s.gB}${val.esTiebreak ? `(${Math.min(s.tbA, s.tbB)})` : ""}`;
+      
+      let setStr = `${s.gA}-${s.gB}`;
+      if (val.esTiebreak) {
+        const tbMin = Math.min(Number(s.tbA), Number(s.tbB));
+        setStr += `(${tbMin})`;
+      }
+      marcadorTexto += `${i > 0 ? ", " : ""}${setStr}`;
     }
 
-    const ganadorFinal = setsRotacion[0].ganador;
-    const esAmistoso = !match.is_competitive;
+    let setsGanadosA = 0;
+    let setsGanadosB = 0;
+    setsValidados.forEach((s) => {
+      if (s.ganador === "A") setsGanadosA++;
+      else setsGanadosB++;
+    });
+
+    const ganadorFinal = setsGanadosA >= setsGanadosB ? "A" : "B";
+    const esRankedRealValido = elegibilidadRanked.elegible && match.is_competitive;
+    const esAmistosoOExhibicion = !esRankedRealValido;
 
     const propuestaData = {
       winner: ganadorFinal,
       scoreText: marcadorTexto,
       sets: setsValidados,
-      esRankedValido: elegibilidadRanked.elegible && match.is_competitive,
+      esRankedValido: esRankedRealValido,
     };
 
     try {
       setProcesandoScore(true);
+
+      const debeFinalizarYa = esAmistosoOExhibicion && todoPagadoConExtras;
 
       const payloadUpdate = {
         score_proposed: propuestaData,
         score_submitted_by: user.id,
         score_text: marcadorTexto,
         winner_team: ganadorFinal,
-        status: esAmistoso ? "jugado" : match.status,
-        score_status: esAmistoso ? "confirmado" : "propuesto",
+        status: debeFinalizarYa ? "jugado" : match.status,
+        score_status: esAmistosoOExhibicion ? "confirmado" : "propuesto",
         score_confirmations: [user.id],
       };
 
@@ -743,10 +642,12 @@ export default function PartidoDetallePage() {
       setModalResultadoOpen(false);
       await cargarDetallePartido();
 
-      if (esAmistoso) {
-        mostrarNotificacion("exito", "¡Partido Finalizado!", "El partido ha sido guardado con éxito en tu historial.");
+      if (debeFinalizarYa) {
+        mostrarNotificacion("exito", "¡Partido Finalizado!", "El marcador se guardó correctamente y el partido se cerró oficialmente.");
+      } else if (esAmistosoOExhibicion && !todoPagadoConExtras) {
+        mostrarNotificacion("info", "Marcador Guardado (Pago Pendiente)", "El marcador se guardó con éxito. El partido se cerrará en tu historial cuando recepción apruebe el saldo pendiente.");
       } else {
-        mostrarNotificacion("exito", "Marcador Propuesto", "Resultado enviado. Esperando la confirmación de la pareja rival.");
+        mostrarNotificacion("exito", "Marcador Propuesto", "Marcador guardado. Esperando confirmación de la pareja rival.");
       }
     } catch (err) {
       console.error(err);
@@ -778,21 +679,24 @@ export default function PartidoDetallePage() {
         return;
       }
 
-      const propuesta = match.score_proposed;
+      const propuesta = match.score_proposed || {};
+      const marcadorFinalStr = propuesta.scoreText || match.score_text;
+      const debeFinalizarOficial = todoPagadoConExtras;
 
       const { error: matchErr } = await supabase
         .from("matches")
         .update({
-          status: "jugado",
+          status: debeFinalizarOficial ? "jugado" : match.status,
           winner_team: propuesta.winner,
           score_status: "confirmado",
-          score_text: propuesta.scoreText,
+          score_text: marcadorFinalStr,
           score_confirmations: [...(match.score_confirmations || []), user.id],
         })
         .eq("id", match.id);
 
       if (matchErr) throw matchErr;
 
+      // ACTUALIZAR ELO INCLUSO SI NO SE HA FINALIZADO ADMINISTRATIVAMENTE AÚN
       if (propuesta.esRankedValido) {
         const deltasAcumulados = {};
 
@@ -847,10 +751,28 @@ export default function PartidoDetallePage() {
       }
 
       await cargarDetallePartido();
-      mostrarNotificacion("exito", "¡Partido Finalizado!", propuesta.esRankedValido ? "Marcador aprobado y Rating actualizado." : "Marcador registrado en tu historial.");
+      if (debeFinalizarOficial) {
+        mostrarNotificacion("exito", "¡Partido Finalizado!", "Marcador aprobado y guardado en tu historial.");
+      } else {
+        mostrarNotificacion("info", "Marcador Confirmado (Pago Pendiente)", "Marcador confirmado por ambas duplas. El partido se cerrará definitivamente en cuanto recepción apruebe el pago pendiente.");
+      }
     } catch (err) {
       console.error(err);
       mostrarNotificacion("error", "Error", "No se pudo procesar la confirmación.");
+    } finally {
+      setProcesandoScore(false);
+    }
+  }
+
+  async function cerrarPartidoAdministrativamente() {
+    try {
+      setProcesandoScore(true);
+      const { error } = await supabase.from("matches").update({ status: "jugado" }).eq("id", match.id);
+      if (error) throw error;
+      await cargarDetallePartido();
+      mostrarNotificacion("exito", "¡Partido Cerrado!", "Se han validado los pagos y el partido ha finalizado oficialmente.");
+    } catch (err) {
+      mostrarNotificacion("error", "Error", "No se pudo cerrar el partido administrativamente.");
     } finally {
       setProcesandoScore(false);
     }
@@ -996,14 +918,12 @@ export default function PartidoDetallePage() {
 
   const historialAbonos = Array.isArray(match?.payments_history) ? match.payments_history : [];
 
-  // 🧠 CÁLCULOS SEPARADOS DE PAGOS APROBADOS Y EXTRAS
   const precioBase = match?.total_price || 16;
   const feeApp = match?.app_fee || (match?.is_private ? 0 : precioBase * 0.10);
   const totalPistaConFee = precioBase + feeApp;
 
   const listExtras = Array.isArray(match?.extra_items) ? match.extra_items : [];
 
-  // AGRUPADOR DE EXTRAS PARA LA UI (x5, x6)
   const extrasAgrupados = listExtras.reduce((acc, ex) => {
     const key = `${ex.name}_${ex.price}`;
     if (!acc[key]) {
@@ -1025,7 +945,6 @@ export default function PartidoDetallePage() {
   const miAbonoHistorial = historialAbonos.filter((p) => p.user_id === user?.id);
   const miPagoPendiente = miAbonoHistorial.some((p) => p.status === "pendiente" || p.status === "pendiente_aprobacion");
 
-  // REGLAS DIFERENCIADAS
   const canchaTotalmentePagada = totalAbonadoAprobado >= (totalPistaConFee - 0.05);
   const todoPagadoConExtras = totalAbonadoAprobado >= (totalGranEsperado - 0.05);
 
@@ -1040,9 +959,9 @@ export default function PartidoDetallePage() {
   const dupla2 = match?.players?.filter((p) => p.team === "B") || [];
   const dupla3 = match?.players?.filter((p) => p.team === "C") || [];
 
-  const estaEnHorarioOIniciado = partidoIniciado || horasFaltantesActuales <= 0.25;
-
   const propuestoPorMi = match?.score_submitted_by === user?.id;
+
+  const esRankedRealValido = match?.is_competitive && (match?.score_proposed?.esRankedValido ?? elegibilidadRanked.elegible);
 
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 space-y-6">
@@ -1064,20 +983,58 @@ export default function PartidoDetallePage() {
               </h1>
             </div>
 
+            {/* DYNAMIC BADGE */}
             <div className="flex items-center gap-2">
               <span className="bg-blue-50 text-blue-700 font-black text-xs px-3 py-1 rounded-full border border-blue-200">
                 Cat. {match?.category_restriction || "Libre"}
               </span>
-              <span className={`text-xs font-black px-3 py-1 rounded-full ${
-                match?.is_competitive ? "bg-amber-50 text-amber-800 border border-amber-200" : "bg-slate-100 text-slate-600"
-              }`}>
-                {match?.is_competitive ? "⚡ Modo Ranked" : "🔒 Privado"}
-              </span>
+              
+              {(() => {
+                if (!match?.is_competitive) {
+                  return (
+                    <span className="bg-slate-100 text-slate-600 text-xs font-black px-3 py-1 rounded-full border border-slate-200">
+                      🤝 Modo Amistoso
+                    </span>
+                  );
+                }
+                if (match?.status === "jugado") {
+                  return esRankedRealValido ? (
+                    <span className="bg-emerald-50 text-emerald-800 text-xs font-black px-3 py-1 rounded-full border border-emerald-200">
+                      ⚡ Ranked Oficial
+                    </span>
+                  ) : (
+                    <span className="bg-amber-50 text-amber-800 text-xs font-black px-3 py-1 rounded-full border border-amber-200">
+                      🤝 Modo Exhibición
+                    </span>
+                  );
+                }
+                
+                const jugadoresActuales = match?.players || [];
+                const faltanJugadores = jugadoresActuales.length < 4 || jugadoresActuales.some((j) => !j.user_id);
+                
+                if (faltanJugadores) {
+                  return (
+                    <span className="bg-amber-50 text-amber-800 text-xs font-black px-3 py-1 rounded-full border border-amber-200">
+                      ⚠️ Ranked (Faltan Jugadores)
+                    </span>
+                  );
+                }
+                
+                return elegibilidadRanked.elegible ? (
+                  <span className="bg-emerald-50 text-emerald-800 text-xs font-black px-3 py-1 rounded-full border border-emerald-200">
+                    🟢 Ranked Confirmado
+                  </span>
+                ) : (
+                  <span className="bg-amber-50 text-amber-800 text-xs font-black px-3 py-1 rounded-full border border-amber-200">
+                    🤝 Exhibición (Cat. Incompatibles)
+                  </span>
+                );
+              })()}
             </div>
           </div>
 
           {/* ELEGIBILIDAD RANKED BANNER */}
-          {match?.is_competitive && (
+          {match?.is_competitive && match?.status !== "jugado" && (
             <div className={`p-4 rounded-2xl border text-xs font-bold flex items-center justify-between ${
               elegibilidadRanked.elegible ? "bg-emerald-50 border-emerald-200 text-emerald-900" : "bg-amber-50 border-amber-200 text-amber-900"
             }`}>
@@ -1090,6 +1047,37 @@ export default function PartidoDetallePage() {
             </div>
           )}
         </div>
+
+        {/* 🏆 BANNER DE PARTIDO FINALIZADO ("JUGADO") */}
+        {match?.status === "jugado" && (
+          <div className="bg-slate-950 border-2 border-emerald-500 p-6 rounded-3xl shadow-xl text-white space-y-4 text-center">
+            <div className="flex justify-center items-center gap-2">
+              <span className="text-3xl">🏆</span>
+              <span className="bg-emerald-500/20 text-[#00FF9D] text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full border border-emerald-500/50">
+                PARTIDO FINALIZADO OFICIALMENTE
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              <h2 className="text-2xl sm:text-3xl font-black text-white">
+                👑 GANADORES: DUPLA {match.winner_team === "A" ? "1 (PAREJA A)" : "2 (PAREJA B)"}
+              </h2>
+              <p className="text-emerald-400 font-black text-xl tracking-wider mt-2">
+                Marcador Final: {match.score_text || "Resultado Registrado"}
+              </p>
+            </div>
+
+            {esRankedRealValido ? (
+              <p className="text-[11px] text-emerald-400 font-bold">
+                ⚡ Los puntos y categorías de los jugadores han sido recalculados en el Ranking Oficial.
+              </p>
+            ) : (
+              <p className="text-[11px] text-slate-400 font-bold">
+                🤝 Partido de Exhibición/Amistoso finalizado correctamente. No afectó el Ranking Oficial.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* 🟡 BANNER DE PROPUESTA DE MARCADOR PENDIENTE */}
         {match?.score_status === "propuesto" && match?.status !== "jugado" && (
@@ -1116,7 +1104,7 @@ export default function PartidoDetallePage() {
             ) : (
               <div className="space-y-3 pt-1">
                 <p className="text-xs font-bold text-amber-950">
-                  El rival ha cargado este marcador. Haz clic en aprobar para dar por finalizado y confirmado el partido.
+                  El rival ha cargado este marcador. Haz clic en aprobar para confirmar el resultado del partido.
                 </p>
                 <div className="flex gap-3">
                   <button
@@ -1141,7 +1129,30 @@ export default function PartidoDetallePage() {
           </div>
         )}
 
-        {/* 💳 SECCIÓN 1: PAGOS Y COMPROBANTES (DESPLEGABLE ARRIBA) */}
+        {/* 🟢 BANNER DE MARCADOR CONFIRMADO PERO PENDIENTE DE PAGO */}
+        {match?.score_status === "confirmado" && match?.status !== "jugado" && (
+          <div className="bg-emerald-50 border-2 border-emerald-300 p-5 rounded-3xl shadow-md space-y-3 text-center">
+            <span className="text-3xl block">⏳</span>
+            <h3 className="text-lg font-black text-emerald-950">Marcador Confirmado</h3>
+            <p className="text-xs font-bold text-emerald-800 max-w-md mx-auto">
+              El resultado ({match.score_text}) ha sido guardado y validado. Sin embargo, hay un saldo de <strong className="text-rose-600">${restanteGranTotal.toFixed(2)} USD</strong> pendiente por cobrar. 
+              La recepción del club debe aprobar los pagos para dar el partido por liquidado y cerrado oficialmente.
+            </p>
+            
+            {puedeFinalizarPartido && soyCreadorVista && (
+              <button
+                type="button"
+                onClick={cerrarPartidoAdministrativamente}
+                disabled={procesandoScore}
+                className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md transition-all cursor-pointer mt-2"
+              >
+                🏁 Validar Pagos y Cerrar Partido Oficialmente
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* 💳 SECCIÓN 1: PAGOS Y COMPROBANTES */}
         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
           <button
             type="button"
@@ -1178,7 +1189,6 @@ export default function PartidoDetallePage() {
 
           {pagosDesplegados && (
             <div className="p-5 bg-slate-50 space-y-4 border-t border-slate-100">
-              
               {miPagoPendiente && (
                 <div className="bg-amber-50 border border-amber-300 p-3.5 rounded-2xl text-amber-900 text-xs font-bold flex items-center gap-3">
                   <span className="text-xl">⏳</span>
@@ -1197,7 +1207,6 @@ export default function PartidoDetallePage() {
                   <span className="font-black">${totalPistaConFee.toFixed(2)} USD</span>
                 </div>
 
-                {/* CONSUMOS EXTRAS AGRUPADOS (x5, x6) */}
                 {listaExtrasAgrupados.length > 0 && (
                   <div className="pt-2 border-t border-slate-800 space-y-1">
                     <span className="text-[10px] text-amber-300 uppercase font-black block">
@@ -1356,7 +1365,7 @@ export default function PartidoDetallePage() {
               <h3 className="text-base font-black text-slate-900">Duplas & Alineación en Pista</h3>
             </div>
 
-            {!mostrarTerceraDupla && (
+            {!mostrarTerceraDupla && match?.status !== "jugado" && (
               <button
                 type="button"
                 onClick={() => setMostrarTerceraDupla(true)}
@@ -1370,12 +1379,16 @@ export default function PartidoDetallePage() {
           <div className="space-y-5">
             <div className="bg-slate-50/80 rounded-3xl border-2 border-slate-200 p-5 space-y-6 shadow-2xs">
               {/* DUPLA 1 */}
-              <div className="space-y-3">
+              <div className={`space-y-3 p-3 rounded-2xl transition-colors ${
+                match?.status === "jugado" && match?.winner_team === "A" ? "bg-amber-100/60 border border-amber-300" : ""
+              }`}>
                 <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
-                  <span className="text-xs font-black uppercase text-slate-900 tracking-wider">🎾 Dupla 1 (Pareja A)</span>
+                  <span className="text-xs font-black uppercase text-slate-900 tracking-wider">
+                    🎾 Dupla 1 (Pareja A) {match?.status === "jugado" && match?.winner_team === "A" && "👑 GANADORES"}
+                  </span>
                 </div>
 
-                <div className="flex items-center justify-around sm:justify-start sm:gap-12 pt-2">
+                <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
                   <PlayerCircleSlot
                     player={dupla1[0]}
                     teamLetter="A"
@@ -1383,9 +1396,10 @@ export default function PartidoDetallePage() {
                     onRemove={removerJugadorDeMatch}
                     isCreator={soyCreadorVista}
                     currentUserId={user?.id}
+                    isGamePlayed={match?.status === "jugado"}
                   />
 
-                  <span className="text-slate-300 font-black text-xl">+</span>
+                  <span className="text-slate-300 font-black text-xl mt-4">+</span>
 
                   <PlayerCircleSlot
                     player={dupla1[1]}
@@ -1394,6 +1408,7 @@ export default function PartidoDetallePage() {
                     onRemove={removerJugadorDeMatch}
                     isCreator={soyCreadorVista}
                     currentUserId={user?.id}
+                    isGamePlayed={match?.status === "jugado"}
                   />
                 </div>
               </div>
@@ -1408,12 +1423,16 @@ export default function PartidoDetallePage() {
               </div>
 
               {/* DUPLA 2 */}
-              <div className="space-y-3">
+              <div className={`space-y-3 p-3 rounded-2xl transition-colors ${
+                match?.status === "jugado" && match?.winner_team === "B" ? "bg-amber-100/60 border border-amber-300" : ""
+              }`}>
                 <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
-                  <span className="text-xs font-black uppercase text-slate-900 tracking-wider">🎾 Dupla 2 (Pareja B)</span>
+                  <span className="text-xs font-black uppercase text-slate-900 tracking-wider">
+                    🎾 Dupla 2 (Pareja B) {match?.status === "jugado" && match?.winner_team === "B" && "👑 GANADORES"}
+                  </span>
                 </div>
 
-                <div className="flex items-center justify-around sm:justify-start sm:gap-12 pt-2">
+                <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
                   <PlayerCircleSlot
                     player={dupla2[0]}
                     teamLetter="B"
@@ -1421,9 +1440,10 @@ export default function PartidoDetallePage() {
                     onRemove={removerJugadorDeMatch}
                     isCreator={soyCreadorVista}
                     currentUserId={user?.id}
+                    isGamePlayed={match?.status === "jugado"}
                   />
 
-                  <span className="text-slate-300 font-black text-xl">+</span>
+                  <span className="text-slate-300 font-black text-xl mt-4">+</span>
 
                   <PlayerCircleSlot
                     player={dupla2[1]}
@@ -1432,6 +1452,7 @@ export default function PartidoDetallePage() {
                     onRemove={removerJugadorDeMatch}
                     isCreator={soyCreadorVista}
                     currentUserId={user?.id}
+                    isGamePlayed={match?.status === "jugado"}
                   />
                 </div>
               </div>
@@ -1442,16 +1463,18 @@ export default function PartidoDetallePage() {
               <div className="bg-blue-50/50 rounded-3xl border-2 border-blue-200 p-5 space-y-3 shadow-2xs">
                 <div className="flex items-center justify-between border-b border-blue-200 pb-1.5">
                   <span className="text-xs font-black uppercase text-blue-950 tracking-wider">🔄 Dupla 3 (Rotación Pareja C)</span>
-                  <button
-                    type="button"
-                    onClick={() => setMostrarTerceraDupla(false)}
-                    className="text-[10px] font-bold text-slate-400 hover:text-slate-700 uppercase"
-                  >
-                    Ocultar
-                  </button>
+                  {match?.status !== "jugado" && (
+                    <button
+                      type="button"
+                      onClick={() => setMostrarTerceraDupla(false)}
+                      className="text-[10px] font-bold text-slate-400 hover:text-slate-700 uppercase"
+                    >
+                      Ocultar
+                    </button>
+                  )}
                 </div>
 
-                <div className="flex items-center justify-around sm:justify-start sm:gap-12 pt-2">
+                <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
                   <PlayerCircleSlot
                     player={dupla3[0]}
                     teamLetter="C"
@@ -1459,9 +1482,10 @@ export default function PartidoDetallePage() {
                     onRemove={removerJugadorDeMatch}
                     isCreator={soyCreadorVista}
                     currentUserId={user?.id}
+                    isGamePlayed={match?.status === "jugado"}
                   />
 
-                  <span className="text-blue-300 font-black text-xl">+</span>
+                  <span className="text-blue-300 font-black text-xl mt-4">+</span>
 
                   <PlayerCircleSlot
                     player={dupla3[1]}
@@ -1470,6 +1494,7 @@ export default function PartidoDetallePage() {
                     onRemove={removerJugadorDeMatch}
                     isCreator={soyCreadorVista}
                     currentUserId={user?.id}
+                    isGamePlayed={match?.status === "jugado"}
                   />
                 </div>
               </div>
@@ -1478,128 +1503,58 @@ export default function PartidoDetallePage() {
           </div>
         </div>
 
-        {/* 🔴 SECCIÓN 3: MARCADOR EN TIEMPO REAL (REGLAMENTARIO) */}
-        {estaEnHorarioOIniciado && match?.status !== "jugado" ? (
-          <div className="bg-slate-950 text-white rounded-3xl p-6 shadow-xl border border-slate-800 space-y-5">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <span className="text-xs font-black uppercase tracking-widest text-[#00FF9D]">
-                📡 MARCADOR DE PÁDEL EN VIVO
-              </span>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black uppercase bg-blue-600 text-white px-2.5 py-0.5 rounded-md">
-                  Set {liveScore.setActual} {liveScore.esTiebreak && "(TIE-BREAK)"}
-                </span>
-                <span className="text-[10px] font-bold bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full">
-                  Saque: Dupla {liveScore.saque === "A" ? "1 (A)" : "2 (B)"}
-                </span>
-              </div>
-            </div>
-
-            {/* RESUMEN DE SETS */}
-            <div className="bg-slate-900 p-3 rounded-2xl border border-slate-800 flex justify-around text-xs font-bold">
-              {liveScore.sets.map((s, idx) => (
-                <div key={idx} className={`text-center ${idx + 1 === liveScore.setActual ? "text-[#00FF9D] font-black" : "text-slate-400"}`}>
-                  <span className="text-[9px] uppercase block text-slate-500">Set {idx + 1}</span>
-                  <span>{s.gA} - {s.gB}</span>
-                  {s.tbA > 0 || s.tbB > 0 ? <span className="text-[9px] block text-slate-400">({Math.min(s.tbA, s.tbB)})</span> : null}
-                </div>
-              ))}
-            </div>
-
-            {/* MARCADOR DEL JUEGO ACTUAL */}
-            {liveScore.partidoTerminado ? (
-              <div className="bg-emerald-950/80 border-2 border-emerald-500 p-5 rounded-2xl text-center space-y-3">
-                <span className="text-3xl block">🏆</span>
-                <h4 className="text-sm font-black text-[#00FF9D] uppercase">Partido Finalizado en Vivo</h4>
-                <p className="text-xs font-bold text-emerald-200">
-                  Ganador: Dupla {liveScore.setsGanadosA === 2 ? "1 (Pareja A)" : "2 (Pareja B)"}
-                </p>
-
-                <button
-                  type="button"
-                  onClick={handleFinalizarPartidoClick}
-                  className="px-6 py-3 bg-[#00FF9D] text-slate-950 font-black text-xs uppercase rounded-xl shadow-md hover:bg-emerald-400 cursor-pointer"
-                >
-                  🏁 Confirmar Marcador y Guardar Partido
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4 text-center">
-                  <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
-                    <span className="text-xs font-black text-slate-400 block">DUPLA 1 (A)</span>
-                    <p className="text-4xl font-black text-[#00FF9D]">
-                      {liveScore.esTiebreak ? liveScore.sets[liveScore.setActual - 1]?.tbA || 0 : liveScore.puntosA}
-                    </p>
-                    <p className="text-xs font-bold text-slate-300">
-                      Juegos en Set {liveScore.setActual}: <strong>{liveScore.sets[liveScore.setActual - 1]?.gA || 0}</strong>
-                    </p>
-                    
-                    <button
-                      type="button"
-                      onClick={() => sumarPuntoLive("A")}
-                      className="mt-3 w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase rounded-xl cursor-pointer transition-colors"
-                    >
-                      + Punto Dupla 1
-                    </button>
-                  </div>
-
-                  <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-2">
-                    <span className="text-xs font-black text-slate-400 block">DUPLA 2 (B)</span>
-                    <p className="text-4xl font-black text-[#00FF9D]">
-                      {liveScore.esTiebreak ? liveScore.sets[liveScore.setActual - 1]?.tbB || 0 : liveScore.puntosB}
-                    </p>
-                    <p className="text-xs font-bold text-slate-300">
-                      Juegos en Set {liveScore.setActual}: <strong>{liveScore.sets[liveScore.setActual - 1]?.gB || 0}</strong>
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={() => sumarPuntoLive("B")}
-                      className="mt-3 w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase rounded-xl cursor-pointer transition-colors"
-                    >
-                      + Punto Dupla 2
-                    </button>
-                  </div>
+        {/* 🚀 BOTÓN DE ACCIÓN: INICIAR / CARGAR MARCADOR */}
+        {match?.status !== "jugado" && !["propuesto", "confirmado"].includes(match?.score_status) && (
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 text-center space-y-3 shadow-xs">
+            <span className="text-3xl block">🎾</span>
+            
+            {partidoIniciado || match?.status === "en_progreso" ? (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-black text-[#00FF9D] uppercase bg-slate-900 py-1 px-3 rounded-full inline-block">
+                    ⚡ PARTIDO EN PROGRESO
+                  </h4>
+                  <p className="text-xs text-slate-500 font-semibold max-w-md mx-auto">
+                    Pueden cargar el marcador final en cualquier momento para no olvidarlo.
+                  </p>
                 </div>
 
                 {soyCreadorVista && (
                   <button
                     type="button"
-                    onClick={handleFinalizarPartidoClick}
-                    className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] border border-slate-800 font-black text-xs uppercase tracking-wider rounded-2xl shadow-md cursor-pointer"
+                    onClick={() => setModalResultadoOpen(true)}
+                    className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-widest rounded-2xl shadow-md transition-all cursor-pointer"
                   >
-                    🏁 Finalizar Partido y Guardar Resultado
+                    🏁 Registrar / Cargar Marcador Final
                   </button>
                 )}
               </div>
-            )}
-          </div>
-        ) : match?.status !== "jugado" && (
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 text-center space-y-3 shadow-xs">
-            <span className="text-3xl block">🎾</span>
-            <div className="space-y-1">
-              <h4 className="text-sm font-black text-slate-900 uppercase">El contador en vivo está desactivado</h4>
-              <p className="text-xs text-slate-500 font-semibold max-w-md mx-auto">
-                Hora programada: <strong>{formatFechaLarga(match?.scheduled_at)}</strong>. Presiona el botón para comenzar a contar puntos en vivo.
-              </p>
-            </div>
-
-            {!puedeIniciarPartido ? (
-              <div className="bg-amber-50 border border-amber-200 p-3 rounded-2xl max-w-md mx-auto text-amber-900 text-xs font-bold">
-                ⚠️ Para iniciar el contador en tiempo real, el valor base de la pista debe estar saldado y aprobado por la recepción del club.
-              </div>
             ) : (
-              (miJugador || soyCreadorVista) && (
-                <button
-                  type="button"
-                  onClick={iniciarPartidoLive}
-                  disabled={procesandoScore}
-                  className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-widest rounded-2xl shadow-md transition-all active:scale-95 cursor-pointer mt-2"
-                >
-                  ▶️ Comenzar Partido y Activar Marcador
-                </button>
-              )
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-black text-slate-900 uppercase">El partido aún no ha sido iniciado</h4>
+                  <p className="text-xs text-slate-500 font-semibold max-w-md mx-auto">
+                    Hora programada: <strong>{formatFechaLarga(match?.scheduled_at)}</strong> (Venezuela).
+                  </p>
+                </div>
+
+                {!puedeIniciarPartido ? (
+                  <div className="bg-amber-50 border border-amber-200 p-3 rounded-2xl max-w-md mx-auto text-amber-900 text-xs font-bold">
+                    ⚠️ Para iniciar el partido, el valor base de la pista debe estar abonado y aprobado por la recepción del club.
+                  </div>
+                ) : (
+                  (miJugador || soyCreadorVista) && (
+                    <button
+                      type="button"
+                      onClick={iniciarPartido}
+                      disabled={procesandoScore}
+                      className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-widest rounded-2xl shadow-md transition-all active:scale-95 cursor-pointer mt-2"
+                    >
+                      ▶️ Iniciar Partido
+                    </button>
+                  )
+                )}
+              </div>
             )}
           </div>
         )}
@@ -1619,57 +1574,131 @@ export default function PartidoDetallePage() {
 
       </div>
 
-      {/* MODAL CÁLCULO / CARGA DE MARCADOR */}
+      {/* MODAL CÁLCULO / CARGA DE MARCADOR MEJORADO */}
       {modalResultadoOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-5 my-6 shadow-2xl">
             <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="text-lg font-black text-slate-900">Registrar Marcador Final</h3>
-              <button type="button" onClick={() => setModalResultadoOpen(false)} className="text-slate-400 font-bold">✕</button>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-blue-600">Registro Rápido de Puntos</span>
+                <h3 className="text-lg font-black text-slate-900">Registrar Marcador Final</h3>
+              </div>
+              <button type="button" onClick={() => setModalResultadoOpen(false)} className="text-slate-400 font-bold hover:text-slate-600 cursor-pointer">✕</button>
             </div>
 
-            <form onSubmit={enviarPropuestaResultado} className="space-y-4 text-xs font-bold">
-              {setsRotacion.map((set, idx) => (
-                <div key={idx} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
-                  <span className="font-black text-slate-900 uppercase block">Set {idx + 1}</span>
+            <form onSubmit={enviarPropuestaResultado} className="space-y-5 text-xs font-bold">
+              {setsRotacion.map((set, idx) => {
+                const esTiebreakActivo = (set.gA === 7 && set.gB === 6) || (set.gA === 6 && set.gB === 7);
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[9px] text-slate-400 mb-1">Juegos Dupla 1 (A)</label>
-                      <input
-                        type="number"
-                        value={set.gA}
-                        onChange={(e) => {
-                          const newSets = [...setsRotacion];
-                          newSets[idx].gA = Number(e.target.value);
-                          setSetsRotacion(newSets);
-                        }}
-                        className="w-full bg-white border border-slate-300 rounded-xl p-2 text-center font-black"
-                      />
+                return (
+                  <div key={idx} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3 shadow-xs">
+                    <div className="flex justify-between items-center border-b border-slate-200 pb-1.5">
+                      <span className="font-black text-slate-900 uppercase">Set {idx + 1}</span>
+                      <span className="text-[9px] font-bold text-slate-500 uppercase">Selecciona el resultado:</span>
                     </div>
-                    <div>
-                      <label className="block text-[9px] text-slate-400 mb-1">Juegos Dupla 2 (B)</label>
-                      <input
-                        type="number"
-                        value={set.gB}
-                        onChange={(e) => {
-                          const newSets = [...setsRotacion];
-                          newSets[idx].gB = Number(e.target.value);
-                          setSetsRotacion(newSets);
-                        }}
-                        className="w-full bg-white border border-slate-300 rounded-xl p-2 text-center font-black"
-                      />
+
+                    {/* PRESETS DUPLA 1 */}
+                    <div className="space-y-1.5">
+                      <span className="text-[9px] font-black uppercase text-blue-600 block">Dupla 1 Gana:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {PRESETS_DUPLA_1.map((p) => {
+                          const activo = set.gA === p.gA && set.gB === p.gB;
+                          return (
+                            <button
+                              key={p.label}
+                              type="button"
+                              onClick={() => seleccionarPresetSet(idx, p.gA, p.gB)}
+                              className={`px-3 py-2 rounded-xl font-black text-[11px] transition-all cursor-pointer ${
+                                activo ? "bg-slate-900 text-[#00FF9D] shadow-md border border-slate-900" : "bg-white text-slate-700 border border-slate-300 hover:bg-slate-200"
+                              }`}
+                            >
+                              {p.label}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
+
+                    {/* PRESETS DUPLA 2 */}
+                    <div className="space-y-1.5 pt-2">
+                      <span className="text-[9px] font-black uppercase text-rose-600 block">Dupla 2 Gana:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {PRESETS_DUPLA_2.map((p) => {
+                          const activo = set.gA === p.gA && set.gB === p.gB;
+                          return (
+                            <button
+                              key={p.label}
+                              type="button"
+                              onClick={() => seleccionarPresetSet(idx, p.gA, p.gB)}
+                              className={`px-3 py-2 rounded-xl font-black text-[11px] transition-all cursor-pointer ${
+                                activo ? "bg-slate-900 text-[#00FF9D] shadow-md border border-slate-900" : "bg-white text-slate-700 border border-slate-300 hover:bg-slate-200"
+                              }`}
+                            >
+                              {p.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* DESPLEGABLE AUTOMÁTICO DE TIE-BREAK */}
+                    {esTiebreakActivo && (
+                      <div className="bg-amber-50 p-4 rounded-2xl border border-amber-300 space-y-3 text-amber-950 mt-3 animate-in fade-in zoom-in-95">
+                        <span className="text-[10px] font-black uppercase tracking-wider block text-amber-900 text-center">
+                          🎾 Puntos del Tie-Break (Requerido para el desempate)
+                        </span>
+                        <div className="flex items-center gap-4 justify-center">
+                          <div className="flex-1 max-w-[100px]">
+                            <label className="block text-[9px] font-bold text-slate-500 mb-1 text-center">TB Dupla 1 (A)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={set.tbA}
+                              onChange={(e) => {
+                                const newSets = [...setsRotacion];
+                                newSets[idx].tbA = Number(e.target.value);
+                                setSetsRotacion(newSets);
+                              }}
+                              className="w-full bg-white border border-amber-300 rounded-xl p-2.5 text-center font-black text-slate-900 outline-none shadow-sm"
+                            />
+                          </div>
+                          <span className="font-black text-slate-400 text-xl mt-3">-</span>
+                          <div className="flex-1 max-w-[100px]">
+                            <label className="block text-[9px] font-bold text-slate-500 mb-1 text-center">TB Dupla 2 (B)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={set.tbB}
+                              onChange={(e) => {
+                                const newSets = [...setsRotacion];
+                                newSets[idx].tbB = Number(e.target.value);
+                                setSetsRotacion(newSets);
+                              }}
+                              className="w-full bg-white border border-amber-300 rounded-xl p-2.5 text-center font-black text-slate-900 outline-none shadow-sm"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
+
+              {/* BOTÓN PARA AGREGAR / REMOVER SET 3 */}
+              <button
+                type="button"
+                onClick={toggleAgregarQuitarSet3}
+                className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black text-xs uppercase rounded-xl border border-slate-300 cursor-pointer transition-colors shadow-sm"
+              >
+                {setsRotacion.length === 2 ? "+ Agregar Set 3 (Desempate)" : "✕ Remover Set 3"}
+              </button>
 
               <button
                 type="submit"
                 disabled={procesandoScore}
-                className="w-full py-4 bg-[#0B1120] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-xl cursor-pointer"
+                className="w-full py-4 bg-[#0B1120] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-xl cursor-pointer hover:bg-slate-900 transition-colors"
               >
-                {procesandoScore ? "ENVIANDO..." : "GUARDAR Y FINALIZAR PARTIDO →"}
+                {procesandoScore ? "ENVIANDO..." : "GUARDAR MARCADOR DEL PARTIDO →"}
               </button>
             </form>
           </div>
@@ -1777,7 +1806,7 @@ export default function PartidoDetallePage() {
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 text-center space-y-4 shadow-2xl">
             <h3 className="text-lg font-black text-slate-900">{notificacion.titulo}</h3>
             <p className="text-xs font-semibold text-slate-500">{notificacion.mensaje}</p>
-            <button onClick={() => setNotificacion(null)} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-2xl">
+            <button onClick={() => setNotificacion(null)} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-2xl cursor-pointer">
               Entendido
             </button>
           </div>
@@ -1789,15 +1818,16 @@ export default function PartidoDetallePage() {
 }
 
 // COMPONENTE AUXILIAR CIRCULITO DE JUGADORES
-function PlayerCircleSlot({ player, teamLetter, onAdd, onRemove, isCreator, currentUserId }) {
+function PlayerCircleSlot({ player, teamLetter, onAdd, onRemove, isCreator, currentUserId, isGamePlayed }) {
   if (player && player.user_id) {
     const nombre = player.profile ? player.profile.nombre : "Jugador";
     const cat = player.padel_profile?.categoria_oficial || categoriaDesdeRating(player.padel_profile?.rating);
     const inicial = nombre.charAt(0).toUpperCase();
     const esYo = player.user_id === currentUserId;
+    const deltaRating = player.rating_change;
 
     return (
-      <div className="flex flex-col items-center space-y-1.5 relative group">
+      <div className="flex flex-col items-center space-y-1.5 relative group shrink-0">
         <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#0F172A] border-2 border-slate-700 text-white font-black text-xl sm:text-2xl flex items-center justify-center shadow-md relative overflow-hidden">
           {player.profile?.avatar_url ? (
             <img src={player.profile.avatar_url} alt={nombre} className="w-full h-full object-cover" />
@@ -1805,15 +1835,26 @@ function PlayerCircleSlot({ player, teamLetter, onAdd, onRemove, isCreator, curr
             <span>{inicial}</span>
           )}
         </div>
-        <p className="text-xs font-black text-slate-900 truncate max-w-[90px] text-center">{nombre}</p>
-        <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 shadow-2xs">
-          {cat}
-        </span>
-        {isCreator && !esYo && (
+        <p className="text-xs font-black text-slate-900 truncate max-w-[100px] text-center">{nombre}</p>
+        
+        <div className="flex flex-col items-center gap-0.5">
+          <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 shadow-2xs">
+            {cat}
+          </span>
+          {isGamePlayed && deltaRating !== undefined && deltaRating !== null && (
+            <span className={`text-[9px] font-black px-1.5 py-0.2 rounded ${
+              deltaRating > 0 ? "bg-emerald-100 text-emerald-800" : deltaRating < 0 ? "bg-rose-100 text-rose-800" : "bg-slate-100 text-slate-600"
+            }`}>
+              {deltaRating > 0 ? `+${deltaRating}` : deltaRating} Rating
+            </span>
+          )}
+        </div>
+
+        {isCreator && !esYo && !isGamePlayed && (
           <button
             type="button"
             onClick={() => onRemove(player.id)}
-            className="absolute -top-1 -right-1 bg-rose-500 text-white w-5 h-5 rounded-full text-xs font-black flex items-center justify-center shadow-md hover:bg-rose-600 cursor-pointer"
+            className="absolute -top-1 -right-1 bg-rose-500 text-white w-5 h-5 rounded-full text-xs font-black flex items-center justify-center shadow-md hover:bg-rose-600 cursor-pointer z-10"
             title="Remover Jugador"
           >
             ✕
@@ -1823,8 +1864,10 @@ function PlayerCircleSlot({ player, teamLetter, onAdd, onRemove, isCreator, curr
     );
   }
 
+  if (isGamePlayed) return null;
+
   return (
-    <div className="flex flex-col items-center space-y-1.5">
+    <div className="flex flex-col items-center space-y-1.5 shrink-0">
       <button
         type="button"
         onClick={() => onAdd(teamLetter)}
