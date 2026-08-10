@@ -17,12 +17,6 @@ const AMENIDADES_MAP = {
   lockers: { label: "Lockers / Casilleros", icon: "🔒" },
 };
 
-function parsearFechaBD(fechaStr) {
-  if (!fechaStr) return new Date();
-  const str = fechaStr.replace(" ", "T");
-  return new Date(str.endsWith("Z") || str.includes("+") ? str : `${str}Z`);
-}
-
 export default function PublicClubDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -38,9 +32,7 @@ export default function PublicClubDetailPage() {
   const [partidosClub, setPartidosClub] = useState([]);
   const [bloqueosActivos, setBloqueosActivos] = useState([]);
 
-  // Tasa BCV Oficial
   const [tasaBCV, setTasaBCV] = useState(36.65);
-
   const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
   const [promocionHoy, setPromocionHoy] = useState(null);
 
@@ -52,8 +44,8 @@ export default function PublicClubDetailPage() {
   const [procesandoReserva, setProcesandoReserva] = useState(false);
   const [tiempoRestante, setTiempoRestante] = useState(null);
 
-  // NUEVOS ESTADOS DE RESERVA
   const [tipoReserva, setTipoReserva] = useState("privado");
+  const [activarRankedPrivado, setActivarRankedPrivado] = useState(true);
   const [cantidadJugadores, setCantidadJugadores] = useState(4);
   
   const [metodoPago, setMetodoPago] = useState("pago_movil");
@@ -61,17 +53,6 @@ export default function PublicClubDetailPage() {
   const [montoAbono, setMontoAbono] = useState("");
   const [numReferencia, setNumReferencia] = useState("");
   const [previewComprobante, setPreviewComprobante] = useState("");
-
-  const [modalMiReservaOpen, setModalMiReservaOpen] = useState(false);
-  const [matchMiReservaSel, setMatchMiReservaSel] = useState(null);
-
-  const [formPagoExtra, setFormPagoExtra] = useState({
-    monto: "",
-    metodoPago: "pago_movil",
-    numReferencia: "",
-    previewComprobante: "",
-  });
-  const [enviandoPagoExtra, setEnviandoPagoExtra] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -102,7 +83,7 @@ export default function PublicClubDetailPage() {
     }
   }, [fechaSeleccionada, clubId, mounted, loading]);
 
-   useEffect(() => {
+  useEffect(() => {
     if (!clubId || !supabase) return;
 
     cargarBloqueos();
@@ -116,9 +97,13 @@ export default function PublicClubDetailPage() {
       )
       .on(
         "postgres_changes",
-        // OJO: Si tu tabla se llama "padel_matches", cámbialo a "padel_matches"
-        { event: "UPDATE", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` },
-        () => cargarDetalleClub() // Si hay una cancelación, recarga la grilla del jugador
+        { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` },
+        () => cargarDetalleClub()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "match_players" },
+        () => cargarDetalleClub()
       )
       .subscribe();
 
@@ -126,6 +111,7 @@ export default function PublicClubDetailPage() {
       supabase.removeChannel(channel);
     };
   }, [clubId]);
+
   useEffect(() => {
     let intervalo;
     if (modalReservaOpen && tiempoRestante !== null) {
@@ -256,7 +242,7 @@ export default function PublicClubDetailPage() {
             .maybeSingle();
           setUserPadelProfile(padelProf || null);
         } catch (e) {
-          console.warn("No se pudo cargar el perfil de padel del usuario (Opcional):", e);
+          console.warn("No se pudo cargar el perfil de padel:", e);
         }
       } else {
         setUser(null);
@@ -270,7 +256,6 @@ export default function PublicClubDetailPage() {
         .maybeSingle();
 
       if (cErr || !clubData) {
-        console.error("Club no encontrado en BD.");
         setClub(null);
         return;
       }
@@ -301,29 +286,10 @@ export default function PublicClubDetailPage() {
           .select("id, match_id, user_id, team")
           .in("match_id", matchIds);
 
-        const allUserIds = Array.from(new Set((playersData || []).map((p) => p.user_id).filter(Boolean)));
-        
-        let profilesMap = {};
-        let padelProfilesMap = {};
-
-        if (allUserIds.length > 0) {
-          const [ { data: profsData }, { data: padelProfsData } ] = await Promise.all([
-            supabase.from("profiles").select("id, nombre, apellido, avatar_url, telefono").in("id", allUserIds),
-            supabase.from("padel_profiles").select("cuenta_id, rating, categoria_oficial").in("cuenta_id", allUserIds),
-          ]);
-          
-          (profsData || []).forEach((p) => { profilesMap[p.id] = p; });
-          (padelProfsData || []).forEach((pp) => { padelProfilesMap[pp.cuenta_id] = pp; });
-        }
-
         const playersByMatch = {};
         (playersData || []).forEach((p) => {
           if (!playersByMatch[p.match_id]) playersByMatch[p.match_id] = [];
-          playersByMatch[p.match_id].push({
-            ...p,
-            profile: profilesMap[p.user_id] || null,
-            padel_profile: padelProfilesMap[p.user_id] || null,
-          });
+          playersByMatch[p.match_id].push(p);
         });
 
         const partidosFinales = (matchesData || []).map((m) => ({
@@ -362,7 +328,6 @@ export default function PublicClubDetailPage() {
       const primerPrecio = parseFloat(cancha.pricing_blocks[0].price);
       return { precio: isNaN(primerPrecio) ? 15 : primerPrecio, esPico: false };
     } catch (error) {
-      console.error("Error calculando precio bloque:", error);
       return { precio: 15, esPico: false }; 
     }
   };
@@ -427,7 +392,7 @@ export default function PublicClubDetailPage() {
     if (lockExistente) {
       return mostrarNotificacion(
         "Pista en proceso de reserva", 
-        "Alguien más está procesando el pago para esta pista ahora mismo. Si no completa la reserva en 10 minutos, volverá a estar disponible.", 
+        "Alguien más está procesando el pago para esta pista ahora mismo.", 
         "warning"
       );
     }
@@ -445,11 +410,7 @@ export default function PublicClubDetailPage() {
           expires_at: expiresAt
         }, { onConflict: 'court_id,scheduled_at' });
 
-      if (lockErr) {
-        console.error("Error al bloquear la pista:", lockErr);
-        setProcesandoReserva(false);
-        return mostrarNotificacion("Error al Bloquear", lockErr.message || "No se pudo registrar el bloqueo.", "error");
-      }
+      if (lockErr) throw lockErr;
 
       await cargarBloqueos();
       setTiempoRestante(600);
@@ -463,8 +424,8 @@ export default function PublicClubDetailPage() {
         precioBaseTotal: precioBaseTotal,
       });
 
-      // RESTABLECER ESTADOS AL ABRIR
       setTipoReserva("privado");
+      setActivarRankedPrivado(true);
       setCantidadJugadores(4);
       setMetodoPago("pago_movil");
       setMonedaAbono("USD");
@@ -479,7 +440,7 @@ export default function PublicClubDetailPage() {
 
     } catch (e) {
       console.error("Error al bloquear la pista:", e);
-      mostrarNotificacion("Error", "No se pudo iniciar la reserva, intenta nuevamente.", "error");
+      mostrarNotificacion("Error", "No se pudo iniciar la reserva.", "error");
     } finally {
       setProcesandoReserva(false);
     }
@@ -490,27 +451,20 @@ export default function PublicClubDetailPage() {
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      return mostrarNotificacion("Archivo Inválido", "Por favor selecciona una imagen válida (JPG, PNG).", "error");
+      return mostrarNotificacion("Archivo Inválido", "Por favor selecciona una imagen válida.", "error");
     }
 
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setPreview(reader.result);
-    };
+    reader.onloadend = () => setPreview(reader.result);
     reader.readAsDataURL(file);
   };
 
   const calculosPrecio = useMemo(() => {
     if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0 };
     
-    // Si la pista vale $20, el precioBaseTotal siempre es 20
     const baseTotal = bloqueSeleccionado.precioBaseTotal; 
     const fee = baseTotal * 0.10;
-    
-    // Calculamos en cuánto le sale a CADA UNO dependiendo de cuántos sean
     const baseInd = baseTotal / cantidadJugadores;
-    
-    // Si es Privado (pagan toda la pista junta). Si es Abierto/Amistoso (sugerimos pagar su parte).
     const totalSug = tipoReserva === "privado" ? (baseTotal + fee) : (baseInd + (fee / cantidadJugadores));
     
     return { base: baseTotal, fee, totalSug, precioIndividual: baseInd };
@@ -521,11 +475,7 @@ export default function PublicClubDetailPage() {
     
     const valActual = parseFloat(montoAbono);
     if (!isNaN(valActual) && valActual > 0) {
-      if (nuevaMoneda === "VES") {
-        setMontoAbono((valActual * tasaBCV).toFixed(2));
-      } else {
-        setMontoAbono((valActual / tasaBCV).toFixed(2));
-      }
+      setMontoAbono(nuevaMoneda === "VES" ? (valActual * tasaBCV).toFixed(2) : (valActual / tasaBCV).toFixed(2));
     }
     setMonedaAbono(nuevaMoneda);
   };
@@ -535,11 +485,11 @@ export default function PublicClubDetailPage() {
 
     const valIngresado = parseFloat(montoAbono);
     if (isNaN(valIngresado) || valIngresado <= 0) {
-      return mostrarNotificacion("Monto Inválido", "Por favor ingresa un monto válido a abonar.", "error");
+      return mostrarNotificacion("Monto Inválido", "Por favor ingresa un monto válido.", "error");
     }
 
     if (metodoPago !== "efectivo" && !previewComprobante && !numReferencia.trim()) {
-      return mostrarNotificacion("Falta Comprobante", "Por favor adjunta la captura de tu comprobante de pago o ingresa el número de referencia.", "error");
+      return mostrarNotificacion("Falta Comprobante", "Por favor adjunta el comprobante o referencia.", "error");
     }
 
     const montoUSD = monedaAbono === "VES" ? valIngresado / tasaBCV : valIngresado;
@@ -578,6 +528,8 @@ export default function PublicClubDetailPage() {
       const d = bloqueSeleccionado.dateObj;
       const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
 
+      const esCompetitivo = tipoReserva === "ranking" || (tipoReserva === "privado" && activarRankedPrivado);
+
       const { data: newMatch, error: matchErr } = await supabase
         .from("matches")
         .insert({
@@ -589,7 +541,7 @@ export default function PublicClubDetailPage() {
           app_fee: calculosPrecio.fee,
           match_type: tipoReserva,
           is_private: tipoReserva !== "ranking", 
-          is_competitive: tipoReserva === "ranking",
+          is_competitive: esCompetitivo,
           category_restriction: miCat,
           status: "programado",
           payment_status: estadoPagoFinal,
@@ -625,117 +577,17 @@ export default function PublicClubDetailPage() {
       mostrarNotificacion(
         "¡Reserva Registrada!",
         metodoPago === "efectivo" 
-          ? "✅ Reserva creada con éxito. Pagar el monto restante directamente en recepción." 
-          : "✅ Comprobante enviado. La reserva queda en estado PENDIENTE hasta que el club valide tu pago.",
+          ? "✅ Reserva creada con éxito. Pagar el restante en recepción." 
+          : "✅ Comprobante enviado. La reserva queda PENDIENTE hasta su validación.",
         "success"
       );
       
       await cargarDetalleClub();
     } catch (err) {
       console.error("Error al procesar reserva:", err);
-      if (err.message && err.message.includes("unique_court_time")) {
-        mostrarNotificacion("Pista ya no disponible", "Alguien más acaba de confirmar una reserva para esta pista hace unos instantes.", "error");
-      } else {
-        mostrarNotificacion("Error al Reservar", err.message || "Verifica los datos e inténtalo de nuevo.", "error");
-      }
+      mostrarNotificacion("Error al Reservar", err.message || "Verifica los datos e inténtalo de nuevo.", "error");
     } finally {
       setProcesandoReserva(false);
-    }
-  }
-
-  const abrirModalMiReserva = (match) => {
-    setMatchMiReservaSel(match);
-    
-    const historial = Array.isArray(match.payments_history) ? match.payments_history : [];
-    const totalAbonado = historial
-      .filter(a => a.status === "aprobado" || a.status === "pendiente")
-      .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
-    
-    const totalCancha = (match.total_price || 15) + (match.app_fee || 1.50);
-    const restante = Math.max(0, totalCancha - totalAbonado);
-
-    setFormPagoExtra({
-      monto: restante > 0 ? restante.toFixed(2) : "",
-      metodoPago: "pago_movil",
-      numReferencia: "",
-      previewComprobante: "",
-    });
-
-    setModalMiReservaOpen(true);
-  };
-
-  async function agregarComprobanteExtraUser() {
-    if (!matchMiReservaSel || !user) return;
-
-    const montoValido = parseFloat(formPagoExtra.monto);
-    if (isNaN(montoValido) || montoValido <= 0) {
-      return mostrarNotificacion("Monto Inválido", "Por favor ingresa un monto válido a abonar.", "error");
-    }
-
-    if (formPagoExtra.metodoPago !== "efectivo" && !formPagoExtra.previewComprobante && !formPagoExtra.numReferencia.trim()) {
-      return mostrarNotificacion("Falta Comprobante", "Por favor adjunta la captura del comprobante o ingresa el número de referencia.", "error");
-    }
-
-    try {
-      setEnviandoPagoExtra(true);
-
-      const { data: userProf } = await supabase
-        .from("profiles")
-        .select("nombre, apellido, telefono")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      const nombreUsuarioCompleto = userProf 
-        ? `${userProf.nombre} ${userProf.apellido}`.trim() 
-        : user.email;
-      
-      const telefonoUsuario = userProf?.telefono || "Sin teléfono";
-
-      const nuevoAbono = {
-        id: `pay-${Date.now()}`,
-        user_id: user.id,
-        user_name: nombreUsuarioCompleto,
-        user_phone: telefonoUsuario,
-        amount: montoValido,
-        method: formPagoExtra.metodoPago,
-        reference: formPagoExtra.numReferencia.trim() || "S/R",
-        receipt_url: formPagoExtra.previewComprobante || null,
-        status: formPagoExtra.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
-        created_at: new Date().toISOString(),
-      };
-
-      const historialActual = Array.isArray(matchMiReservaSel.payments_history) ? matchMiReservaSel.payments_history : [];
-      const historialNuevo = [...historialActual, nuevoAbono];
-
-      const proofUrlsActuales = Array.isArray(matchMiReservaSel.payment_proof_urls) ? matchMiReservaSel.payment_proof_urls : [];
-      const proofUrlsNuevas = formPagoExtra.previewComprobante 
-        ? [...proofUrlsActuales, formPagoExtra.previewComprobante] 
-        : proofUrlsActuales;
-
-      const { error: updateErr } = await supabase
-        .from("matches")
-        .update({
-          payments_history: historialNuevo,
-          payment_proof_urls: proofUrlsNuevas,
-          payment_status: "pendiente_aprobacion",
-        })
-        .eq("id", matchMiReservaSel.id);
-
-      if (updateErr) throw updateErr;
-
-      setModalMiReservaOpen(false);
-      mostrarNotificacion(
-        "Comprobante Enviado",
-        "✅ ¡Nuevo comprobante enviado con éxito! El gerente del club lo revisará en la recepción.",
-        "success"
-      );
-      
-      await cargarDetalleClub();
-    } catch (err) {
-      console.error("Error al enviar pago extra:", err);
-      mostrarNotificacion("Error", "Error al adjuntar el nuevo comprobante.", "error");
-    } finally {
-      setEnviandoPagoExtra(false);
     }
   }
 
@@ -767,17 +619,12 @@ export default function PublicClubDetailPage() {
 
   const listAmenidades = Array.isArray(club.amenities) ? club.amenities : ["wifi", "free_parking", "changing_room"];
 
-  const numIngresado = parseFloat(montoAbono) || 0;
-  const equivalenteCalculado = monedaAbono === "USD" 
-    ? numIngresado * tasaBCV 
-    : numIngresado / tasaBCV;
-
   return (
-    <div className="min-h-screen bg-slate-50/50 px-2 py-4 sm:px-6 md:px-8 space-y-6 sm:space-y-8">
-      <div className="mx-auto max-w-7xl space-y-6 sm:space-y-8">
+    <div className="min-h-screen bg-slate-50/50 px-2 py-3 sm:px-6 md:px-8 space-y-4 sm:space-y-8">
+      <div className="mx-auto max-w-7xl space-y-4 sm:space-y-8">
         
         {/* HERO BANNER */}
-        <div className="relative w-full h-52 sm:h-80 bg-slate-900 rounded-3xl sm:rounded-[2.5rem] overflow-hidden shadow-xl border border-slate-200">
+        <div className="relative w-full h-48 sm:h-80 bg-slate-900 rounded-2xl sm:rounded-[2.5rem] overflow-hidden shadow-xl border border-slate-200">
           {club.image_url ? (
             <img src={club.image_url} alt={club.name} className="w-full h-full object-cover" />
           ) : (
@@ -786,13 +633,13 @@ export default function PublicClubDetailPage() {
           
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent"></div>
           
-          <div className="absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-6 text-white flex flex-col md:flex-row md:items-end justify-between gap-3">
+          <div className="absolute bottom-3 left-3 right-3 sm:bottom-6 sm:left-6 sm:right-6 text-white flex flex-col sm:flex-row sm:items-end justify-between gap-3">
             <div className="space-y-1 max-w-2xl">
-              <span className="bg-[#00FF9D] text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-full shadow-sm">
+              <span className="bg-[#00FF9D] text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-2 py-0.5 sm:px-3 sm:py-1 rounded-full shadow-sm">
                 ✓ Complejo Verificado
               </span>
-              <h1 className="text-xl sm:text-4xl font-black">{club.name}</h1>
-              <p className="text-[11px] sm:text-sm text-slate-300 font-medium">
+              <h1 className="text-lg sm:text-4xl font-black truncate">{club.name}</h1>
+              <p className="text-[10px] sm:text-sm text-slate-300 font-medium">
                 📍 {club.address || "Cabudare"}, {club.city}
               </p>
             </div>
@@ -800,7 +647,7 @@ export default function PublicClubDetailPage() {
             <div>
               <a 
                 href="#reserva-pistas" 
-                className="px-5 py-2.5 sm:px-6 sm:py-3 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl sm:rounded-2xl shadow-lg transition-all text-center"
+                className="w-full sm:w-auto px-4 py-2 sm:px-6 sm:py-3 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl sm:rounded-2xl shadow-lg transition-all text-center block"
               >
                 Reservar Pista ↓
               </a>
@@ -808,17 +655,17 @@ export default function PublicClubDetailPage() {
           </div>
         </div>
 
-        {/* LAYOUT 2 COLUMNAS */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
+        {/* LAYOUT GRID */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-8 items-start">
           
-          <div className="lg:col-span-4 space-y-6">
-            <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-3">
+          <div className="lg:col-span-4 space-y-4 sm:space-y-6">
+            <div className="bg-white rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 border border-slate-200 shadow-sm space-y-2 sm:space-y-3">
               <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-tight">Amenidades</h3>
               <div className="flex flex-wrap gap-1.5 sm:gap-2">
                 {listAmenidades.map((key) => {
                   const am = AMENIDADES_MAP[key] || { label: key, icon: "✨" };
                   return (
-                    <span key={key} className="inline-flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full bg-slate-100 text-slate-800 text-[11px] sm:text-xs font-bold">
+                    <span key={key} className="inline-flex items-center gap-1 px-2 py-1 sm:px-3 sm:py-1.5 rounded-full bg-slate-100 text-slate-800 text-[10px] sm:text-xs font-bold">
                       <span>{am.icon}</span>
                       <span>{am.label}</span>
                     </span>
@@ -828,28 +675,28 @@ export default function PublicClubDetailPage() {
             </div>
           </div>
 
-          <div className="lg:col-span-8 space-y-6" id="reserva-pistas">
-            <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-6 border border-slate-200 shadow-sm space-y-4 sm:space-y-5">
-              <div className="flex justify-between items-center border-b pb-3">
-                <h2 className="text-base sm:text-lg font-black text-slate-900">Reserva tu Pista en Tiempo Real</h2>
-                <span className="text-[11px] sm:text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">{canchas.length} pistas</span>
+          <div className="lg:col-span-8 space-y-4 sm:space-y-6" id="reserva-pistas">
+            <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-6 border border-slate-200 shadow-sm space-y-3 sm:space-y-5">
+              <div className="flex justify-between items-center border-b pb-2 sm:pb-3">
+                <h2 className="text-sm sm:text-lg font-black text-slate-900">Reserva tu Pista en Tiempo Real</h2>
+                <span className="text-[10px] sm:text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full">{canchas.length} pistas</span>
               </div>
 
-              {/* Selector de Días */}
-              <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+              {/* Selector de Días Horizontal */}
+              <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {diasSiguientes.map((d, i) => {
                   const isSel = fechaSeleccionada.toDateString() === d.toDateString();
                   return (
                     <button
                       key={i}
                       onClick={() => setFechaSeleccionada(d)}
-                      className={`shrink-0 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-center border transition-all ${
+                      className={`shrink-0 px-2.5 py-1.5 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-center border transition-all ${
                         isSel
                           ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md"
                           : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                       }`}
                     >
-                      <span className="text-[9px] sm:text-[10px] font-black uppercase block opacity-60">
+                      <span className="text-[8px] sm:text-[10px] font-black uppercase block opacity-60">
                         {i === 0 ? "Hoy" : d.toLocaleDateString("es-ES", { weekday: "short" })}
                       </span>
                       <span className="text-xs sm:text-sm font-black block mt-0.5">
@@ -862,44 +709,39 @@ export default function PublicClubDetailPage() {
 
               {/* AVISO DE PROMOCIÓN */}
               {promocionHoy && (
-                <div className="bg-rose-50 border border-rose-200 p-3 sm:p-4 rounded-2xl flex items-center gap-3 shadow-sm my-4">
-                  <span className="text-3xl animate-bounce">🎁</span>
+                <div className="bg-rose-50 border border-rose-200 p-2.5 sm:p-4 rounded-2xl flex items-center gap-2.5 sm:gap-3 shadow-sm my-2 sm:my-4">
+                  <span className="text-2xl sm:text-3xl animate-bounce">🎁</span>
                   <div>
                     <h4 className="text-xs sm:text-sm font-black text-rose-900 uppercase tracking-tight">
                       {promocionHoy.name}
                     </h4>
-                    <p className="text-[10px] sm:text-xs font-bold text-rose-700">
+                    <p className="text-[9px] sm:text-xs font-bold text-rose-700">
                       ¡Aprovecha! Precios especiales aplicados en las tarifas de hoy.
                     </p>
                   </div>
                 </div>
               )}
 
-              {/* GRILLA DE CANCHAS DE PÁDEL */}
+              {/* GRILLA DE CANCHAS RESPONSIVA */}
               <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                <div className="inline-block min-w-full min-w-[500px] w-full">
+                <div className="inline-block min-w-full min-w-[600px] w-full">
                   
                   {/* CABECERA PISTAS */}
                   <div className="flex bg-slate-950 text-white border-b-2 border-slate-800 sticky top-0 z-30">
-                    <div className="w-16 sm:w-24 shrink-0 p-2 sm:p-3 font-black text-[10px] sm:text-[11px] text-slate-300 text-center uppercase tracking-wider border-r border-slate-800 bg-slate-950 sticky left-0 z-40 shadow-xs">
+                    <div className="w-16 sm:w-24 shrink-0 p-2 sm:p-3 font-black text-[10px] sm:text-[11px] text-slate-300 text-center uppercase tracking-wider border-r border-slate-800 bg-slate-950 sticky left-0 z-40">
                       Hora
                     </div>
                     {canchas.map((c) => (
-                      <div key={c.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-2 sm:p-3 text-center border-l border-slate-800 font-black text-[11px] sm:text-xs uppercase tracking-tight">
+                      <div key={c.id} className="flex-1 min-w-[140px] sm:min-w-[180px] p-2 sm:p-3 text-center border-l border-slate-800 font-black text-[10px] sm:text-xs uppercase tracking-tight">
                         {c.name}
                       </div>
                     ))}
-                    {canchas.length === 0 && (
-                      <div className="p-8 text-center text-xs font-bold text-slate-400">
-                        Este complejo no tiene pistas de pádel configuradas.
-                      </div>
-                    )}
                   </div>
 
                   {/* FILAS DE HORARIOS */}
                   {bloquesHorarios.map((bloque, idx) => (
                     <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
-                      <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center sticky left-0 z-20 shadow-xs">
+                      <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center sticky left-0 z-20">
                         <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
                         <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
                       </div>
@@ -950,73 +792,61 @@ export default function PublicClubDetailPage() {
                         }
 
                         if (partidoOcupado) {
+                          const esReembolsoPendiente = partidoOcupado.status === "cancelado_pendiente_reembolso" || partidoOcupado.payment_status === "reembolso_pendiente";
                           const esPrivado = partidoOcupado.is_private || partidoOcupado.match_type === "privado";
                           
-                          const totalAbonado = Array.isArray(partidoOcupado.payments_history)
-                            ? partidoOcupado.payments_history.filter(a => a.status === "aprobado").reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0)
-                            : 0;
-                          
-                          const canchaBaseFee = (partidoOcupado.total_price || 15) + (partidoOcupado.app_fee || ((partidoOcupado.total_price || 15) * 0.1));
-                          const canchaTotalmentePagada = partidoOcupado.payment_status === "aprobado" || totalAbonado >= (canchaBaseFee - 0.5);
-
-                          const esPendiente = !canchaTotalmentePagada || partidoOcupado.payment_status === "pendiente_aprobacion" || partidoOcupado.payment_status === "pago_en_sitio";
-
                           const esMiReserva = !!user && (
                             partidoOcupado.created_by === user.id || 
                             (Array.isArray(partidoOcupado.players) && partidoOcupado.players.some(p => p.user_id === user.id))
                           );
 
+                          // REDIRECCIÓN DIRECTA A LA PANTALLA DEL PARTIDO PARA MI RESERVA
                           if (esMiReserva) {
                             return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                <button
-                                  onClick={() => abrirModalMiReserva(partidoOcupado)}
-                                  className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-                                    esPendiente 
-                                      ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400"
+                              <div key={cancha.id} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
+                                  <div className={`h-full w-full rounded-xl p-1.5 sm:p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+                                    esReembolsoPendiente 
+                                      ? "bg-sky-50 text-sky-950 border-sky-400 animate-pulse"
                                       : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
-                                  }`}
-                                >
-                                  <div className="flex justify-between items-center w-full">
-                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
-                                      ✨ MI RESERVA
-                                    </span>
+                                  }`}>
+                                    <div className="flex justify-between items-center w-full">
+                                      <span className="text-[7px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
+                                        {esReembolsoPendiente ? "🔵 EN REEMBOLSO" : "✨ MI RESERVA"}
+                                      </span>
+                                    </div>
+                                    <div className="my-0.5">
+                                      <p className="text-[10px] sm:text-[12px] font-black truncate text-white">
+                                        {esReembolsoPendiente ? "Reembolso en proceso" : "Ver / Gestionar Partido"}
+                                      </p>
+                                      <p className="text-[8px] text-slate-300 font-bold">Ir a la pantalla del partido →</p>
+                                    </div>
                                   </div>
-                                  <div className="my-0.5">
-                                    <p className="text-[11px] sm:text-[12px] font-black truncate text-white">Ver / Agregar Pago</p>
-                                    <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
-                                  </div>
-                                </button>
+                                </Link>
                               </div>
                             );
                           }
 
                           if (esPrivado) {
                             return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                              <div key={cancha.id} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
                                 <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
-                                  <div className="flex justify-between items-center w-full">
-                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">PRIVADO</span>
-                                  </div>
-                                  <p className="text-[11px] sm:text-[12px] font-black text-slate-400">Pista Reservada</p>
+                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">PRIVADO</span>
+                                  <p className="text-[10px] sm:text-[12px] font-black text-slate-400">Pista Reservada</p>
                                 </div>
                               </div>
                             );
                           }
 
                           return (
-                            <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                            <div key={cancha.id} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
                               <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
-                                <div className={`h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-                                  esPendiente 
-                                    ? "bg-amber-500 text-slate-950 border-amber-600" 
-                                    : "bg-slate-900 text-white border-slate-800 hover:border-blue-500"
-                                }`}>
+                                <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-900 text-white border-slate-800 hover:border-blue-500 transition-all">
                                   <div className="flex justify-between items-center w-full">
-                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">ABIERTO</span>
+                                    <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">ABIERTO</span>
                                     <span className="text-[9px] font-black px-1 py-0.5 bg-white/10 rounded">{partidoOcupado.players?.length || 1}/4</span>
                                   </div>
-                                  <p className="text-[11px] sm:text-xs font-black truncate">Cat. {partidoOcupado.category_restriction || "Libre"}</p>
+                                  <p className="text-[10px] sm:text-xs font-black truncate">Cat. {partidoOcupado.category_restriction || "Libre"}</p>
                                 </div>
                               </Link>
                             </div>
@@ -1025,41 +855,38 @@ export default function PublicClubDetailPage() {
 
                         if (lockOcupado) {
                           return (
-                            <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                            <div key={cancha.id} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
                               <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
-                                <span className="text-xl animate-pulse">⏳</span>
-                                <p className="text-[10px] sm:text-[11px] font-black text-amber-600 mt-1">En proceso...</p>
-                                <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Alguien está pagando</p>
+                                <span className="text-lg animate-pulse">⏳</span>
+                                <p className="text-[9px] sm:text-[10px] font-black text-amber-600 mt-0.5">En proceso...</p>
                               </div>
                             </div>
                           );
                         }
 
                         return (
-                          <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                          <div key={cancha.id} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
                             <button
                               onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
                               className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative cursor-pointer"
                             >
                               {esPromoAplicada && (
-                                <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
+                                <span className="absolute top-1 left-1 text-[7px] sm:text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1 py-0.2 rounded">
                                   Promo
                                 </span>
                               )}
 
-                              <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
+                              <span className="text-[10px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
                                 + Agendar
                               </span>
 
                               {esPromoAplicada ? (
-                                <div className="flex flex-col items-center">
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
-                                    <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
-                                  </div>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
+                                  <span className="text-[9px] sm:text-[10px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
                                 </div>
                               ) : (
-                                <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
+                                <span className="text-[8px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
                               )}
                             </button>
                           </div>
@@ -1076,235 +903,50 @@ export default function PublicClubDetailPage() {
 
       </div>
 
-      {/* MODAL MI RESERVA */}
-      {mounted && modalMiReservaOpen && matchMiReservaSel && createPortal(
-        (() => {
-          const precioBase = matchMiReservaSel.total_price || 16;
-          const feeApp = matchMiReservaSel.app_fee || (matchMiReservaSel.is_private ? 0 : precioBase * 0.10);
-          const totalCancha = precioBase + feeApp;
-
-          const historialAbonos = Array.isArray(matchMiReservaSel.payments_history) ? matchMiReservaSel.payments_history : [];
-          const totalAbonado = historialAbonos
-            .filter((a) => a.status === "aprobado" || a.status === "pendiente")
-            .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
-          
-          const restante = Math.max(0, totalCancha - totalAbonado);
-
-          const dbDate = matchMiReservaSel.scheduled_at;
-          const [datePart, timePart] = dbDate.split('T');
-          const [year, month, day] = datePart.split('-').map(Number);
-          const [hour, minute] = timePart.split(':').map(Number);
-          
-          const visualDate = new Date(year, month - 1, day);
-          const formattedDate = visualDate.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
-          
-          const ampm = hour >= 12 ? "PM" : "AM";
-          const hora12 = hour % 12 || 12;
-          const formattedTime = `${hora12}:${String(minute).padStart(2, "0")} ${ampm}`;
-
-          return (
-            <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={() => setModalMiReservaOpen(false)}>
-              <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-lg w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
-                
-                <div className="border-b pb-3 space-y-2">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">⚙️ Gestionar Mi Reserva</span>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <h3 className="text-lg font-black text-slate-900">{matchMiReservaSel.court?.name || "Pista"}</h3>
-                        <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">{club?.name}</span>
-                      </div>
-                    </div>
-                    <button onClick={() => setModalMiReservaOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
-                  </div>
-
-                  <div className="bg-slate-900 text-white p-2.5 rounded-2xl flex justify-between items-center text-xs font-bold shadow-sm">
-                    <div className="flex items-center gap-2 min-w-0 pr-2">
-                      <span className="text-base shrink-0">📅</span>
-                      <div className="min-w-0">
-                        <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha de Juego</span>
-                        <p className="text-xs font-black truncate capitalize mt-0.5">{formattedDate}</p>
-                      </div>
-                    </div>
-                    <div className="bg-[#00FF9D] text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1 shadow-sm">
-                      <span>⏰</span>
-                      <span>{formattedTime}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold">
-                  <div className="flex justify-between text-[#00FF9D]">
-                    <span>Tarifa Cancha Base:</span>
-                    <span className="font-black">${precioBase.toFixed(2)}</span>
-                  </div>
-                  {feeApp > 0 && (
-                    <div className="flex justify-between text-slate-400">
-                      <span>Comisión App (+10%):</span>
-                      <span>+${feeApp.toFixed(2)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between text-sm font-black border-t border-slate-800 pt-2 text-white">
-                    <span>Total Pista:</span>
-                    <span className="text-[#00FF9D]">${totalCancha.toFixed(2)}</span>
-                  </div>
-
-                  <div className="flex justify-between text-xs pt-1 border-t border-slate-800/60">
-                    <span className="text-emerald-400">Abonado: ${totalAbonado.toFixed(2)}</span>
-                    <span className={restante > 0 ? "text-amber-400 font-black" : "text-slate-400"}>Restante: ${restante.toFixed(2)}</span>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <h4 className="text-xs font-black uppercase text-slate-900 tracking-wider">🧾 Comprobantes Enviados ({historialAbonos.length})</h4>
-                  
-                  {historialAbonos.length === 0 ? (
-                    <p className="text-xs font-bold text-slate-400 bg-slate-50 p-3 rounded-xl text-center">Aún no hay comprobantes registrados.</p>
-                  ) : (
-                    <div className="space-y-2 max-h-36 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-1">
-                      {historialAbonos.map((ab, idx) => (
-                        <div key={ab.id || idx} className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl flex justify-between items-center text-xs">
-                          <div>
-                            <p className="font-black text-slate-900">{ab.user_name || "Comprobante"}</p>
-                            <p className="text-[10px] font-bold text-slate-500 uppercase">{ab.method} • Ref: {ab.reference}</p>
-                          </div>
-                          <div className="text-right">
-                            <span className="font-black text-slate-900 block">${(parseFloat(ab.amount) || 0).toFixed(2)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="bg-blue-50/70 border border-blue-200 p-3.5 sm:p-4 rounded-2xl space-y-3">
-                  <h4 className="text-xs font-black text-blue-950 uppercase tracking-wide">
-                    ➕ Adjuntar Nuevo Pago / Comprobante Extra
-                  </h4>
-                  
-                  <div className="space-y-3 text-xs font-bold text-slate-700">
-                    <div>
-                      <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Monto que Pagas ($)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={formPagoExtra.monto}
-                        onChange={(e) => setFormPagoExtra({ ...formPagoExtra, monto: e.target.value })}
-                        className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-black text-slate-900 outline-none placeholder:text-slate-400"
-                        placeholder="Ej. 5.00"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Método de Pago</label>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {[
-                          { id: "pago_movil", label: "📱 Pago Móvil" },
-                          { id: "zelle", label: "🇺🇸 Zelle" },
-                          { id: "efectivo", label: "💵 En Sitio" },
-                        ].map((m) => (
-                          <button
-                            key={m.id}
-                            type="button"
-                            onClick={() => setFormPagoExtra({ ...formPagoExtra, metodoPago: m.id })}
-                            className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all ${
-                              formPagoExtra.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-white text-slate-600 border-slate-200"
-                            }`}
-                          >
-                            {m.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {formPagoExtra.metodoPago !== "efectivo" && (
-                      <>
-                        <div>
-                          <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Número de Referencia</label>
-                          <input
-                            type="text"
-                            placeholder="Ej. 123456..."
-                            value={formPagoExtra.numReferencia}
-                            onChange={(e) => setFormPagoExtra({ ...formPagoExtra, numReferencia: e.target.value })}
-                            className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Foto / Captura del Comprobante</label>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => handleSeleccionarImagen(e, (res) => setFormPagoExtra({ ...formPagoExtra, previewComprobante: res }))}
-                            className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-slate-900 file:text-[#00FF9D]"
-                          />
-                          {formPagoExtra.previewComprobante && (
-                            <div className="mt-2 relative rounded-xl overflow-hidden border border-slate-200 max-h-28 bg-slate-950 flex items-center justify-center">
-                              <img src={formPagoExtra.previewComprobante} alt="Preview Comprobante" className="max-h-28 object-contain" />
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={agregarComprobanteExtraUser}
-                      disabled={enviandoPagoExtra}
-                      className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-xl shadow-md mt-1 cursor-pointer"
-                    >
-                      {enviandoPagoExtra ? "Enviando Comprobante..." : "✓ Enviar Comprobante Adicional"}
-                    </button>
-                  </div>
-                </div>
-
-              </div>
-            </div>
-          );
-        })(),
-        document.body
-      )}
-
-
-      {/* MODAL PASARELA DE PAGO CLIENTE CON TEMPORIZADOR INTEGRADO */}
+      {/* MODAL PASARELA DE PAGO CLIENTE */}
       {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={cerrarModalManual}>
-          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 sm:space-y-5 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-2.5 sm:p-4" onClick={cerrarModalManual}>
+          <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 max-w-md w-full shadow-2xl space-y-3 sm:space-y-4 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
             
-            <div className="border-b pb-3 space-y-2.5 relative">
-              <div className="flex justify-between items-start">
-                <div>
-                  <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">
-                    Paso {pasoModal} de 2: {pasoModal === 1 ? "Modalidad de Juego" : "Abono / Pago"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <h3 className="text-lg font-black text-slate-900">{bloqueSeleccionado.cancha.name}</h3>
-                  <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">{club?.name}</span>
+            {/* CABECERA LIMPIA Y RECTIFICADA */}
+            <div className="border-b pb-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider">
+                  Paso {pasoModal} de 2: {pasoModal === 1 ? "Modalidad de Juego" : "Abono / Pago"}
+                </span>
+
+                <div className="flex items-center gap-2">
+                  {tiempoRestante !== null && (
+                    <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-sm ${
+                      tiempoRestante <= 60 ? "bg-rose-100 text-rose-700 border-rose-200 animate-pulse" : "bg-amber-100 text-amber-800 border-amber-200"
+                    }`}>
+                      <span>⏳</span>
+                      <span>{formatoTiempo(tiempoRestante)}</span>
+                    </div>
+                  )}
+                  <button onClick={cerrarModalManual} className="text-slate-400 hover:text-slate-700 font-bold text-base p-1 leading-none cursor-pointer">
+                    ✕
+                  </button>
                 </div>
               </div>
-              <button onClick={cerrarModalManual} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
 
-              {tiempoRestante !== null && (
-                <div className={`absolute top-0 right-8 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-sm ${
-                  tiempoRestante <= 60 ? "bg-rose-100 text-rose-700 border-rose-200 animate-pulse" : "bg-amber-100 text-amber-800 border-amber-200"
-                }`}>
-                  <span>⏳</span>
-                  <span>{formatoTiempo(tiempoRestante)}</span>
-                </div>
-              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base sm:text-lg font-black text-slate-900 leading-tight">{bloqueSeleccionado.cancha.name}</h3>
+                <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">{club?.name}</span>
+              </div>
             </div>
 
             <div className="bg-slate-900 text-white p-2.5 rounded-2xl flex justify-between items-center text-xs font-bold shadow-sm">
               <div className="flex items-center gap-2 min-w-0 pr-2">
                 <span className="text-base shrink-0">📅</span>
                 <div className="min-w-0">
-                  <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha de Juego</span>
+                  <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha</span>
                   <p className="text-xs font-black truncate capitalize mt-0.5">
                     {fechaSeleccionada.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
                   </p>
                 </div>
               </div>
-              <div className="bg-[#00FF9D] text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1 shadow-sm">
+              <div className="bg-[#00FF9D] text-slate-950 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1 shadow-sm">
                 <span>⏰</span>
                 <span>{bloqueSeleccionado.horaLabel}</span>
               </div>
@@ -1312,8 +954,8 @@ export default function PublicClubDetailPage() {
 
             {/* PASO 1 */}
             {pasoModal === 1 && (
-              <div className="space-y-4">
-                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-4">
+              <div className="space-y-3.5">
+                <div className="bg-slate-50 border border-slate-200 p-3.5 sm:p-4 rounded-2xl space-y-3 sm:space-y-4">
                   <div>
                     <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">¿Qué tipo de partido vas a jugar?</label>
                     <select
@@ -1321,26 +963,36 @@ export default function PublicClubDetailPage() {
                       onChange={(e) => {
                         const tipo = e.target.value;
                         setTipoReserva(tipo);
-                        setCantidadJugadores(tipo === 'amistoso' ? 6 : 4);
+                        setCantidadJugadores(4);
                         
                         if (bloqueSeleccionado) {
-                          const valUSD = tipo === "privado" 
-                            ? (bloqueSeleccionado.precioBaseTotal * 1.10) 
-                            : ((bloqueSeleccionado.precioBaseTotal / (tipo === 'amistoso' ? 6 : 4)) * 1.10);
+                          const valUSD = bloqueSeleccionado.precioBaseTotal * 1.10;
                           setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
                         }
                       }}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D]"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D]"
                     >
-                      <option value="privado">🔒 Privado (Pista Completa con mi grupo)</option>
-                      <option value="amistoso">🔄 Amistoso (Rotación con más amigos)</option>
-                      <option value="ranking">🏆 Ranking (Público, para subir de nivel)</option>
+                      <option value="privado">🔒 Privado (Pista Completa con tu grupo)</option>
+                      <option value="ranking">🏆 Ranking Público (Abierto a la comunidad)</option>
                     </select>
-                    
-                    {tipoReserva === "ranking" && (
-                      <p className="text-[9px] font-bold text-slate-500 mt-1">Tu partido será público para que personas de tu nivel se unan.</p>
-                    )}
                   </div>
+
+                  {tipoReserva === "privado" && (
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between">
+                      <div className="pr-2">
+                        <span className="text-xs font-black text-slate-900 block">⚡ Activar Modo Ranked / Competitivo</span>
+                        <span className="text-[9px] text-slate-400 font-bold block leading-tight">
+                          Valida el nivel del grupo ($\pm 1$ cat.) para ajustar ratings al finalizar.
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={activarRankedPrivado}
+                        onChange={(e) => setActivarRankedPrivado(e.target.checked)}
+                        className="w-5 h-5 accent-emerald-500 rounded cursor-pointer shrink-0"
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Cantidad de Jugadores en Total</label>
@@ -1355,28 +1007,18 @@ export default function PublicClubDetailPage() {
                         }
                       }}
                       disabled={tipoReserva === "ranking"}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D] disabled:opacity-50 disabled:bg-slate-100"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D] disabled:opacity-50"
                     >
-                      {tipoReserva === 'amistoso' ? (
-                        <>
-                          <option value={5}>5 Jugadores</option>
-                          <option value={6}>6 Jugadores (3 Duplas rotando)</option>
-                          <option value={7}>7 Jugadores</option>
-                          <option value={8}>8 Jugadores</option>
-                        </>
-                      ) : (
-                        <>
-                          <option value={2}>2 Jugadores (Singles)</option>
-                          <option value={4}>4 Jugadores (Dobles oficial)</option>
-                        </>
-                      )}
+                      <option value={2}>2 Jugadores (Singles)</option>
+                      <option value={4}>4 Jugadores (Dobles oficial)</option>
+                      <option value={6}>6 Jugadores (Grupo con rotación por Set)</option>
                     </select>
                   </div>
                 </div>
 
                 <button
                   onClick={() => setPasoModal(2)}
-                  className="w-full py-4 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md cursor-pointer"
+                  className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md cursor-pointer"
                 >
                   Continuar a Datos de Pago →
                 </button>
@@ -1385,13 +1027,12 @@ export default function PublicClubDetailPage() {
 
             {/* PASO 2 */}
             {pasoModal === 2 && (
-              <div className="space-y-4 text-xs font-bold text-slate-700">
-                <div className="bg-slate-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs">
+              <div className="space-y-3.5 text-xs font-bold text-slate-700">
+                <div className="bg-slate-900 text-white p-3 rounded-2xl space-y-1.5 text-xs">
                   <div className="flex justify-between items-start text-[#00FF9D]">
                     <span>Cancha Base ({tipoReserva === "privado" ? "Pista Completa" : "Cuota Jugador"}):</span>
                     <div className="text-right">
                       <span className="text-[#00FF9D] font-black block">${calculosPrecio.base.toFixed(2)}</span>
-                      <span className="text-[10px] text-emerald-400/80 block">Bs. {(calculosPrecio.base * tasaBCV).toFixed(2)}</span>
                     </div>
                   </div>
 
@@ -1399,7 +1040,6 @@ export default function PublicClubDetailPage() {
                     <span>Comisión App (+10%):</span>
                     <div className="text-right">
                       <span className="font-black block text-slate-300">+${calculosPrecio.fee.toFixed(2)}</span>
-                      <span className="text-[10px] text-slate-400 block">Bs. {(calculosPrecio.fee * tasaBCV).toFixed(2)}</span>
                     </div>
                   </div>
                   
@@ -1409,14 +1049,11 @@ export default function PublicClubDetailPage() {
                     </div>
                     <div className="text-right">
                       <span className="text-lg font-black text-[#00FF9D] block">${calculosPrecio.totalSug.toFixed(2)}</span>
-                      <span className="text-[10px] text-slate-400 font-semibold block">
-                        Bs. {(calculosPrecio.totalSug * tasaBCV).toFixed(2)} VES
-                      </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
                   <div className="flex justify-between items-center">
                     <label className="text-[10px] font-black uppercase text-slate-500">
                       Monto a Abonar Hoy ({monedaAbono === "USD" ? "$" : "Bs."})
@@ -1425,14 +1062,14 @@ export default function PublicClubDetailPage() {
                       <button
                         type="button"
                         onClick={() => cambiarMonedaAbono("USD")}
-                        className={`px-2.5 py-1 rounded-lg transition-all ${monedaAbono === "USD" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"}`}
+                        className={`px-2 py-0.5 rounded-lg transition-all ${monedaAbono === "USD" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}
                       >
                         $ USD
                       </button>
                       <button
                         type="button"
                         onClick={() => cambiarMonedaAbono("VES")}
-                        className={`px-2.5 py-1 rounded-lg transition-all ${monedaAbono === "VES" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"}`}
+                        className={`px-2 py-0.5 rounded-lg transition-all ${monedaAbono === "VES" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}
                       >
                         Bs. VES
                       </button>
@@ -1445,48 +1082,13 @@ export default function PublicClubDetailPage() {
                     required
                     value={montoAbono}
                     onChange={(e) => setMontoAbono(e.target.value)}
-                    className="w-full bg-white border border-slate-300 rounded-xl p-3 text-lg font-black text-slate-900 outline-none focus:border-blue-500"
-                    placeholder={monedaAbono === "USD" ? "Ej. 27.50" : "Ej. 1000.00"}
+                    className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-base font-black text-slate-900 outline-none"
                   />
-
-                  <div className="flex gap-1.5 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const valUSD = calculosPrecio.precioIndividual * 1.10;
-                        setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
-                      }}
-                      className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold hover:bg-slate-100 cursor-pointer"
-                    >
-                      Cuota Individual ({monedaAbono === "USD" ? `$${(calculosPrecio.precioIndividual * 1.10).toFixed(2)}` : `Bs. ${((calculosPrecio.precioIndividual * 1.10) * tasaBCV).toFixed(2)}`})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const valUSD = calculosPrecio.totalSug;
-                        setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
-                      }}
-                      className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold hover:bg-slate-100 cursor-pointer"
-                    >
-                      Total Sugerido ({monedaAbono === "USD" ? `$${calculosPrecio.totalSug.toFixed(2)}` : `Bs. ${(calculosPrecio.totalSug * tasaBCV).toFixed(2)}`})
-                    </button>
-                  </div>
-
-                  {numIngresado > 0 && (
-                    <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900 mt-2">
-                      <span>🧮 Conversión (Tasa BCV: Bs. {tasaBCV.toFixed(2)})</span>
-                      <span>
-                        {monedaAbono === "USD"
-                          ? `Bs. ${equivalenteCalculado.toFixed(2)} VES`
-                          : `$${equivalenteCalculado.toFixed(2)} USD`}
-                      </span>
-                    </div>
-                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">Método de Pago</label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Método de Pago</label>
+                  <div className="grid grid-cols-3 gap-1.5">
                     {[
                       { id: "pago_movil", label: "📱 Pago Móvil" },
                       { id: "zelle", label: "🇺🇸 Zelle" },
@@ -1496,7 +1098,7 @@ export default function PublicClubDetailPage() {
                         key={m.id}
                         type="button"
                         onClick={() => setMetodoPago(m.id)}
-                        className={`py-3 px-2 rounded-xl text-[10px] font-black uppercase border transition-all cursor-pointer ${
+                        className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all cursor-pointer ${
                           metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-slate-50 text-slate-600 border-slate-200"
                         }`}
                       >
@@ -1506,57 +1108,33 @@ export default function PublicClubDetailPage() {
                   </div>
                 </div>
 
-                {metodoPago === "pago_movil" && (
-                  <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl text-[11px] text-blue-900 space-y-1">
-                    <p className="font-black">🏦 Datos Pago Móvil</p>
-                    <p>Banco Banesco (0134) • C.I: V-12345678 • Tel: 0414-1234567</p>
-                  </div>
-                )}
-                {metodoPago === "zelle" && (
-                  <div className="bg-purple-50 border border-purple-200 p-3 rounded-2xl text-[11px] text-purple-900 space-y-1">
-                    <p className="font-black">🇺🇸 Datos Zelle</p>
-                    <p>Correo: pagos@sportshub.com • Titular: Sports Hub LLC</p>
-                  </div>
-                )}
-
                 {metodoPago !== "efectivo" && (
                   <>
                     <div>
-                      <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                        Número de Referencia de Transacción *
-                      </label>
                       <input
                         type="text"
-                        placeholder="Ej. 123456..."
+                        placeholder="N° Referencia Transacción *"
                         value={numReferencia}
                         onChange={(e) => setNumReferencia(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none text-xs"
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                        Adjuntar Captura / Foto del Comprobante (Imagen)
-                      </label>
                       <input
                         type="file"
                         accept="image/*"
                         onChange={(e) => handleSeleccionarImagen(e, setPreviewComprobante)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold outline-none file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-slate-900 file:text-[#00FF9D]"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-slate-900 file:text-[#00FF9D]"
                       />
-                      {previewComprobante && (
-                        <div className="mt-2 relative rounded-2xl overflow-hidden border border-slate-200 max-h-36 bg-slate-950 flex items-center justify-center">
-                          <img src={previewComprobante} alt="Preview Comprobante" className="max-h-36 object-contain" />
-                        </div>
-                      )}
                     </div>
                   </>
                 )}
 
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-1">
                   <button
                     type="button"
                     onClick={() => setPasoModal(1)}
-                    className="w-1/3 py-3.5 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl cursor-pointer"
+                    className="w-1/3 py-3 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl cursor-pointer"
                   >
                     Volver
                   </button>
@@ -1564,7 +1142,7 @@ export default function PublicClubDetailPage() {
                     type="button"
                     onClick={confirmarReservaYPago}
                     disabled={procesandoReserva}
-                    className="w-2/3 py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md cursor-pointer disabled:opacity-50"
+                    className="w-2/3 py-3 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md cursor-pointer disabled:opacity-50"
                   >
                     {procesandoReserva ? "Enviando..." : "✓ Confirmar y Enviar Abono"}
                   </button>
@@ -1580,7 +1158,7 @@ export default function PublicClubDetailPage() {
       {/* POPUP NOTIFICACIÓN */}
       {mounted && popupNotif.open && createPortal(
         <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-3 text-center animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-3 text-center">
             <h3 className="text-base font-black text-slate-900">{popupNotif.title}</h3>
             <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
             <button

@@ -309,7 +309,7 @@ export default function RecepcionElite() {
     if (!clubIdActual || diasVisibles.length === 0) return;
     
     const inicioStr = `${diasVisibles[0].getFullYear()}-${String(diasVisibles[0].getMonth() + 1).padStart(2, '0')}-${String(diasVisibles[0].getDate()).padStart(2, '0')}`;
-    const finStr = `${diasVisibles[diasVisibles.length - 1].getFullYear()}-${String(diasVisibles[diasVisibles.length - 1].getMonth() + 1).padStart(2, '0')}-${String(diasVisibles[diasVisibles.length - 1].getDate()).padStart(2, '0')}`;
+    const finStr = `${diasVisibles[diasVisibles.length - 1].getFullYear()}-${String(diasVisibles[diasVisibles.length - 1].getDate()).padStart(2, '0')}-${String(diasVisibles[diasVisibles.length - 1].getDate()).padStart(2, '0')}`;
 
     try {
       const { data } = await supabase
@@ -840,7 +840,7 @@ export default function RecepcionElite() {
     }
   }
 
-  // --- VENTA DIRECTA TIENDA ---
+  // VENTA DIRECTA TIENDA
   const abrirModalTienda = () => {
     setCarritoTienda([]);
     setBusquedaTienda("");
@@ -1445,83 +1445,168 @@ export default function RecepcionElite() {
     }
   }
 
-    function cancelarReserva(match) {
+  // PROCESAR REEMBOLSO Y LIBERAR CANCHA (+6H)
+  async function procesarDevolucionYLiberarCancha(match) {
+    const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
+    const totalAbonado = historialActual
+      .filter((item) => item.status === "aprobado" || item.status === "pendiente")
+      .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+
+    const clienteNom = obtenerNombreCliente(match);
+
+    try {
+      setProcesando(true);
+
+      // 1. Insertar la devolución en el historial de ventas
+      const { data: ventaDevolucion } = await supabase
+        .from("sales")
+        .insert({
+          club_id: clubId,
+          cashier_id: user.id,
+          total_amount: -Math.abs(totalAbonado),
+          payment_method: "efectivo",
+          exchange_rate: tasaBCV,
+        })
+        .select("id")
+        .single();
+
+      if (ventaDevolucion) {
+        await supabase.from("sales_items").insert({
+          sale_id: ventaDevolucion.id,
+          item_type: "reembolso_pendiente",
+          item_name: `🔵 Reembolso Devuelto (+6h): ${match.court?.name || "Pista"}`,
+          item_detail: `Cliente: ${clienteNom} | Devuelto en sitio: $${totalAbonado.toFixed(2)} USD`,
+          quantity: 1,
+          price_unit: -Math.abs(totalAbonado),
+        });
+      }
+
+      // 2. Eliminar jugadores
+      await supabase.from("match_players").delete().eq("match_id", match.id);
+
+      // 3. Eliminar el partido (se libera la grilla para nuevas reservas)
+      const { error: errMatch } = await supabase.from("matches").delete().eq("id", match.id);
+      if (errMatch) throw errMatch;
+
+      // 4. Eliminar bloqueos
+      await supabase.from("padel_locks").delete().eq("court_id", match.court_id).eq("scheduled_at", match.scheduled_at);
+
+      setModalDetalleMatch(false);
+      mostrarNotificacion(
+        "Devolución Exitosa y Pista Liberada",
+        `💵 Se registraron -$${totalAbonado.toFixed(2)} USD en caja y la cancha ha quedado completamente libre.`,
+        "success"
+      );
+
+      await cargarBloqueos();
+      await cargarPartidosPeriodo();
+    } catch (err) {
+      console.error(err);
+      mostrarNotificacion("Error", "Error al procesar la devolución.", "error");
+    } finally {
+      setProcesando(false);
+    }
+  }
+
+  // CANCELACIÓN DIRECTA DE DESDE POS CON EVALUACIÓN DE 6 HORAS
+  async function cancelarReserva(match) {
     if (match.payment_status === "liquidado") {
       return mostrarNotificacion("Ticket Liquidado", "No se puede anular una reserva que ya fue liquidada e ingresada en las ventas oficiales.", "warning");
     }
 
+    const fechaPartido = parsearFechaBD(match.scheduled_at);
+    const ahora = new Date();
+    const diferenciaHoras = (fechaPartido.getTime() - ahora.getTime()) / (1000 * 60 * 60);
+
+    const esConMasDe6Horas = diferenciaHoras >= 6;
+
+    const mensajeModal = esConMasDe6Horas
+      ? `La reserva se anula con más de 6h de anticipación (${diferenciaHoras.toFixed(1)}h).\n\n¿Deseas marcar esta reserva en AZUL (Reembolso Pendiente) para entregar el dinero en sitio y luego liberar la pista?`
+      : `La reserva se anula con menos de 6h de anticipación (${diferenciaHoras.toFixed(1)}h).\n\nNO HABRÁ DEVOLUCIÓN. Se liberará la pista para volver a ser reservada y el abono se conservará como ingreso retenido.`;
+
     pedirConfirmacion(
-      "Anular Reserva Completa",
-      `¿Deseas anular completamente la reserva de ${match.court?.name || "Pista"}? Se liberará la agenda, se removerán los registros asociados y se registrará la devolución del abono.`,
+      esConMasDe6Horas ? "Anular Reserva (+6h Reembolso)" : "Anular Reserva (<6h Sin Reembolso)",
+      mensajeModal,
       async () => {
         try {
           setProcesando(true);
 
-          // 1. REVERSIÓN DE PAGOS EN EL HISTORIAL (Para que el Cierre de Caja cuadre en el POS)
           const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
           const totalAbonado = historialActual
-            .filter((item) => item.status === "aprobado")
+            .filter((item) => item.status === "aprobado" || item.status === "pendiente")
             .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
 
-          if (totalAbonado > 0) {
-            await supabase.from("sales").insert({
-              club_id: clubId,
-              cashier_id: user.id,
-              total_amount: -Math.abs(totalAbonado),
-              payment_method: "efectivo",
-              exchange_rate: tasaBCV,
-            });
-          }
-
-          // 2. BORRAR EL PARTIDO COMPLETAMENTE DE LA BD (Libera el unique_court_time)
-          const { error: matchErr } = await supabase
-            .from("matches")
-            .delete()
-            .eq("id", match.id);
-
-          if (matchErr) throw matchErr;
-
-          // 3. LIMPIAR EL LOCK FANTASMA SIN IMPORTAR LA FECHA
-          // Al usar delete() solo con eq("court_id"), forzamos a Supabase a borrar CUALQUIER 
-          // bloqueo que haya quedado guindado en esa cancha específica (court_id), sin importar 
-          // el problema de los husos horarios del campo scheduled_at.
-          await supabase
-            .from("padel_locks")
-            .delete()
-            .eq("court_id", match.court_id);
-
-          // 4. LIMPIAR POSIBLES VENTAS PARCIALES EN TIENDA ASOCIADAS
           const clienteNom = obtenerNombreCliente(match);
-          const { data: ventasCoincidentes } = await supabase
-            .from("sales_items")
-            .select("sale_id")
-            .ilike("item_detail", `%${clienteNom}%`);
-            
-          if (ventasCoincidentes && ventasCoincidentes.length > 0) {
-            const saleIds = Array.from(new Set(ventasCoincidentes.map(v => v.sale_id)));
-            await supabase.from("sales_items").delete().in("sale_id", saleIds);
-            await supabase.from("sales").delete().in("id", saleIds);
+
+          if (esConMasDe6Horas) {
+            // Se marca en azul
+            await supabase
+              .from("matches")
+              .update({
+                status: "cancelado_pendiente_reembolso",
+                payment_status: "reembolso_pendiente",
+              })
+              .eq("id", match.id);
+
+            setModalDetalleMatch(false);
+            mostrarNotificacion(
+              "Reserva en Reembolso", 
+              `🔵 La reserva cambió a Azul. Entrega el dinero al cliente en recepción y presiona "Devolver y Liberar Cancha".`, 
+              "info"
+            );
+          } else {
+            // Menos de 6h: retener dinero e ingresar a caja
+            if (totalAbonado > 0) {
+              const { data: ventaCancelacion } = await supabase
+                .from("sales")
+                .insert({
+                  club_id: clubId,
+                  cashier_id: user.id,
+                  total_amount: totalAbonado,
+                  payment_method: match.payment_method || "efectivo",
+                  exchange_rate: tasaBCV,
+                })
+                .select("id")
+                .single();
+
+              if (ventaCancelacion) {
+                await supabase.from("sales_items").insert({
+                  sale_id: ventaCancelacion.id,
+                  item_type: "ingreso_pista_cancelada",
+                  item_name: `🟢 Ingreso Pista Cancelada (<6h): ${match.court?.name || "Pista"}`,
+                  item_detail: `Cliente: ${clienteNom} | Tel: ${match.creator_profile?.telefono || "En sitio"}`,
+                  quantity: 1,
+                  price_unit: totalAbonado,
+                });
+              }
+            }
+
+            // Eliminar relaciones y liberar pista inmediatamente
+            await supabase.from("match_players").delete().eq("match_id", match.id);
+            await supabase.from("matches").delete().eq("id", match.id);
+            await supabase.from("padel_locks").delete().eq("court_id", match.court_id).eq("scheduled_at", match.scheduled_at);
+
+            setModalDetalleMatch(false);
+            mostrarNotificacion(
+              "Reserva Anulada", 
+              `🚨 Pista liberada. El dinero abonado ($${totalAbonado.toFixed(2)}) quedó retenido en las ventas del club.`, 
+              "warning"
+            );
           }
 
-          setModalDetalleMatch(false);
-          mostrarNotificacion(
-            "Reserva Anulada", 
-            `🚨 La reserva fue anulada, la pista ha quedado libre y se registró la devolución en caja.`, 
-            "info"
-          );
-          
           await cargarBloqueos(); 
           await cargarPartidosPeriodo();
 
         } catch (err) {
-          console.error(err);
-          mostrarNotificacion("Error", "Error al anular la reserva.", "error");
+          console.error("Error cancelando reserva:", err);
+          mostrarNotificacion("Error", err.message || "Error al anular la reserva.", "error");
         } finally {
           setProcesando(false);
         }
       }
     );
   }
+
   if (loading) {
     return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Cargando Sistema POS...</div>;
   }
@@ -1616,7 +1701,6 @@ export default function RecepcionElite() {
               ))}
             </select>
 
-            {/* NUEVO BOTÓN TITILANTE DE ALERTA OCULTA */}
             {alertaNuevaReserva && (
               <button
                 type="button"
@@ -1680,7 +1764,7 @@ export default function RecepcionElite() {
           </div>
         )}
 
-        {/* GRILLA RESPONSIVA ADAPTABLE AL 100% */}
+        {/* GRILLA RESPONSIVA POS */}
         <div className="flex-1 overflow-auto p-2 sm:p-4 bg-slate-100 relative">
           <div className="flex gap-3 w-full min-w-full items-start relative">
             
@@ -1787,8 +1871,6 @@ export default function RecepcionElite() {
                               }
                             }
 
-                            const precioBs = precioUSD * tasaBCV;
-
                             return (
                               <div
                                 key={col.keyCol}
@@ -1797,6 +1879,7 @@ export default function RecepcionElite() {
                                 }`}
                               >
                                 {reservado ? (() => {
+                                  const esReembolsoPendiente = reservado.status === "cancelado_pendiente_reembolso" || reservado.payment_status === "reembolso_pendiente";
                                   const isLiquidado = reservado.payment_status === "liquidado";
                                   const precioCanchaBaseFee = (reservado.total_price || 15) + (reservado.app_fee || 1.50);
                                   const totalAbonado = (Array.isArray(reservado.payments_history) ? reservado.payments_history : [])
@@ -1814,7 +1897,11 @@ export default function RecepcionElite() {
                                   let badgeText = "";
                                   let badgeStyle = "";
 
-                                  if (isLiquidado) {
+                                  if (esReembolsoPendiente) {
+                                    cardStyle = "bg-sky-100/90 text-sky-950 border-sky-400 hover:bg-sky-200/90 shadow-sm animate-pulse";
+                                    badgeText = "🔵 REEMBOLSO (+6H)";
+                                    badgeStyle = "bg-sky-600 text-white font-black";
+                                  } else if (isLiquidado) {
                                     cardStyle = "bg-emerald-100/90 text-emerald-950 border-emerald-400 hover:bg-emerald-200/90 shadow-sm";
                                     badgeText = "✅ LIQUIDADA";
                                     badgeStyle = "bg-emerald-600 text-white font-black";
@@ -1824,11 +1911,11 @@ export default function RecepcionElite() {
                                     badgeStyle = "bg-emerald-500/20 text-[#00FF9D] font-black";
                                   } else if (canchaCubierta) {
                                     cardStyle = "bg-amber-400/90 text-slate-950 border-amber-500 animate-pulse hover:bg-amber-400";
-                                    badgeText = "⚠️ CONSUMOS PENDIENTES";
+                                    badgeText = "⚠️ EXTRAS PENDIENTES";
                                     badgeStyle = "bg-slate-950 text-amber-300 font-black";
                                   } else {
                                     cardStyle = "bg-rose-500/90 text-white border-rose-600 animate-pulse hover:bg-rose-500";
-                                    badgeText = "🚨 PENDIENTE CONFIRMACION";
+                                    badgeText = "🚨 PENDIENTE CONFIRMACIÓN";
                                     badgeStyle = "bg-slate-950 text-rose-300 font-black";
                                   }
 
@@ -2125,51 +2212,6 @@ export default function RecepcionElite() {
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
                 />
               </div>
-              
-              <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-3 mt-1">
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Tipo de Partido</label>
-                  <select
-                    value={formAgendarPOS.matchType}
-                    onChange={(e) => {
-                      const tipo = e.target.value;
-                      setFormAgendarPOS({ 
-                        ...formAgendarPOS, 
-                        matchType: tipo,
-                        cantidadJugadores: tipo === 'amistoso' ? 6 : 4 
-                      });
-                    }}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D]"
-                  >
-                    <option value="privado">Privado (Estándar)</option>
-                    <option value="amistoso">Amistoso (Rotación)</option>
-                    <option value="ranking">Ranking Oficial</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">N° de Jugadores</label>
-                  <select
-                    value={formAgendarPOS.cantidadJugadores}
-                    onChange={(e) => setFormAgendarPOS({ ...formAgendarPOS, cantidadJugadores: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D]"
-                  >
-                    {formAgendarPOS.matchType === 'amistoso' ? (
-                      <>
-                        <option value={5}>5 Jugadores</option>
-                        <option value={6}>6 Jugadores (3 Duplas)</option>
-                        <option value={7}>7 Jugadores</option>
-                        <option value={8}>8 Jugadores</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value={2}>2 Jugadores (Singles)</option>
-                        <option value={4}>4 Jugadores (Dobles)</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-              </div>
 
               <div>
                 <div className="flex justify-between items-center mb-1.5">
@@ -2330,9 +2372,10 @@ export default function RecepcionElite() {
         document.body
       )}
 
-      {/* MODAL AUDITORÍA Y DETALLE DE RESERVA */}
+      {/* MODAL DETALLE DE RESERVA EN RECEPCIÓN */}
       {mounted && modalDetalleMatch && matchSeleccionado && createPortal(
         (() => {
+          const esReembolsoPendiente = matchSeleccionado.status === "cancelado_pendiente_reembolso" || matchSeleccionado.payment_status === "reembolso_pendiente";
           const extras = Array.isArray(matchSeleccionado.extra_items) ? matchSeleccionado.extra_items : [];
           const precioBase = matchSeleccionado.total_price || 15;
           const feeApp = matchSeleccionado.app_fee || (matchSeleccionado.is_private ? 0 : precioBase * 0.10);
@@ -2343,7 +2386,7 @@ export default function RecepcionElite() {
 
           const historialAbonos = Array.isArray(matchSeleccionado.payments_history) ? matchSeleccionado.payments_history : [];
           const totalAbonadoAprobado = historialAbonos
-            .filter((a) => a.status === "aprobado")
+            .filter((a) => a.status === "aprobado" || a.status === "pendiente")
             .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
 
           const pendientePorCobrar = Math.max(0, totalGranEsperado - totalAbonadoAprobado);
@@ -2365,215 +2408,120 @@ export default function RecepcionElite() {
                 <div className="flex justify-between items-start border-b pb-3">
                   <div>
                     <span className={`text-[9px] sm:text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
-                      esLiquidadoOficial
-                        ? "bg-emerald-100 text-emerald-800"
-                        : todoPagadoConExtras 
-                          ? "bg-emerald-100 text-emerald-800" 
-                          : canchaTotalmenteCubierta 
-                            ? "bg-blue-100 text-blue-900 border border-blue-200" 
-                            : "bg-amber-500 text-slate-950"
+                      esReembolsoPendiente 
+                        ? "bg-sky-100 text-sky-800 border border-sky-300"
+                        : esLiquidadoOficial
+                          ? "bg-emerald-100 text-emerald-800"
+                          : todoPagadoConExtras 
+                            ? "bg-emerald-100 text-emerald-800" 
+                            : canchaTotalmenteCubierta 
+                              ? "bg-blue-100 text-blue-900 border border-blue-200" 
+                              : "bg-amber-500 text-slate-950"
                     }`}>
-                      {esLiquidadoOficial 
-                        ? "🔒 FACTURA LIQUIDADA EN VENTAS" 
-                        : todoPagadoConExtras 
-                          ? "✅ FACTURA TOTALMENTE PAGADA" 
-                          : canchaTotalmenteCubierta 
-                            ? "🎾 CANCHA RESERVADA (EXTRAS PENDIENTES)" 
-                            : "⚠️ RESERVA PENDIENTE DE PAGO"}
+                      {esReembolsoPendiente
+                        ? "🔵 REEMBOLSO PENDIENTE (+6H)"
+                        : esLiquidadoOficial 
+                          ? "🔒 FACTURA LIQUIDADA EN VENTAS" 
+                          : todoPagadoConExtras 
+                            ? "✅ FACTURA TOTALMENTE PAGADA" 
+                            : canchaTotalmenteCubierta 
+                              ? "🎾 CANCHA RESERVADA (EXTRAS PENDIENTES)" 
+                              : "⚠️ RESERVA PENDIENTE DE PAGO"}
                     </span>
                     <h3 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{matchSeleccionado.court?.name || "Pista"}</h3>
                   </div>
                   <button onClick={solicitarCerrarModalDetalle} className="text-slate-400 font-bold text-lg hover:text-slate-700 cursor-pointer">✕</button>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                  <div className="lg:col-span-6 space-y-4">
-                    <div className="bg-slate-50 p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex justify-between items-center text-xs font-bold text-slate-700">
-                      <div className="grid grid-cols-2 gap-4 flex-1">
-                        <div>
-                          <span className="text-[9px] uppercase font-black text-slate-400 block">Cliente:</span>
-                          <p className="text-slate-900 font-black text-xs sm:text-sm truncate">{obtenerNombreCliente(matchSeleccionado)}</p>
-                        </div>
-                        <div>
-                          <span className="text-[9px] uppercase font-black text-slate-400 block">Contacto:</span>
-                          <p className="text-slate-900 font-black text-xs sm:text-sm">{matchSeleccionado.creator_profile?.telefono || "En sitio"}</p>
-                        </div>
+                {/* SI ESTÁ EN ESTADO DE REEMBOLSO PENDIENTE (+6H) */}
+                {esReembolsoPendiente ? (
+                  <div className="bg-sky-50 border-2 border-sky-300 p-5 rounded-2xl space-y-4">
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">🔵</span>
+                      <div>
+                        <h4 className="text-sm font-black text-sky-950 uppercase">Solicitud de Reembolso Pendiente (+6 Horas)</h4>
+                        <p className="text-xs font-bold text-sky-800">
+                          El jugador canceló su reserva con más de 6h de anticipación. Debes entregarle **${totalAbonadoAprobado.toFixed(2)} USD** (Bs. {(totalAbonadoAprobado * tasaBCV).toFixed(2)}) en recepción.
+                        </p>
                       </div>
-                      
-                      <button
-  type="button"
-  onClick={() => cancelarReserva(matchSeleccionado)}
-  disabled={procesando} // <-- QUITAMOS EL 'esLiquidadoOficial' para que SIEMPRE puedas anular
-  className={`px-3 py-1.5 border font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2 cursor-pointer ${
-    procesando
-      ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
-      : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
-  }`}
->
-  Anular Reserva
-</button>
                     </div>
 
-                    <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3 font-bold">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] border-b border-slate-800 pb-1">
-                        Desglose de Factura
-                      </p>
-                      
-                      <div className="space-y-2 text-xs border-b border-slate-800 pb-3">
-                        <div className="flex justify-between items-start text-slate-300">
-                          <span>Pista Completa:</span>
-                          <div className="text-right">
-                            <span className="text-white block font-black">${precioBase.toFixed(2)}</span>
-                            <span className="text-[10px] text-slate-400 block">Bs. {(precioBase * tasaBCV).toFixed(2)}</span>
+                    <button
+                      type="button"
+                      onClick={() => procesarDevolucionYLiberarCancha(matchSeleccionado)}
+                      disabled={procesando}
+                      className="w-full py-4 bg-sky-600 hover:bg-sky-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md cursor-pointer transition-all"
+                    >
+                      {procesando ? "Procesando Devolución..." : `💵 Entregar Devolución ($${totalAbonadoAprobado.toFixed(2)} USD) y Liberar Cancha`}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                    <div className="lg:col-span-6 space-y-4">
+                      <div className="bg-slate-50 p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex justify-between items-center text-xs font-bold text-slate-700">
+                        <div className="grid grid-cols-2 gap-4 flex-1">
+                          <div>
+                            <span className="text-[9px] uppercase font-black text-slate-400 block">Cliente:</span>
+                            <p className="text-slate-900 font-black text-xs sm:text-sm truncate">{obtenerNombreCliente(matchSeleccionado)}</p>
+                          </div>
+                          <div>
+                            <span className="text-[9px] uppercase font-black text-slate-400 block">Contacto:</span>
+                            <p className="text-slate-900 font-black text-xs sm:text-sm">{matchSeleccionado.creator_profile?.telefono || "En sitio"}</p>
                           </div>
                         </div>
+                        
+                        <button
+                          type="button"
+                          onClick={() => cancelarReserva(matchSeleccionado)}
+                          disabled={procesando}
+                          className={`px-3 py-1.5 border font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2 cursor-pointer ${
+                            procesando
+                              ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                              : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                          }`}
+                        >
+                          Anular Reserva
+                        </button>
+                      </div>
 
-                        {feeApp > 0 && (
-                          <div className="flex justify-between items-start text-emerald-400">
-                            <span>Comisión App (+10%):</span>
+                      <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3 font-bold">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] border-b border-slate-800 pb-1">
+                          Desglose de Factura
+                        </p>
+                        
+                        <div className="space-y-2 text-xs border-b border-slate-800 pb-3">
+                          <div className="flex justify-between items-start text-slate-300">
+                            <span>Pista Completa:</span>
                             <div className="text-right">
-                              <span className="block font-black">+${feeApp.toFixed(2)}</span>
-                              <span className="text-[10px] text-emerald-400/70 block">Bs. {(feeApp * tasaBCV).toFixed(2)}</span>
+                              <span className="text-white block font-black">${precioBase.toFixed(2)}</span>
+                              <span className="text-[10px] text-slate-400 block">Bs. {(precioBase * tasaBCV).toFixed(2)}</span>
                             </div>
                           </div>
-                        )}
 
-                        {extrasAgrupados.length > 0 && (
-                          <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-                            <span className="text-[10px] font-black uppercase text-amber-300 block">
-                              Consumos Tienda ({extrasAgrupados.reduce((s, x) => s + x.qty, 0)} items)
-                            </span>
-                            {extrasAgrupados.map((item) => {
-                              const subtotalUSD = item.price * item.qty;
-                              const subtotalBs = subtotalUSD * tasaBCV;
-                              return (
-                                <div key={item.id} className="flex justify-between items-start text-[11px] bg-slate-850 p-1.5 rounded-lg border border-slate-800">
-                                  <span className="text-slate-200">{item.name} <strong className="text-amber-400">x{item.qty}</strong></span>
-                                  <div className="text-right">
-                                    <span className="text-amber-300 font-black block">${subtotalUSD.toFixed(2)}</span>
-                                    <span className="text-[9px] text-slate-400 block">Bs. {subtotalBs.toFixed(2)}</span>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
+                          {feeApp > 0 && (
+                            <div className="flex justify-between items-start text-emerald-400">
+                              <span>Comisión App (+10%):</span>
+                              <div className="text-right">
+                                <span className="block font-black">+${feeApp.toFixed(2)}</span>
+                                <span className="text-[10px] text-emerald-400/70 block">Bs. {(feeApp * tasaBCV).toFixed(2)}</span>
+                              </div>
+                            </div>
+                          )}
 
-                      <div className="grid grid-cols-2 gap-3 pt-1">
-                        <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                          <span className="text-[9px] font-black uppercase text-slate-400 block">Total Factura</span>
-                          <p className="text-lg font-black text-white leading-none mt-1">${totalGranEsperado.toFixed(2)}</p>
-                          <p className="text-[10px] font-bold text-slate-400 mt-0.5">Bs. {(totalGranEsperado * tasaBCV).toFixed(2)}</p>
-                        </div>
-                        <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                          <span className="text-[9px] font-black uppercase text-emerald-400 block">Total Abonado</span>
-                          <p className="text-lg font-black text-emerald-400 leading-none mt-1">${totalAbonadoAprobado.toFixed(2)}</p>
-                          <p className="text-[10px] font-bold text-emerald-500/70 mt-0.5">Bs. {(totalAbonadoAprobado * tasaBCV).toFixed(2)}</p>
-                        </div>
-                      </div>
-
-                      {cambioDevolver > 0.05 ? (
-                        <div className="p-3.5 rounded-2xl border bg-cyan-500/20 border-cyan-500/60 text-cyan-300 flex justify-between items-center shadow-inner">
-                          <div>
-                            <span className="text-[10px] font-black uppercase tracking-wider block text-cyan-300">DINERO A DEVOLVER (CAMBIO)</span>
-                            <span className="text-xs font-bold block opacity-90 mt-0.5 text-cyan-200">
-                              Bs. {(cambioDevolver * tasaBCV).toFixed(2)} VES
-                            </span>
-                          </div>
-                          <div className="text-right">
-                            <span className="text-2xl font-black block leading-none text-cyan-200">${cambioDevolver.toFixed(2)}</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className={`p-3.5 rounded-2xl border flex justify-between items-center transition-all ${
-                          pendientePorCobrar > 0.05
-                            ? "bg-amber-500/20 border-amber-500/60 text-amber-300"
-                            : "bg-emerald-500/20 border-emerald-500/60 text-emerald-400"
-                        }`}>
-                          <div>
-                            <span className="text-[10px] font-black uppercase tracking-wider block">
-                              SALDO RESTANTE A COBRAR
-                            </span>
-                            <span className="text-xs font-bold block opacity-90 mt-0.5">Bs. {(pendientePorCobrar * tasaBCV).toFixed(2)} VES</span>
-                          </div>
-                          <div className="text-right">
-                            <span className="text-2xl font-black block leading-none">${pendientePorCobrar.toFixed(2)}</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-                      <button
-                        onClick={() => setHistorialAbierto(!historialAbierto)}
-                        className="w-full p-3.5 flex justify-between items-center bg-slate-100/80 hover:bg-slate-200/70 transition-colors text-left cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-500">{historialAbierto ? "▼" : "▶"}</span>
-                          <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">Historial de Pagos ({historialAbonos.length})</h4>
-                        </div>
-                        <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                          Aprobado: ${totalAbonadoAprobado.toFixed(2)}
-                        </span>
-                      </button>
-
-                      {historialAbierto && (
-                        <div className="p-3.5 border-t border-slate-200 space-y-2 bg-white">
-                          {historialAbonos.length === 0 ? (
-                            <p className="text-xs font-bold text-slate-400 italic py-2 text-center">No hay abonos registrados.</p>
-                          ) : (
-                            <div className="space-y-2 max-h-40 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-1">
-                              {historialAbonos.map((ab, idx) => {
-                                const amountUsd = parseFloat(ab.amount) || 0;
-                                const amountBs = amountUsd * tasaBCV;
-                                const esAprobado = ab.status === "aprobado";
-
+                          {extrasAgrupados.length > 0 && (
+                            <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                              <span className="text-[10px] font-black uppercase text-amber-300 block">
+                                Consumos Tienda ({extrasAgrupados.reduce((s, x) => s + x.qty, 0)} items)
+                              </span>
+                              {extrasAgrupados.map((item) => {
+                                const subtotalUSD = item.price * item.qty;
+                                const subtotalBs = subtotalUSD * tasaBCV;
                                 return (
-                                  <div key={ab.id || idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex items-center justify-between shadow-2xs">
-                                    <div className="min-w-0 flex-1 pr-2">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-slate-900 text-[#00FF9D]">
-                                          {ab.method ? ab.method.replace("_", " ") : "POS"}
-                                        </span>
-                                        <span className="text-xs font-black text-slate-800 truncate">{ab.user_name || "Cliente"}</span>
-                                      </div>
-                                      <p className="text-[10px] text-slate-500 font-bold mt-0.5 truncate">
-                                        Ref: <strong className="text-slate-800">{ab.reference || "S/R"}</strong>
-                                      </p>
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <div className="text-right">
-                                        <span className={`text-xs font-black block leading-none ${
-                                          amountUsd < 0 ? "text-cyan-600" : (esAprobado ? "text-emerald-700" : "text-amber-600")
-                                        }`}>
-                                          ${amountUsd < 0 ? `-Math.abs(amountUsd).toFixed(2)` : amountUsd.toFixed(2)}
-                                        </span>
-                                        <span className="text-[9px] font-bold text-slate-400 block mt-0.5">
-                                          Bs. {amountBs.toFixed(2)}
-                                        </span>
-                                      </div>
-
-                                      {!esAprobado && !esLiquidadoOficial && (
-                                        <button
-                                          type="button"
-                                          onClick={() => aprobarPagoPendiente(matchSeleccionado, ab.id)}
-                                          disabled={procesando}
-                                          className="bg-emerald-500 hover:bg-emerald-600 text-white text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg transition-colors shadow-sm cursor-pointer"
-                                        >
-                                          Aprobar
-                                        </button>
-                                      )}
-
-                                      {ab.receipt_url && (
-                                        <button
-                                          type="button"
-                                          onClick={() => setImagenEngrande(ab.receipt_url)}
-                                          className="w-8 h-8 rounded-lg border border-slate-300 bg-slate-100 overflow-hidden hover:border-blue-500 transition-all shrink-0 cursor-pointer"
-                                        >
-                                          <img src={ab.receipt_url} alt="Comprobante" className="w-full h-full object-cover" />
-                                        </button>
-                                      )}
+                                  <div key={item.id} className="flex justify-between items-start text-[11px] bg-slate-850 p-1.5 rounded-lg border border-slate-800">
+                                    <span className="text-slate-200">{item.name} <strong className="text-amber-400">x{item.qty}</strong></span>
+                                    <div className="text-right">
+                                      <span className="text-amber-300 font-black block">${subtotalUSD.toFixed(2)}</span>
+                                      <span className="text-[9px] text-slate-400 block">Bs. {subtotalBs.toFixed(2)}</span>
                                     </div>
                                   </div>
                                 );
@@ -2581,256 +2529,367 @@ export default function RecepcionElite() {
                             </div>
                           )}
                         </div>
-                      )}
-                    </div>
 
-                    {/* REGISTRAR COBRO EN SITIO */}
-                    {!esLiquidadoOficial && (
-                      <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-                        <button
-                          onClick={() => setCobroAbierto(!cobroAbierto)}
-                          className="w-full p-3.5 flex justify-between items-center bg-slate-100/80 hover:bg-slate-200/70 transition-colors text-left cursor-pointer"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-slate-500">{cobroAbierto ? "▼" : "▶"}</span>
-                            <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
-                              Registrar Cobro de Saldo en Sitio
-                            </h4>
+                        <div className="grid grid-cols-2 gap-3 pt-1">
+                          <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                            <span className="text-[9px] font-black uppercase text-slate-400 block">Total Factura</span>
+                            <p className="text-lg font-black text-white leading-none mt-1">${totalGranEsperado.toFixed(2)}</p>
+                            <p className="text-[10px] font-bold text-slate-400 mt-0.5">Bs. {(totalGranEsperado * tasaBCV).toFixed(2)}</p>
                           </div>
-                          {pendientePorCobrar > 0.05 && (
-                            <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
-                              Pendiente: ${pendientePorCobrar.toFixed(2)}
-                            </span>
-                          )}
-                        </button>
-
-                        {cobroAbierto && (
-                          <div className="p-3.5 sm:p-4 border-t border-slate-200 space-y-3 bg-white">
-                            
-                            <div className="flex justify-between items-center">
-                              <p className="text-[10px] font-black uppercase text-slate-500">Moneda de Pago</p>
-                              <div className="flex items-center bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
-                                <button
-                                  type="button"
-                                  onClick={() => setMonedaCobroPOS("USD")}
-                                  className={`px-2 py-0.5 rounded-lg cursor-pointer ${monedaCobroPOS === "USD" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}
-                                >
-                                  $ USD
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setMonedaCobroPOS("VES")}
-                                  className={`px-2 py-0.5 rounded-lg cursor-pointer ${monedaCobroPOS === "VES" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}
-                                >
-                                  Bs. VES
-                                </button>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                              {[
-                                { id: "pago_movil", label: "📱 Pago Móvil" },
-                                { id: "zelle", label: "🇺🇸 Zelle" },
-                                { id: "efectivo", label: "💵 Efectivo" },
-                                { id: "punto", label: "💳 Punto Venta" },
-                              ].map((m) => (
-                                <button
-                                  key={m.id}
-                                  type="button"
-                                  onClick={() => setMetodoAbonoManualPOS(m.id)}
-                                  className={`py-2 px-2 rounded-xl text-[10px] font-black uppercase border transition-all cursor-pointer ${
-                                    metodoAbonoManualPOS === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-xs" : "bg-slate-50 text-slate-600 border-slate-200"
-                                  }`}
-                                >
-                                  {m.label}
-                                </button>
-                              ))}
-                            </div>
-
-                            <div className="flex gap-2">
-                              <input
-                                type="number"
-                                step="0.01"
-                                placeholder={pendientePorCobrar.toFixed(2)}
-                                value={montoAbonoManualPOS}
-                                onChange={(e) => setMontoAbonoManualPOS(e.target.value)}
-                                className="flex-1 bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold outline-none"
-                              />
-                              <button
-                                onClick={() => agregarAbonoManualPOS(matchSeleccionado)}
-                                disabled={procesando}
-                                className="px-4 py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shrink-0 hover:bg-slate-800 transition-colors cursor-pointer"
-                              >
-                                Registrar
-                              </button>
-                            </div>
-
-                            {cambioDevolver > 0.05 && (
-                              <button
-                                type="button"
-                                onClick={() => registrarDevolucionCambioPOS(matchSeleccionado, cambioDevolver)}
-                                disabled={procesando}
-                                className="w-full py-2.5 bg-cyan-600 text-white font-black text-xs uppercase rounded-xl shadow-sm hover:bg-cyan-700 transition-colors cursor-pointer"
-                              >
-                                Entregar y Registrar Cambio (${cambioDevolver.toFixed(2)} USD)
-                              </button>
-                            )}
-
-                            {metodoAbonoManualPOS !== "efectivo" && (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                                <input
-                                  type="text"
-                                  placeholder="N° Referencia / ID Transacción"
-                                  value={numRefAbonoManualPOS}
-                                  onChange={(e) => setNumRefAbonoManualPOS(e.target.value)}
-                                  className="bg-slate-50 border border-slate-300 rounded-xl p-2 text-xs font-bold outline-none"
-                                />
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={(e) => handleSeleccionarImagenPOS(e, setPreviewAbonoManualPOS)}
-                                  className="bg-slate-50 border border-slate-300 rounded-xl p-1 text-[10px] outline-none file:mr-1 file:py-1 file:px-2 file:rounded-md file:border-0 file:bg-slate-900 file:text-[#00FF9D]"
-                                />
-                              </div>
-                            )}
-
-                            {montoNumIngresado > 0 && (
-                              <div className="bg-emerald-50 border border-emerald-200 p-2 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900">
-                                <span>🧮 Conversión en vivo:</span>
-                                <span>
-                                  {monedaCobroPOS === "USD"
-                                    ? `Bs. ${equivalenteCalculado.toFixed(2)} VES`
-                                    : `$${equivalenteCalculado.toFixed(2)} USD`}
-                                </span>
-                              </div>
-                            )}
-
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 3. CONSUMOS EXTRA EN SLIDER */}
-                  <div className="lg:col-span-6 space-y-4">
-                    <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-                      
-                      <div className="p-3.5 sm:p-4 bg-white border-b border-slate-200 space-y-3">
-                        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xl">🏪</span>
-                            <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
-                              Consumos Extra
-                            </h4>
-                          </div>
-                          
-                          <div className="relative w-full sm:w-48">
-                            <input
-                              type="text"
-                              placeholder="🔍 Buscar artículo..."
-                              value={busquedaProducto}
-                              onChange={(e) => setBusquedaProducto(e.target.value)}
-                              disabled={esLiquidadoOficial}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1 text-xs font-bold outline-none focus:border-blue-500 disabled:opacity-50"
-                            />
+                          <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                            <span className="text-[9px] font-black uppercase text-emerald-400 block">Total Abonado</span>
+                            <p className="text-lg font-black text-emerald-400 leading-none mt-1">${totalAbonadoAprobado.toFixed(2)}</p>
+                            <p className="text-[10px] font-bold text-emerald-500/70 mt-0.5">Bs. {(totalAbonadoAprobado * tasaBCV).toFixed(2)}</p>
                           </div>
                         </div>
 
-                        {esLiquidadoOficial && (
-                          <p className="text-[10px] font-bold text-amber-600 bg-amber-50 p-2 rounded-xl border border-amber-200">
-                            🔒 Ticket Liquidado - No es posible modificar consumos en facturas cerradas.
-                          </p>
+                        {cambioDevolver > 0.05 ? (
+                          <div className="p-3.5 rounded-2xl border bg-cyan-500/20 border-cyan-500/60 text-cyan-300 flex justify-between items-center shadow-inner">
+                            <div>
+                              <span className="text-[10px] font-black uppercase tracking-wider block text-cyan-300">DINERO A DEVOLVER (CAMBIO)</span>
+                              <span className="text-xs font-bold block opacity-90 mt-0.5 text-cyan-200">
+                                Bs. {(cambioDevolver * tasaBCV).toFixed(2)} VES
+                              </span>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-2xl font-black block leading-none text-cyan-200">${cambioDevolver.toFixed(2)}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className={`p-3.5 rounded-2xl border flex justify-between items-center transition-all ${
+                            pendientePorCobrar > 0.05
+                              ? "bg-amber-500/20 border-amber-500/60 text-amber-300"
+                              : "bg-emerald-500/20 border-emerald-500/60 text-emerald-400"
+                          }`}>
+                            <div>
+                              <span className="text-[10px] font-black uppercase tracking-wider block">
+                                SALDO RESTANTE A COBRAR
+                              </span>
+                              <span className="text-xs font-bold block opacity-90 mt-0.5">Bs. {(pendientePorCobrar * tasaBCV).toFixed(2)} VES</span>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-2xl font-black block leading-none">${pendientePorCobrar.toFixed(2)}</span>
+                            </div>
+                          </div>
                         )}
                       </div>
 
-                      <div className="flex gap-3 overflow-x-auto pb-3 pt-1 px-1 bg-slate-50 rounded-2xl border border-slate-200 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                        
-                        <div className={`flex gap-3 px-3 py-2 ${esLiquidadoOficial ? "opacity-60 pointer-events-none" : ""}`}>
-                          {productosFiltrados.length === 0 ? (
-                            <p className="text-xs text-slate-400 font-bold p-3">No se encontraron productos.</p>
-                          ) : (
-                            productosFiltrados.map((prod) => {
-                              const qty = extras.filter((ex) => String(ex.id) === String(prod.id)).length;
-                              const pPrice = parseFloat(prod.price) || 0;
-                              const stockDisponible = prod.is_rental ? 999999 : (parseInt(prod.stock, 10) || 0);
-                              
-                              const alcanzadoLimiteStock = !prod.is_rental && qty >= stockDisponible;
-                              const sinStock = !prod.is_rental && stockDisponible <= 0;
+                      <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+                        <button
+                          onClick={() => setHistorialAbierto(!historialAbierto)}
+                          className="w-full p-3.5 flex justify-between items-center bg-slate-100/80 hover:bg-slate-200/70 transition-colors text-left cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-500">{historialAbierto ? "▼" : "▶"}</span>
+                            <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">Historial de Pagos ({historialAbonos.length})</h4>
+                          </div>
+                          <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                            Aprobado: ${totalAbonadoAprobado.toFixed(2)}
+                          </span>
+                        </button>
 
-                              return (
-                                <div
-                                  key={prod.id}
-                                  className={`shrink-0 w-44 p-3 rounded-2xl border flex flex-col justify-between shadow-xs transition-all ${
-                                    qty > 0 ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"
-                                  }`}
-                                >
-                                  <div>
-                                    <div className="flex justify-between items-center mb-0.5">
-                                      <span className="text-[9px] font-black uppercase text-blue-500 truncate">{prod.brand || "Tienda"}</span>
-                                      <span className={`text-[8px] font-black uppercase px-1.5 py-0.2 rounded ${
-                                        prod.is_rental ? "bg-purple-100 text-purple-700" : (sinStock ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600")
-                                      }`}>
-                                        {prod.is_rental ? "Ilimitado" : (sinStock ? "Agotado" : `Stock: ${stockDisponible}`)}
-                                      </span>
+                        {historialAbierto && (
+                          <div className="p-3.5 border-t border-slate-200 space-y-2 bg-white">
+                            {historialAbonos.length === 0 ? (
+                              <p className="text-xs font-bold text-slate-400 italic py-2 text-center">No hay abonos registrados.</p>
+                            ) : (
+                              <div className="space-y-2 max-h-40 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pr-1">
+                                {historialAbonos.map((ab, idx) => {
+                                  const amountUsd = parseFloat(ab.amount) || 0;
+                                  const amountBs = amountUsd * tasaBCV;
+                                  const esAprobado = ab.status === "aprobado";
+
+                                  return (
+                                    <div key={ab.id || idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex items-center justify-between shadow-2xs">
+                                      <div className="min-w-0 flex-1 pr-2">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-slate-900 text-[#00FF9D]">
+                                            {ab.method ? ab.method.replace("_", " ") : "POS"}
+                                          </span>
+                                          <span className="text-xs font-black text-slate-800 truncate">{ab.user_name || "Cliente"}</span>
+                                        </div>
+                                        <p className="text-[10px] text-slate-500 font-bold mt-0.5 truncate">
+                                          Ref: <strong className="text-slate-800">{ab.reference || "S/R"}</strong>
+                                        </p>
+                                      </div>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <div className="text-right">
+                                          <span className={`text-xs font-black block leading-none ${
+                                            amountUsd < 0 ? "text-cyan-600" : (esAprobado ? "text-emerald-700" : "text-amber-600")
+                                          }`}>
+                                            ${amountUsd < 0 ? `-Math.abs(amountUsd).toFixed(2)` : amountUsd.toFixed(2)}
+                                          </span>
+                                          <span className="text-[9px] font-bold text-slate-400 block mt-0.5">
+                                            Bs. {amountBs.toFixed(2)}
+                                          </span>
+                                        </div>
+
+                                        {!esAprobado && !esLiquidadoOficial && (
+                                          <button
+                                            type="button"
+                                            onClick={() => aprobarPagoPendiente(matchSeleccionado, ab.id)}
+                                            disabled={procesando}
+                                            className="bg-emerald-500 hover:bg-emerald-600 text-white text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg transition-colors shadow-sm cursor-pointer"
+                                          >
+                                            Aprobar
+                                          </button>
+                                        )}
+
+                                        {ab.receipt_url && (
+                                          <button
+                                            type="button"
+                                            onClick={() => setImagenEngrande(ab.receipt_url)}
+                                            className="w-8 h-8 rounded-lg border border-slate-300 bg-slate-100 overflow-hidden hover:border-blue-500 transition-all shrink-0 cursor-pointer"
+                                          >
+                                            <img src={ab.receipt_url} alt="Comprobante" className="w-full h-full object-cover" />
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
-                                    <p className="text-xs font-black text-slate-900 truncate" title={prod.name}>{prod.name}</p>
-                                  </div>
-                                  
-                                  <div className="mt-0.5">
-                                    <span className="text-[11px] font-black text-slate-900 block">${pPrice.toFixed(2)}</span>
-                                    <span className="text-[9px] font-bold text-slate-400 block">Bs. {(pPrice * tasaBCV).toFixed(2)}</span>
-                                  </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
 
-                                  <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
-                                    {qty > 0 ? (
-                                      <div className="flex items-center justify-between w-full">
-                                        <button
-                                          type="button"
-                                          onClick={() => quitarUnExtraSilencioso(matchSeleccionado, prod.id)}
-                                          disabled={esLiquidadoOficial}
-                                          className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-black text-xs flex items-center justify-center hover:bg-rose-200 transition-colors disabled:opacity-40 cursor-pointer"
-                                        >
-                                          -
-                                        </button>
-                                        <span className="text-xs font-black">{qty} und</span>
+                      {!esLiquidadoOficial && (
+                        <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+                          <button
+                            onClick={() => setCobroAbierto(!cobroAbierto)}
+                            className="w-full p-3.5 flex justify-between items-center bg-slate-100/80 hover:bg-slate-200/70 transition-colors text-left cursor-pointer"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-slate-500">{cobroAbierto ? "▼" : "▶"}</span>
+                              <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                                Registrar Cobro de Saldo en Sitio
+                              </h4>
+                            </div>
+                            {pendientePorCobrar > 0.05 && (
+                              <span className="text-[10px] font-black text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
+                                Pendiente: ${pendientePorCobrar.toFixed(2)}
+                              </span>
+                            )}
+                          </button>
+
+                          {cobroAbierto && (
+                            <div className="p-3.5 sm:p-4 border-t border-slate-200 space-y-3 bg-white">
+                              
+                              <div className="flex justify-between items-center">
+                                <p className="text-[10px] font-black uppercase text-slate-500">Moneda de Pago</p>
+                                <div className="flex items-center bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
+                                  <button
+                                    type="button"
+                                    onClick={() => setMonedaCobroPOS("USD")}
+                                    className={`px-2 py-0.5 rounded-lg cursor-pointer ${monedaCobroPOS === "USD" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}
+                                  >
+                                    $ USD
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setMonedaCobroPOS("VES")}
+                                    className={`px-2 py-0.5 rounded-lg cursor-pointer ${monedaCobroPOS === "VES" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}
+                                  >
+                                    Bs. VES
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                                {[
+                                  { id: "pago_movil", label: "📱 Pago Móvil" },
+                                  { id: "zelle", label: "🇺🇸 Zelle" },
+                                  { id: "efectivo", label: "💵 Efectivo" },
+                                  { id: "punto", label: "💳 Punto Venta" },
+                                ].map((m) => (
+                                  <button
+                                    key={m.id}
+                                    type="button"
+                                    onClick={() => setMetodoAbonoManualPOS(m.id)}
+                                    className={`py-2 px-2 rounded-xl text-[10px] font-black uppercase border transition-all cursor-pointer ${
+                                      metodoAbonoManualPOS === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-xs" : "bg-slate-50 text-slate-600 border-slate-200"
+                                    }`}
+                                  >
+                                    {m.label}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <div className="flex gap-2">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder={pendientePorCobrar.toFixed(2)}
+                                  value={montoAbonoManualPOS}
+                                  onChange={(e) => setMontoAbonoManualPOS(e.target.value)}
+                                  className="flex-1 bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold outline-none"
+                                />
+                                <button
+                                  onClick={() => agregarAbonoManualPOS(matchSeleccionado)}
+                                  disabled={procesando}
+                                  className="px-4 py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shrink-0 hover:bg-slate-800 transition-colors cursor-pointer"
+                                >
+                                  Registrar
+                                </button>
+                              </div>
+
+                              {cambioDevolver > 0.05 && (
+                                <button
+                                  type="button"
+                                  onClick={() => registrarDevolucionCambioPOS(matchSeleccionado, cambioDevolver)}
+                                  disabled={procesando}
+                                  className="w-full py-2.5 bg-cyan-600 text-white font-black text-xs uppercase rounded-xl shadow-sm hover:bg-cyan-700 transition-colors cursor-pointer"
+                                >
+                                  Entregar y Registrar Cambio (${cambioDevolver.toFixed(2)} USD)
+                                </button>
+                              )}
+
+                              {metodoAbonoManualPOS !== "efectivo" && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                  <input
+                                    type="text"
+                                    placeholder="N° Referencia / ID Transacción"
+                                    value={numRefAbonoManualPOS}
+                                    onChange={(e) => setNumRefAbonoManualPOS(e.target.value)}
+                                    className="bg-slate-50 border border-slate-300 rounded-xl p-2 text-xs font-bold outline-none"
+                                  />
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(e) => handleSeleccionarImagenPOS(e, setPreviewAbonoManualPOS)}
+                                    className="bg-slate-50 border border-slate-300 rounded-xl p-1 text-[10px] outline-none file:mr-1 file:py-1 file:px-2 file:rounded-md file:border-0 file:bg-slate-900 file:text-[#00FF9D]"
+                                  />
+                                </div>
+                              )}
+
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* CONSUMOS EXTRA EN SLIDER */}
+                    <div className="lg:col-span-6 space-y-4">
+                      <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+                        
+                        <div className="p-3.5 sm:p-4 bg-white border-b border-slate-200 space-y-3">
+                          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xl">🏪</span>
+                              <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                                Consumos Extra
+                              </h4>
+                            </div>
+                            
+                            <div className="relative w-full sm:w-48">
+                              <input
+                                type="text"
+                                placeholder="🔍 Buscar artículo..."
+                                value={busquedaProducto}
+                                onChange={(e) => setBusquedaProducto(e.target.value)}
+                                disabled={esLiquidadoOficial}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1 text-xs font-bold outline-none focus:border-blue-500 disabled:opacity-50"
+                              />
+                            </div>
+                          </div>
+
+                          {esLiquidadoOficial && (
+                            <p className="text-[10px] font-bold text-amber-600 bg-amber-50 p-2 rounded-xl border border-amber-200">
+                              🔒 Ticket Liquidado - No es posible modificar consumos en facturas cerradas.
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex gap-3 overflow-x-auto pb-3 pt-1 px-1 bg-slate-50 rounded-2xl border border-slate-200 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                          
+                          <div className={`flex gap-3 px-3 py-2 ${esLiquidadoOficial ? "opacity-60 pointer-events-none" : ""}`}>
+                            {productosFiltrados.length === 0 ? (
+                              <p className="text-xs text-slate-400 font-bold p-3">No se encontraron productos.</p>
+                            ) : (
+                              productosFiltrados.map((prod) => {
+                                const qty = extras.filter((ex) => String(ex.id) === String(prod.id)).length;
+                                const pPrice = parseFloat(prod.price) || 0;
+                                const stockDisponible = prod.is_rental ? 999999 : (parseInt(prod.stock, 10) || 0);
+                                
+                                const alcanzadoLimiteStock = !prod.is_rental && qty >= stockDisponible;
+                                const sinStock = !prod.is_rental && stockDisponible <= 0;
+
+                                return (
+                                  <div
+                                    key={prod.id}
+                                    className={`shrink-0 w-44 p-3 rounded-2xl border flex flex-col justify-between shadow-xs transition-all ${
+                                      qty > 0 ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"
+                                    }`}
+                                  >
+                                    <div>
+                                      <div className="flex justify-between items-center mb-0.5">
+                                        <span className="text-[9px] font-black uppercase text-blue-500 truncate">{prod.brand || "Tienda"}</span>
+                                        <span className={`text-[8px] font-black uppercase px-1.5 py-0.2 rounded ${
+                                          prod.is_rental ? "bg-purple-100 text-purple-700" : (sinStock ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600")
+                                        }`}>
+                                          {prod.is_rental ? "Ilimitado" : (sinStock ? "Agotado" : `Stock: ${stockDisponible}`)}
+                                        </span>
+                                      </div>
+                                      <p className="text-xs font-black text-slate-900 truncate" title={prod.name}>{prod.name}</p>
+                                    </div>
+                                    
+                                    <div className="mt-0.5">
+                                      <span className="text-[11px] font-black text-slate-900 block">${pPrice.toFixed(2)}</span>
+                                      <span className="text-[9px] font-bold text-slate-400 block">Bs. {(pPrice * tasaBCV).toFixed(2)}</span>
+                                    </div>
+
+                                    <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
+                                      {qty > 0 ? (
+                                        <div className="flex items-center justify-between w-full">
+                                          <button
+                                            type="button"
+                                            onClick={() => quitarUnExtraSilencioso(matchSeleccionado, prod.id)}
+                                            disabled={esLiquidadoOficial}
+                                            className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-black text-xs flex items-center justify-center hover:bg-rose-200 transition-colors disabled:opacity-40 cursor-pointer"
+                                          >
+                                            -
+                                          </button>
+                                          <span className="text-xs font-black">{qty} und</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)}
+                                            disabled={esLiquidadoOficial || alcanzadoLimiteStock}
+                                            className={`w-7 h-7 rounded-lg font-black text-xs flex items-center justify-center transition-colors cursor-pointer ${
+                                              esLiquidadoOficial || alcanzadoLimiteStock
+                                                ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                                                : "bg-slate-900 text-[#00FF9D] hover:bg-slate-800"
+                                            }`}
+                                          >
+                                            +
+                                          </button>
+                                        </div>
+                                      ) : (
                                         <button
                                           type="button"
                                           onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)}
-                                          disabled={esLiquidadoOficial || alcanzadoLimiteStock}
-                                          className={`w-7 h-7 rounded-lg font-black text-xs flex items-center justify-center transition-colors cursor-pointer ${
-                                            esLiquidadoOficial || alcanzadoLimiteStock
+                                          disabled={esLiquidadoOficial || sinStock || alcanzadoLimiteStock}
+                                          className={`w-full py-1.5 rounded-xl font-black text-[10px] uppercase transition-colors cursor-pointer ${
+                                            esLiquidadoOficial || sinStock || alcanzadoLimiteStock
                                               ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                                               : "bg-slate-900 text-[#00FF9D] hover:bg-slate-800"
                                           }`}
                                         >
-                                          +
+                                          {sinStock ? "Agotado" : "+ Añadir"}
                                         </button>
-                                      </div>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)}
-                                        disabled={esLiquidadoOficial || sinStock || alcanzadoLimiteStock}
-                                        className={`w-full py-1.5 rounded-xl font-black text-[10px] uppercase transition-colors cursor-pointer ${
-                                          esLiquidadoOficial || sinStock || alcanzadoLimiteStock
-                                            ? "bg-slate-200 text-slate-400 cursor-not-allowed"
-                                            : "bg-slate-900 text-[#00FF9D] hover:bg-slate-800"
-                                        }`}
-                                      >
-                                        {sinStock ? "Agotado" : "+ Añadir"}
-                                      </button>
-                                    )}
+                                      )}
+                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })
-                          )}
+                                );
+                              })
+                            )}
+                          </div>
                         </div>
-                      </div>
 
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 <div className="flex gap-2 pt-2 border-t border-slate-200">
                   <button
@@ -2841,23 +2900,25 @@ export default function RecepcionElite() {
                     Salir (Cerrar)
                   </button>
 
-                  <button
-                    onClick={() => cerrarTicketYLiquidarReserva(matchSeleccionado)}
-                    disabled={procesando || esLiquidadoOficial || pendientePorCobrar > 0.05}
-                    className={`w-2/3 py-3.5 text-white font-black text-xs uppercase rounded-2xl shadow-md transition-all cursor-pointer ${
-                      esLiquidadoOficial 
-                        ? "bg-slate-400 cursor-not-allowed"
+                  {!esReembolsoPendiente && (
+                    <button
+                      onClick={() => cerrarTicketYLiquidarReserva(matchSeleccionado)}
+                      disabled={procesando || esLiquidadoOficial || pendientePorCobrar > 0.05}
+                      className={`w-2/3 py-3.5 text-white font-black text-xs uppercase rounded-2xl shadow-md transition-all cursor-pointer ${
+                        esLiquidadoOficial 
+                          ? "bg-slate-400 cursor-not-allowed"
+                          : pendientePorCobrar > 0.05
+                            ? "bg-slate-300 text-slate-500 cursor-not-allowed border border-slate-300"
+                            : "bg-emerald-600 hover:bg-emerald-700 active:scale-98"
+                      }`}
+                    >
+                      {esLiquidadoOficial 
+                        ? "🔒 Ticket Ya Liquidado" 
                         : pendientePorCobrar > 0.05
-                          ? "bg-slate-300 text-slate-500 cursor-not-allowed border border-slate-300"
-                          : "bg-emerald-600 hover:bg-emerald-700 active:scale-98"
-                    }`}
-                  >
-                    {esLiquidadoOficial 
-                      ? "🔒 Ticket Ya Liquidado" 
-                      : pendientePorCobrar > 0.05
-                        ? `Falta Cobrar $${pendientePorCobrar.toFixed(2)} USD`
-                        : "✅ Liquidar Reserva"}
-                  </button>
+                          ? `Falta Cobrar $${pendientePorCobrar.toFixed(2)} USD`
+                          : "✅ Liquidar Reserva"}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

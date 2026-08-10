@@ -141,10 +141,10 @@ export default function Perfil() {
         ] = await Promise.all([
           supabase
             .from("futbol_profiles")
-            .select("*, profiles(nombre, apellido, telefono, pais, avatar_url, fecha_nacimiento)")
+            .select("id, posicion, pierna_buena, rating, partidos_jugados, goles, victorias, derrotas, ritmo, tiro, pase, regate, defensa, fisico, profiles(nombre, apellido, telefono, pais, avatar_url, fecha_nacimiento)")
             .eq("id", user.id)
             .maybeSingle(),
-          supabase.from("logros").select("*"),
+          supabase.from("logros").select("id, titulo, descripcion, stat_mejora, valor_mejora"),
           supabase.from("user_logros").select("logro_id").eq("user_id", user.id),
           supabase.from("match_players").select("id, match_id, team, goals").eq("user_id", user.id)
         ]);

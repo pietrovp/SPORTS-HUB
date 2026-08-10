@@ -58,8 +58,6 @@ export default function HistorialVentasPage() {
   const formatearHoraReserva = (dbDateString) => {
     if (!dbDateString) return null;
     try {
-      // Usamos subcadenas para evitar conversiones de Timezone del navegador
-      // Ej: "2026-08-10T15:30:00" -> hora: 15, min: 30
       const horaStr = dbDateString.substring(11, 13);
       const minStr = dbDateString.substring(14, 16);
       
@@ -125,7 +123,7 @@ export default function HistorialVentasPage() {
     if (!matches || matches.length === 0) return null;
 
     const itemCancha = (venta.sales_items || []).find(
-      (i) => i.item_type === "cancha" || (i.item_name && i.item_name.toLowerCase().includes("reserva"))
+      (i) => i.item_type === "cancha" || i.item_type === "ingreso_pista_cancelada" || i.item_type === "reembolso_pendiente" || (i.item_name && i.item_name.toLowerCase().includes("reserva"))
     );
 
     if (!itemCancha) return null;
@@ -138,8 +136,6 @@ export default function HistorialVentasPage() {
 
     const cleanCliente = normalizarTexto(itemCancha.item_detail || "");
     const cleanPista = normalizarTexto(itemCancha.item_name || "");
-    
-    // Comparación sin Timezone (solo los primeros 10 caracteres YYYY-MM-DD)
     const fechaVenta = venta.created_at.substring(0, 10);
 
     let bestMatch = null;
@@ -210,8 +206,14 @@ export default function HistorialVentasPage() {
         let horaReservaFinal = "—";
         let pagosDesglosados = [];
 
+        const itemCancelacion = (v.sales_items || []).find(i => 
+          i.item_type === "ingreso_pista_cancelada" || i.item_type === "reembolso_pendiente"
+        );
+
+        const esReembolsoPendiente = itemCancelacion?.item_type === "reembolso_pendiente";
+        const esIngresoCancelado = itemCancelacion?.item_type === "ingreso_pista_cancelada";
+
         if (match) {
-          // VENTA PROVENIENTE DE RESERVA DE CANCHA
           clienteFinal = obtenerNombreClienteMatch(match) || "Cliente Mostrador";
           telefonoFinal = obtenerTelefonoClienteMatch(match);
           horaReservaFinal = formatearHoraReserva(match.scheduled_at) || "—";
@@ -229,11 +231,10 @@ export default function HistorialVentasPage() {
             ];
           }
         } else {
-          // VENTA DIRECTA DE TIENDA (PARSEO ESTRUCTURADO DE ITEM_DETAIL)
           const primerItem = (v.sales_items || [])[0];
           const detail = primerItem?.item_detail || "";
 
-          let refTienda = "Venta Tienda POS";
+          let refTienda = esReembolsoPendiente ? "Reembolso Devuelto (+6h)" : (esIngresoCancelado ? "Ingreso Retenido (<6h)" : "Venta Tienda POS");
           let proofTienda = null;
 
           if (detail.includes("Cliente:")) {
@@ -253,7 +254,7 @@ export default function HistorialVentasPage() {
             if (mP && mP[1]) proofTienda = mP[1].trim();
           }
 
-          horaReservaFinal = "Tienda POS";
+          horaReservaFinal = esReembolsoPendiente || esIngresoCancelado ? "Reserva Cancelada" : "Tienda POS";
           pagosDesglosados = [
             {
               method: v.payment_method || "efectivo",
@@ -273,6 +274,8 @@ export default function HistorialVentasPage() {
           hora_reserva_principal: horaReservaFinal,
           pagos_desglosados: pagosDesglosados,
           match_info: match,
+          es_reembolso_pendiente: esReembolsoPendiente,
+          es_ingreso_cancelado: esIngresoCancelado
         };
       });
 
@@ -308,7 +311,6 @@ export default function HistorialVentasPage() {
 
   const ventasAgrupadas = useMemo(() => {
     return ventas.reduce((acc, venta) => {
-      // Agrupamos las ventas por la fecha en la que se emitieron
       const fechaObj = new Date(venta.created_at);
       const fechaString = fechaObj.toLocaleDateString("es-VE", { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
       const fechaMayus = fechaString.charAt(0).toUpperCase() + fechaString.slice(1);
@@ -348,7 +350,7 @@ export default function HistorialVentasPage() {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm gap-4">
           <div>
             <h1 className="text-xl sm:text-2xl font-black text-slate-900">🧾 Historial de Tickets</h1>
-            <p className="text-xs sm:text-sm text-slate-500 font-medium">Revisa los cobros, desglose exacto de abonos y comprobantes adjuntos.</p>
+            <p className="text-xs sm:text-sm text-slate-500 font-medium">Revisa cobros, cancelaciones, reembolsos devueltos y ventas de tienda.</p>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-4 w-full md:w-auto">
             {tasaBCV && (
@@ -411,9 +413,9 @@ export default function HistorialVentasPage() {
                                 <th className="p-3 border-b border-slate-800 w-10 text-center">Det.</th>
                                 <th className="p-3 border-b border-slate-800">Ticket ID</th>
                                 <th className="p-3 border-b border-slate-800">Cliente</th>
-                                <th className="p-3 border-b border-slate-800">Teléfono</th>
+                                <th className="p-3 border-b border-slate-800">Estado / Tipo</th>
                                 <th className="p-3 border-b border-slate-800">Horario Reserva</th>
-                                <th className="p-3 border-b border-slate-800">Hora de Cobro</th>
+                                <th className="p-3 border-b border-slate-800">Hora Cobro</th>
                                 <th className="p-3 border-b border-slate-800 text-right">Monto Total</th>
                               </tr>
                             </thead>
@@ -422,15 +424,15 @@ export default function HistorialVentasPage() {
                                 const tasaAplicar = venta.exchange_rate ? venta.exchange_rate : (esHoy ? tasaBCV : null);
                                 const esExpandido = ventaExpandida === venta.id;
                                 const itemsAgrupados = agruparItemsConsumo(venta.sales_items);
-
-                                // Ajuste para renderizar la hora exacta de cobro sin timezone offset
                                 const horaCobro = venta.created_at.substring(11, 16);
 
                                 return (
                                   <React.Fragment key={venta.id}>
                                     <tr
                                       onClick={() => toggleExpandirTicket(venta.id)}
-                                      className={`hover:bg-slate-50 transition-colors cursor-pointer ${esExpandido ? 'bg-slate-50' : ''}`}
+                                      className={`hover:bg-slate-50 transition-colors cursor-pointer ${
+                                        venta.es_reembolso_pendiente ? 'bg-blue-50/60' : (venta.es_ingreso_cancelado ? 'bg-emerald-50/40' : (esExpandido ? 'bg-slate-50' : ''))
+                                      }`}
                                     >
                                       <td className="p-3 text-slate-400 text-center text-xs">
                                         {esExpandido ? '▼' : '▶'}
@@ -444,11 +446,22 @@ export default function HistorialVentasPage() {
                                         <p className="text-xs font-bold text-slate-800">
                                           👤 {venta.cliente_principal}
                                         </p>
+                                        <p className="text-[10px] text-slate-400 font-bold">📞 {venta.telefono_principal}</p>
                                       </td>
                                       <td className="p-3">
-                                        <p className="text-xs font-bold text-slate-600">
-                                          📞 {venta.telefono_principal}
-                                        </p>
+                                        {venta.es_reembolso_pendiente ? (
+                                          <span className="bg-blue-600 text-white text-[9px] font-black uppercase px-2.5 py-1 rounded-full shadow-xs inline-block">
+                                            🔵 Reembolso Devuelto (+6h)
+                                          </span>
+                                        ) : venta.es_ingreso_cancelado ? (
+                                          <span className="bg-emerald-800 text-white text-[9px] font-black uppercase px-2.5 py-1 rounded-full shadow-xs inline-block">
+                                            🟢 Ingreso Pista Cancelada (&lt;6h)
+                                          </span>
+                                        ) : (
+                                          <span className="bg-slate-100 text-slate-700 text-[9px] font-black uppercase px-2.5 py-1 rounded-full border border-slate-200 inline-block">
+                                            ✓ Reserva / Venta
+                                          </span>
+                                        )}
                                       </td>
                                       <td className="p-3">
                                         <span className="text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-lg">
@@ -461,7 +474,7 @@ export default function HistorialVentasPage() {
                                         </p>
                                       </td>
                                       <td className="p-3 text-right">
-                                        <span className="text-sm font-black text-slate-900 block leading-none">
+                                        <span className={`text-sm font-black block leading-none ${venta.es_reembolso_pendiente ? 'text-blue-600' : 'text-slate-900'}`}>
                                           ${parseFloat(venta.total_amount || 0).toFixed(2)}
                                         </span>
                                         {tasaAplicar ? (
@@ -485,14 +498,17 @@ export default function HistorialVentasPage() {
                                               </h4>
                                               <div className="space-y-2">
                                                 {itemsAgrupados.map((item, idx) => {
-                                                  const esCancha = item.item_type === 'cancha' || (item.item_name && (item.item_name.toLowerCase().includes('reserva') || item.item_name.toLowerCase().includes('pista')));
+                                                  const esCancha = item.item_type === 'cancha' || item.item_type === 'ingreso_pista_cancelada' || item.item_type === 'reembolso_pendiente';
                                                   const subtotal = item.quantity * item.price_unit;
 
                                                   return (
                                                     <div key={idx} className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs flex justify-between items-center gap-3">
                                                       <div className="flex items-center gap-2.5 min-w-0">
                                                         <span className="text-lg">{esCancha ? '🎾' : '🛍️'}</span>
-                                                        <p className="text-sm font-bold text-slate-900 leading-tight truncate">{item.item_name}</p>
+                                                        <div>
+                                                          <p className="text-sm font-bold text-slate-900 leading-tight truncate">{item.item_name}</p>
+                                                          {item.item_detail && <p className="text-[10px] font-semibold text-slate-400">{item.item_detail}</p>}
+                                                        </div>
                                                       </div>
 
                                                       <div className="text-right shrink-0">
