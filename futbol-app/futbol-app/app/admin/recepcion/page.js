@@ -168,6 +168,10 @@ export default function RecepcionElite() {
   const [modalConfirmCambios, setModalConfirmCambios] = useState(false);
   const [imagenEngrande, setImagenEngrande] = useState(null);
 
+  // ESTADOS PARA REEMBOLSO EN RECEPCIÓN
+  const [metodoDevolucionPOS, setMetodoDevolucionPOS] = useState("pago_movil");
+  const [refDevolucionPOS, setRefDevolucionPOS] = useState("");
+
   // Modal Venta Directa Tienda
   const [modalTiendaOpen, setModalTiendaOpen] = useState(false);
   const [busquedaTienda, setBusquedaTienda] = useState("");
@@ -309,7 +313,7 @@ export default function RecepcionElite() {
     if (!clubIdActual || diasVisibles.length === 0) return;
     
     const inicioStr = `${diasVisibles[0].getFullYear()}-${String(diasVisibles[0].getMonth() + 1).padStart(2, '0')}-${String(diasVisibles[0].getDate()).padStart(2, '0')}`;
-    const finStr = `${diasVisibles[diasVisibles.length - 1].getFullYear()}-${String(diasVisibles[diasVisibles.length - 1].getDate()).padStart(2, '0')}-${String(diasVisibles[diasVisibles.length - 1].getDate()).padStart(2, '0')}`;
+    const finStr = `${diasVisibles[diasVisibles.length - 1].getFullYear()}-${String(diasVisibles[diasVisibles.length - 1].getMonth() + 1).padStart(2, '0')}-${String(diasVisibles[diasVisibles.length - 1].getDate()).padStart(2, '0')}`;
 
     try {
       const { data } = await supabase
@@ -402,7 +406,12 @@ export default function RecepcionElite() {
         .select("id, match_id, user_id, team")
         .in("match_id", matchIds);
 
-      const allUserIds = Array.from(new Set((players || []).map((p) => p.user_id).filter(Boolean)));
+      // GARANTIZAR OBTENCIÓN DE PERFILES TANTO DE JUGADORES COMO DEL CREADOR
+      const allUserIds = Array.from(new Set([
+        ...(matches || []).map(m => m.created_by),
+        ...(players || []).map(p => p.user_id)
+      ].filter(Boolean)));
+
       let userProfilesMap = {};
 
       if (allUserIds.length > 0) {
@@ -425,14 +434,14 @@ export default function RecepcionElite() {
         players: playersMap[m.id] || [],
       }));
 
-      setPartidosPeriodo(finalMatches);
+      setPartidosClub(finalMatches);
 
       if (matchSeleccionado) {
         const actualizado = finalMatches.find(m => m.id === matchSeleccionado.id);
         if (actualizado) setMatchSeleccionado(actualizado);
       }
     } else {
-      setPartidosPeriodo(matches || []);
+      setPartidosClub(matches || []);
     }
   }
 
@@ -475,6 +484,8 @@ export default function RecepcionElite() {
     setExtrasBackup(Array.isArray(reservado.extra_items) ? [...reservado.extra_items] : []);
     setHistorialAbierto(true);
     setCobroAbierto(reservado.payment_status !== "liquidado");
+    setMetodoDevolucionPOS("pago_movil");
+    setRefDevolucionPOS("");
     setModalDetalleMatch(true);
   };
 
@@ -532,15 +543,47 @@ export default function RecepcionElite() {
     mostrarNotificacion("Cambios Guardados", "✅ Se han conservado las modificaciones en la reserva.", "success");
   };
 
+  // EXTRACTOR ROBUSTO DE NOMBRE DE CLIENTE
   const obtenerNombreCliente = (reservado) => {
     if (!reservado) return "Cliente Mostrador";
-    if (reservado.notes && reservado.notes.trim()) {
-      return reservado.notes.replace(/^Cliente:\s*/i, "");
+    if (reservado.creator_profile?.nombre) {
+      return `${reservado.creator_profile.nombre} ${reservado.creator_profile.apellido || ""}`.trim();
     }
-    if (reservado.creator_profile) {
-      return `${reservado.creator_profile.nombre || ""} ${reservado.creator_profile.apellido || ""}`.trim();
+    if (Array.isArray(reservado.players) && reservado.players.length > 0) {
+      const pCreador = reservado.players.find(p => p.user_id === reservado.created_by && p.profile?.nombre);
+      if (pCreador) return `${pCreador.profile.nombre} ${pCreador.profile.apellido || ""}`.trim();
+      const pPrimero = reservado.players.find(p => p.profile?.nombre);
+      if (pPrimero) return `${pPrimero.profile.nombre} ${pPrimero.profile.apellido || ""}`.trim();
+    }
+    if (Array.isArray(reservado.payments_history) && reservado.payments_history.length > 0) {
+      const p = reservado.payments_history.find(x => x.user_name && x.user_name !== "Cliente Mostrador (POS)");
+      if (p) return p.user_name;
+    }
+    if (reservado.notes && reservado.notes.trim()) {
+      return reservado.notes.replace(/^Cliente:\s*/i, "").split("(")[0].trim();
     }
     return "Cliente Mostrador";
+  };
+
+  // EXTRACTOR ROBUSTO DE TELÉFONO
+  const obtenerTelefonoCliente = (reservado) => {
+    if (!reservado) return "—";
+    if (reservado.creator_profile?.telefono) return reservado.creator_profile.telefono;
+    if (Array.isArray(reservado.players) && reservado.players.length > 0) {
+      const pCreador = reservado.players.find(p => p.user_id === reservado.created_by && p.profile?.telefono);
+      if (pCreador) return pCreador.profile.telefono;
+      const pPrimero = reservado.players.find(p => p.profile?.telefono);
+      if (pPrimero) return pPrimero.profile.telefono;
+    }
+    if (Array.isArray(reservado.payments_history) && reservado.payments_history.length > 0) {
+      const p = reservado.payments_history.find(x => x.user_phone && x.user_phone !== "En sitio");
+      if (p) return p.user_phone;
+    }
+    if (reservado.notes && reservado.notes.includes("(")) {
+      const m = reservado.notes.match(/\(([^)]+)\)/);
+      if (m && m[1]) return m[1].trim();
+    }
+    return "—";
   };
 
   const calcularPrecioPorBloque = (cancha, dateObj) => {
@@ -1445,64 +1488,91 @@ export default function RecepcionElite() {
     }
   }
 
-  // PROCESAR REEMBOLSO Y LIBERAR CANCHA (+6H)
+  // PROCESAR REEMBOLSO Y LIBERAR CANCHA (+6H) — RIGOR FINANCIERO ESTRICTO
   async function procesarDevolucionYLiberarCancha(match) {
-    const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
-    const totalAbonado = historialActual
-      .filter((item) => item.status === "aprobado" || item.status === "pendiente")
-      .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
-
-    const clienteNom = obtenerNombreCliente(match);
-
     try {
       setProcesando(true);
 
-      // 1. Insertar la devolución en el historial de ventas
-      const { data: ventaDevolucion } = await supabase
-        .from("sales")
-        .insert({
-          club_id: clubId,
-          cashier_id: user.id,
-          total_amount: -Math.abs(totalAbonado),
-          payment_method: "efectivo",
-          exchange_rate: tasaBCV,
-        })
-        .select("id")
-        .single();
+      const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
+      
+      // SUMAR ÚNICAMENTE DINERO QUE HAYA SIDO EFECTIVAMENTE APROBADO O LIQUIDADO EN CAJA
+      const totalAbonadoAprobado = historialActual
+        .filter((item) => item.status === "aprobado" || item.status === "liquidado")
+        .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
 
-      if (ventaDevolucion) {
-        await supabase.from("sales_items").insert({
-          sale_id: ventaDevolucion.id,
-          item_type: "reembolso_pendiente",
-          item_name: `🔵 Reembolso Devuelto (+6h): ${match.court?.name || "Pista"}`,
-          item_detail: `Cliente: ${clienteNom} | Devuelto en sitio: $${totalAbonado.toFixed(2)} USD`,
-          quantity: 1,
-          price_unit: -Math.abs(totalAbonado),
-        });
+      const clienteNom = obtenerNombreCliente(match);
+      const clienteTel = obtenerTelefonoCliente(match);
+
+      // 1. SOLO SI HABÍA DINERO APROBADO EN CAJA, SE REGISTRA EL EGRESO/DEVOLUCIÓN EN VENTAS
+      if (totalAbonadoAprobado > 0) {
+        const { data: ventaDevolucion } = await supabase
+          .from("sales")
+          .insert({
+            club_id: clubId,
+            cashier_id: user.id,
+            total_amount: -Math.abs(totalAbonadoAprobado),
+            payment_method: metodoDevolucionPOS || "efectivo",
+            exchange_rate: tasaBCV,
+          })
+          .select("id")
+          .single();
+
+        if (ventaDevolucion) {
+          await supabase.from("sales_items").insert({
+            sale_id: ventaDevolucion.id,
+            item_type: "reembolso_pendiente",
+            item_name: `🔵 Reembolso Devuelto (+6h): ${match.court?.name || "Pista"}`,
+            item_detail: `MatchID:${match.id} | Cliente: ${clienteNom} | Tel: ${clienteTel} | Método: ${(metodoDevolucionPOS || 'efectivo').toUpperCase()} | Ref: ${refDevolucionPOS.trim() || 'S/R'}`,
+            quantity: 1,
+            price_unit: -Math.abs(totalAbonadoAprobado),
+          });
+        }
       }
 
-      // 2. Eliminar jugadores
-      await supabase.from("match_players").delete().eq("match_id", match.id);
+      // 2. MARCAR EL PARTIDO COMO CANCELADO (Satisface la consulta del POS .neq("status", "cancelado"))
+      const { error: errMatch } = await supabase
+        .from("matches")
+        .update({
+          status: "cancelado",
+          payment_status: "liquidado",
+        })
+        .eq("id", match.id);
 
-      // 3. Eliminar el partido (se libera la grilla para nuevas reservas)
-      const { error: errMatch } = await supabase.from("matches").delete().eq("id", match.id);
       if (errMatch) throw errMatch;
 
-      // 4. Eliminar bloqueos
-      await supabase.from("padel_locks").delete().eq("court_id", match.court_id).eq("scheduled_at", match.scheduled_at);
+      // 3. LIMPIAR BLOQUEOS TEMPORALES
+      await supabase
+        .from("padel_locks")
+        .delete()
+        .eq("court_id", match.court_id);
+
+      // 4. LIMPIAR INTEGRANTES
+      await supabase
+        .from("match_players")
+        .delete()
+        .eq("match_id", match.id);
 
       setModalDetalleMatch(false);
-      mostrarNotificacion(
-        "Devolución Exitosa y Pista Liberada",
-        `💵 Se registraron -$${totalAbonado.toFixed(2)} USD en caja y la cancha ha quedado completamente libre.`,
-        "success"
-      );
+      
+      if (totalAbonadoAprobado > 0) {
+        mostrarNotificacion(
+          "Devolución Exitosa y Pista Liberada",
+          `💵 Se registraron -$${totalAbonadoAprobado.toFixed(2)} USD en caja y la cancha ha quedado completamente libre.`,
+          "success"
+        );
+      } else {
+        mostrarNotificacion(
+          "Pista Liberada Sin Egreso",
+          `ℹ️ El usuario no tenía dinero aprobado en caja ($0.00). La reserva fue anulada y la pista se liberó sin afectar las ventas.`,
+          "info"
+        );
+      }
 
       await cargarBloqueos();
       await cargarPartidosPeriodo();
     } catch (err) {
-      console.error(err);
-      mostrarNotificacion("Error", "Error al procesar la devolución.", "error");
+      console.error("Error al procesar devolución:", err);
+      mostrarNotificacion("Error", err.message || "Error al procesar la devolución.", "error");
     } finally {
       setProcesando(false);
     }
@@ -1532,11 +1602,16 @@ export default function RecepcionElite() {
           setProcesando(true);
 
           const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
-          const totalAbonado = historialActual
-            .filter((item) => item.status === "aprobado" || item.status === "pendiente")
-            .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+          
+          // SOLO SUMAR PAGOS EFECTIVAMENTE APROBADOS
+          const totalAbonadoAprobado = historialActual.reduce((sum, item) => {
+            const amt = parseFloat(item.amount) || 0;
+            if (amt > 0 && (item.status === "aprobado" || item.status === "liquidado")) return sum + amt;
+            return sum;
+          }, 0);
 
           const clienteNom = obtenerNombreCliente(match);
+          const clienteTel = obtenerTelefonoCliente(match);
 
           if (esConMasDe6Horas) {
             // Se marca en azul
@@ -1555,14 +1630,14 @@ export default function RecepcionElite() {
               "info"
             );
           } else {
-            // Menos de 6h: retener dinero e ingresar a caja
-            if (totalAbonado > 0) {
+            // Menos de 6h: retener dinero e ingresar a caja solo si hubo cobro aprobado
+            if (totalAbonadoAprobado > 0) {
               const { data: ventaCancelacion } = await supabase
                 .from("sales")
                 .insert({
                   club_id: clubId,
                   cashier_id: user.id,
-                  total_amount: totalAbonado,
+                  total_amount: totalAbonadoAprobado,
                   payment_method: match.payment_method || "efectivo",
                   exchange_rate: tasaBCV,
                 })
@@ -1574,22 +1649,22 @@ export default function RecepcionElite() {
                   sale_id: ventaCancelacion.id,
                   item_type: "ingreso_pista_cancelada",
                   item_name: `🟢 Ingreso Pista Cancelada (<6h): ${match.court?.name || "Pista"}`,
-                  item_detail: `Cliente: ${clienteNom} | Tel: ${match.creator_profile?.telefono || "En sitio"}`,
+                  item_detail: `MatchID:${match.id} | Cliente: ${clienteNom} | Tel: ${clienteTel}`,
                   quantity: 1,
-                  price_unit: totalAbonado,
+                  price_unit: totalAbonadoAprobado,
                 });
               }
             }
 
             // Eliminar relaciones y liberar pista inmediatamente
             await supabase.from("match_players").delete().eq("match_id", match.id);
-            await supabase.from("matches").delete().eq("id", match.id);
-            await supabase.from("padel_locks").delete().eq("court_id", match.court_id).eq("scheduled_at", match.scheduled_at);
+            await supabase.from("matches").update({ status: "cancelado", payment_status: "liquidado" }).eq("id", match.id);
+            await supabase.from("padel_locks").delete().eq("court_id", match.court_id);
 
             setModalDetalleMatch(false);
             mostrarNotificacion(
               "Reserva Anulada", 
-              `🚨 Pista liberada. El dinero abonado ($${totalAbonado.toFixed(2)}) quedó retenido en las ventas del club.`, 
+              `🚨 Pista liberada. El dinero abonado ($${totalAbonadoAprobado.toFixed(2)}) quedó retenido en las ventas del club.`, 
               "warning"
             );
           }
@@ -2385,8 +2460,10 @@ export default function RecepcionElite() {
           const totalGranEsperado = totalCanchaConFee + totalExtras;
 
           const historialAbonos = Array.isArray(matchSeleccionado.payments_history) ? matchSeleccionado.payments_history : [];
+          
+          // 🧠 SUMAR ÚNICAMENTE PAGOS APROBADOS O LIQUIDADOS
           const totalAbonadoAprobado = historialAbonos
-            .filter((a) => a.status === "aprobado" || a.status === "pendiente")
+            .filter((a) => a.status === "aprobado" || a.status === "liquidado")
             .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
 
           const pendientePorCobrar = Math.max(0, totalGranEsperado - totalAbonadoAprobado);
@@ -2400,6 +2477,9 @@ export default function RecepcionElite() {
           const equivalenteCalculado = monedaCobroPOS === "USD" 
             ? montoNumIngresado * tasaBCV 
             : montoNumIngresado / tasaBCV;
+
+          const clienteNom = obtenerNombreCliente(matchSeleccionado);
+          const clienteTel = obtenerTelefonoCliente(matchSeleccionado);
 
           return (
             <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-3 sm:p-4" onClick={solicitarCerrarModalDetalle}>
@@ -2436,23 +2516,83 @@ export default function RecepcionElite() {
                 {/* SI ESTÁ EN ESTADO DE REEMBOLSO PENDIENTE (+6H) */}
                 {esReembolsoPendiente ? (
                   <div className="bg-sky-50 border-2 border-sky-300 p-5 rounded-2xl space-y-4">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 border-b border-sky-200 pb-3">
                       <span className="text-3xl">🔵</span>
                       <div>
                         <h4 className="text-sm font-black text-sky-950 uppercase">Solicitud de Reembolso Pendiente (+6 Horas)</h4>
                         <p className="text-xs font-bold text-sky-800">
-                          El jugador canceló su reserva con más de 6h de anticipación. Debes entregarle **${totalAbonadoAprobado.toFixed(2)} USD** (Bs. {(totalAbonadoAprobado * tasaBCV).toFixed(2)}) en recepción.
+                          {totalAbonadoAprobado > 0 
+                            ? `El cliente canceló la reserva con más de 6h de anticipación. Debes devolverle **$${totalAbonadoAprobado.toFixed(2)} USD** (Bs. ${(totalAbonadoAprobado * tasaBCV).toFixed(2)}).`
+                            : "El cliente canceló la reserva, pero NO tenía dinero abonado/aprobado en caja ($0.00 USD)."}
                         </p>
                       </div>
                     </div>
+
+                    {/* DATOS DEL CLIENTE A REEMBOLSAR */}
+                    <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold shadow-sm">
+                      <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
+                        <span className="text-slate-400 uppercase text-[10px]">Cliente:</span>
+                        <span className="font-black text-[#00FF9D] text-sm">{clienteNom}</span>
+                      </div>
+                      <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
+                        <span className="text-slate-400 uppercase text-[10px]">Teléfono / Contacto:</span>
+                        <span className="font-black text-white">{clienteTel}</span>
+                      </div>
+                      <div className="flex justify-between items-center pt-0.5">
+                        <span className="text-slate-400 uppercase text-[10px]">Total Abonado Aprobado:</span>
+                        <span className="font-black text-emerald-400">${totalAbonadoAprobado.toFixed(2)} USD</span>
+                      </div>
+                    </div>
+
+                    {totalAbonadoAprobado > 0 && (
+                      <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
+                        <label className="block text-[10px] font-black uppercase text-slate-500">
+                          Selecciona el Método con el que Entregas la Devolución
+                        </label>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {[
+                            { id: "pago_movil", label: "📱 Pago Móvil" },
+                            { id: "zelle", label: "🇺🇸 Zelle" },
+                            { id: "efectivo", label: "💵 Efectivo" },
+                            { id: "punto", label: "💳 Punto Venta" },
+                          ].map((m) => (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() => setMetodoDevolucionPOS(m.id)}
+                              className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all cursor-pointer ${
+                                metodoDevolucionPOS === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm" : "bg-slate-50 text-slate-600 border-slate-200"
+                              }`}
+                            >
+                              {m.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {metodoDevolucionPOS !== "efectivo" && (
+                          <input
+                            type="text"
+                            placeholder="N° de Referencia de Transacción de Devolución *"
+                            value={refDevolucionPOS}
+                            onChange={(e) => setRefDevolucionPOS(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold outline-none"
+                          />
+                        )}
+                      </div>
+                    )}
 
                     <button
                       type="button"
                       onClick={() => procesarDevolucionYLiberarCancha(matchSeleccionado)}
                       disabled={procesando}
-                      className="w-full py-4 bg-sky-600 hover:bg-sky-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md cursor-pointer transition-all"
+                      className="w-full py-4 bg-sky-600 hover:bg-sky-700 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-md cursor-pointer transition-all"
                     >
-                      {procesando ? "Procesando Devolución..." : `💵 Entregar Devolución ($${totalAbonadoAprobado.toFixed(2)} USD) y Liberar Cancha`}
+                      {procesando 
+                        ? "Procesando..." 
+                        : totalAbonadoAprobado > 0 
+                          ? `💵 Entregar Devolución ($${totalAbonadoAprobado.toFixed(2)} USD) y Liberar Cancha` 
+                          : "🗑️ Confirmar Anulación y Liberar Pista (Sin Egreso $0.00)"}
                     </button>
                   </div>
                 ) : (
@@ -2462,11 +2602,11 @@ export default function RecepcionElite() {
                         <div className="grid grid-cols-2 gap-4 flex-1">
                           <div>
                             <span className="text-[9px] uppercase font-black text-slate-400 block">Cliente:</span>
-                            <p className="text-slate-900 font-black text-xs sm:text-sm truncate">{obtenerNombreCliente(matchSeleccionado)}</p>
+                            <p className="text-slate-900 font-black text-xs sm:text-sm truncate">{clienteNom}</p>
                           </div>
                           <div>
                             <span className="text-[9px] uppercase font-black text-slate-400 block">Contacto:</span>
-                            <p className="text-slate-900 font-black text-xs sm:text-sm">{matchSeleccionado.creator_profile?.telefono || "En sitio"}</p>
+                            <p className="text-slate-900 font-black text-xs sm:text-sm">{clienteTel}</p>
                           </div>
                         </div>
                         
