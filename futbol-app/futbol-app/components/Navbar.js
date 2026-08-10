@@ -262,7 +262,7 @@ export default function Navbar() {
                       👥 Gestión Gerentes POS
                     </Link>
                     {seccion === "padel" ? (
-                      <Link href="/padel/admin/categorias" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700" onClick={() => setAdminMenuOpen(false)}>
+                      <Link href="/admin/categorias" className="block w-full text-left px-4 py-3 hover:bg-gray-50 font-semibold text-gray-700" onClick={() => setAdminMenuOpen(false)}>
                         Revisión Categorías
                       </Link>
                     ) : (
