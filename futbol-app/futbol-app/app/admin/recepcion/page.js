@@ -133,6 +133,7 @@ export default function RecepcionElite() {
   // Vistas Calendario
   const [vistaCalendario, setVistaCalendario] = useState("dia");
   const [canchaFiltro, setCanchaFiltro] = useState("todas");
+  const [alertaNuevaReserva, setAlertaNuevaReserva] = useState(null);
   const [fechaBase, setFechaBase] = useState(new Date());
 
   // Datos
@@ -181,7 +182,6 @@ export default function RecepcionElite() {
 
   const [historialAbierto, setHistorialAbierto] = useState(true);
   const [cobroAbierto, setCobroAbierto] = useState(true);
-
   const [monedaCobroPOS, setMonedaCobroPOS] = useState("USD");
   const [montoAbonoManualPOS, setMontoAbonoManualPOS] = useState("");
   const [metodoAbonoManualPOS, setMetodoAbonoManualPOS] = useState("pago_movil");
@@ -228,8 +228,27 @@ export default function RecepcionElite() {
       .channel("pos-realtime-matches-full-v44")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "padel_matches", filter: `club_id=eq.${clubId}` },
-        () => cargarPartidosPeriodo()
+        { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` },
+        (payload) => {
+          cargarPartidosPeriodo();
+          
+          if (payload.eventType === 'INSERT') {
+            const nuevaReserva = payload.new;
+            const canchaReserva = canchas.find((c) => c.id === nuevaReserva.court_id);
+            
+            if (canchaReserva) {
+              const esFutbol = canchaReserva.sport_type === 'futbol';
+              const deporteAviso = esFutbol ? 'Fútbol ⚽' : 'Pádel 🎾';
+
+              if (canchaFiltro !== "todas" && canchaFiltro !== canchaReserva.id) {
+                setAlertaNuevaReserva({
+                  canchaNombre: canchaReserva.name,
+                  deporte: deporteAviso
+                });
+              }
+            }
+          }
+        }
       )
       .on(
         "postgres_changes",
@@ -246,7 +265,7 @@ export default function RecepcionElite() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [clubId, diasVisibles]);
+  }, [clubId, diasVisibles, canchas, canchaFiltro]);
 
   const mostrarNotificacion = (title, message, type = "info") => {
     setPopupNotif({ open: true, title, message, type });
@@ -599,7 +618,7 @@ export default function RecepcionElite() {
 
   const abrirModalAgendarPOS = async (cancha, dateObj, horaLabel, precioCalculado) => {
     if (!user) return;
-
+    
     const ano = dateObj.getUTCFullYear();
     const mes = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
     const dia = String(dateObj.getUTCDate()).padStart(2, '0');
@@ -802,7 +821,6 @@ export default function RecepcionElite() {
         });
 
       await cargarBloqueos();
-
       setModalAgendarOpen(false);
       mostrarNotificacion(
         "¡Reserva Agendada!",
@@ -1009,7 +1027,6 @@ export default function RecepcionElite() {
 
     try {
       setProcesando(true);
-
       const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
       const nuevoAbono = {
         id: `pay-pos-${Date.now()}`,
@@ -1428,31 +1445,58 @@ export default function RecepcionElite() {
     }
   }
 
-  function cancelarReserva(match) {
+    function cancelarReserva(match) {
     if (match.payment_status === "liquidado") {
       return mostrarNotificacion("Ticket Liquidado", "No se puede anular una reserva que ya fue liquidada e ingresada en las ventas oficiales.", "warning");
     }
 
     pedirConfirmacion(
       "Anular Reserva Completa",
-      `¿Deseas anular completamente la reserva de ${match.court?.name || "Pista"}? Se liberará la agenda y se removerán los registros asociados.`,
+      `¿Deseas anular completamente la reserva de ${match.court?.name || "Pista"}? Se liberará la agenda, se removerán los registros asociados y se registrará la devolución del abono.`,
       async () => {
         try {
           setProcesando(true);
 
+          // 1. REVERSIÓN DE PAGOS EN EL HISTORIAL (Para que el Cierre de Caja cuadre en el POS)
+          const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
+          const totalAbonado = historialActual
+            .filter((item) => item.status === "aprobado")
+            .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+
+          if (totalAbonado > 0) {
+            await supabase.from("sales").insert({
+              club_id: clubId,
+              cashier_id: user.id,
+              total_amount: -Math.abs(totalAbonado),
+              payment_method: "efectivo",
+              exchange_rate: tasaBCV,
+            });
+          }
+
+          // 2. BORRAR EL PARTIDO COMPLETAMENTE DE LA BD (Libera el unique_court_time)
           const { error: matchErr } = await supabase
             .from("matches")
-            .update({ status: "cancelado", payment_status: "cancelado" })
+            .delete()
             .eq("id", match.id);
 
           if (matchErr) throw matchErr;
 
+          // 3. LIMPIAR EL LOCK FANTASMA SIN IMPORTAR LA FECHA
+          // Al usar delete() solo con eq("court_id"), forzamos a Supabase a borrar CUALQUIER 
+          // bloqueo que haya quedado guindado en esa cancha específica (court_id), sin importar 
+          // el problema de los husos horarios del campo scheduled_at.
+          await supabase
+            .from("padel_locks")
+            .delete()
+            .eq("court_id", match.court_id);
+
+          // 4. LIMPIAR POSIBLES VENTAS PARCIALES EN TIENDA ASOCIADAS
           const clienteNom = obtenerNombreCliente(match);
           const { data: ventasCoincidentes } = await supabase
             .from("sales_items")
             .select("sale_id")
             .ilike("item_detail", `%${clienteNom}%`);
-
+            
           if (ventasCoincidentes && ventasCoincidentes.length > 0) {
             const saleIds = Array.from(new Set(ventasCoincidentes.map(v => v.sale_id)));
             await supabase.from("sales_items").delete().in("sale_id", saleIds);
@@ -1460,8 +1504,15 @@ export default function RecepcionElite() {
           }
 
           setModalDetalleMatch(false);
-          mostrarNotificacion("Reserva Anulada", "🚨 La reserva fue anulada y la pista ha quedado libre.", "info");
+          mostrarNotificacion(
+            "Reserva Anulada", 
+            `🚨 La reserva fue anulada, la pista ha quedado libre y se registró la devolución en caja.`, 
+            "info"
+          );
+          
+          await cargarBloqueos(); 
           await cargarPartidosPeriodo();
+
         } catch (err) {
           console.error(err);
           mostrarNotificacion("Error", "Error al anular la reserva.", "error");
@@ -1471,7 +1522,6 @@ export default function RecepcionElite() {
       }
     );
   }
-
   if (loading) {
     return <div className="flex h-screen items-center justify-center font-bold text-slate-500">Cargando Sistema POS...</div>;
   }
@@ -1565,6 +1615,22 @@ export default function RecepcionElite() {
                 </option>
               ))}
             </select>
+
+            {/* NUEVO BOTÓN TITILANTE DE ALERTA OCULTA */}
+            {alertaNuevaReserva && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCanchaFiltro("todas");
+                  setAlertaNuevaReserva(null);
+                }}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white shadow-md border border-rose-700 rounded-xl text-[11px] font-black animate-pulse flex items-center gap-2 cursor-pointer transition-colors"
+              >
+                <span>⚠️</span>
+                <span className="hidden sm:inline">¡Atención! Nueva reserva en {alertaNuevaReserva.deporte}</span>
+                <span className="sm:hidden">{alertaNuevaReserva.deporte}</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -1688,7 +1754,7 @@ export default function RecepcionElite() {
 
                             const slotFechaStr = `${dateObjSlot.getUTCFullYear()}-${String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObjSlot.getUTCDate()).padStart(2, '0')}`;
                             const promoSlot = promocionesPeriodo.find(p => p.start_date <= slotFechaStr && p.end_date >= slotFechaStr);
-
+                            
                             const ano = dateObjSlot.getUTCFullYear();
                             const mes = String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0');
                             const dia = String(dateObjSlot.getUTCDate()).padStart(2, '0');
@@ -2059,6 +2125,51 @@ export default function RecepcionElite() {
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
                 />
               </div>
+              
+              <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-3 mt-1">
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Tipo de Partido</label>
+                  <select
+                    value={formAgendarPOS.matchType}
+                    onChange={(e) => {
+                      const tipo = e.target.value;
+                      setFormAgendarPOS({ 
+                        ...formAgendarPOS, 
+                        matchType: tipo,
+                        cantidadJugadores: tipo === 'amistoso' ? 6 : 4 
+                      });
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D]"
+                  >
+                    <option value="privado">Privado (Estándar)</option>
+                    <option value="amistoso">Amistoso (Rotación)</option>
+                    <option value="ranking">Ranking Oficial</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">N° de Jugadores</label>
+                  <select
+                    value={formAgendarPOS.cantidadJugadores}
+                    onChange={(e) => setFormAgendarPOS({ ...formAgendarPOS, cantidadJugadores: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D]"
+                  >
+                    {formAgendarPOS.matchType === 'amistoso' ? (
+                      <>
+                        <option value={5}>5 Jugadores</option>
+                        <option value={6}>6 Jugadores (3 Duplas)</option>
+                        <option value={7}>7 Jugadores</option>
+                        <option value={8}>8 Jugadores</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value={2}>2 Jugadores (Singles)</option>
+                        <option value={4}>4 Jugadores (Dobles)</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+              </div>
 
               <div>
                 <div className="flex justify-between items-center mb-1.5">
@@ -2288,26 +2399,26 @@ export default function RecepcionElite() {
                           <p className="text-slate-900 font-black text-xs sm:text-sm">{matchSeleccionado.creator_profile?.telefono || "En sitio"}</p>
                         </div>
                       </div>
-
+                      
                       <button
-                        type="button"
-                        onClick={() => cancelarReserva(matchSeleccionado)}
-                        disabled={procesando || esLiquidadoOficial}
-                        className={`px-3 py-1.5 border font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2 cursor-pointer ${
-                          esLiquidadoOficial
-                            ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
-                            : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
-                        }`}
-                      >
-                        🚨 Anular Reserva
-                      </button>
+  type="button"
+  onClick={() => cancelarReserva(matchSeleccionado)}
+  disabled={procesando} // <-- QUITAMOS EL 'esLiquidadoOficial' para que SIEMPRE puedas anular
+  className={`px-3 py-1.5 border font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2 cursor-pointer ${
+    procesando
+      ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+      : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+  }`}
+>
+  Anular Reserva
+</button>
                     </div>
 
                     <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3 font-bold">
                       <p className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] border-b border-slate-800 pb-1">
-                        🧾 Desglose de Factura
+                        Desglose de Factura
                       </p>
-
+                      
                       <div className="space-y-2 text-xs border-b border-slate-800 pb-3">
                         <div className="flex justify-between items-start text-slate-300">
                           <span>Pista Completa:</span>
@@ -2330,18 +2441,16 @@ export default function RecepcionElite() {
                         {extrasAgrupados.length > 0 && (
                           <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
                             <span className="text-[10px] font-black uppercase text-amber-300 block">
-                              🛒 Consumos Tienda / Extras ({extrasAgrupados.reduce((s, x) => s + x.qty, 0)} items):
+                              Consumos Tienda ({extrasAgrupados.reduce((s, x) => s + x.qty, 0)} items)
                             </span>
                             {extrasAgrupados.map((item) => {
                               const subtotalUSD = item.price * item.qty;
                               const subtotalBs = subtotalUSD * tasaBCV;
                               return (
                                 <div key={item.id} className="flex justify-between items-start text-[11px] bg-slate-850 p-1.5 rounded-lg border border-slate-800">
-                                  <span className="text-slate-200">
-                                    • {item.name} <strong className="text-amber-400">x{item.qty}</strong>
-                                  </span>
+                                  <span className="text-slate-200">{item.name} <strong className="text-amber-400">x{item.qty}</strong></span>
                                   <div className="text-right">
-                                    <span className="text-amber-300 font-black block">+${subtotalUSD.toFixed(2)}</span>
+                                    <span className="text-amber-300 font-black block">${subtotalUSD.toFixed(2)}</span>
                                     <span className="text-[9px] text-slate-400 block">Bs. {subtotalBs.toFixed(2)}</span>
                                   </div>
                                 </div>
@@ -2353,13 +2462,12 @@ export default function RecepcionElite() {
 
                       <div className="grid grid-cols-2 gap-3 pt-1">
                         <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                          <span className="text-[9px] font-black uppercase text-slate-400 block">Total Factura:</span>
+                          <span className="text-[9px] font-black uppercase text-slate-400 block">Total Factura</span>
                           <p className="text-lg font-black text-white leading-none mt-1">${totalGranEsperado.toFixed(2)}</p>
                           <p className="text-[10px] font-bold text-slate-400 mt-0.5">Bs. {(totalGranEsperado * tasaBCV).toFixed(2)}</p>
                         </div>
-
                         <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                          <span className="text-[9px] font-black uppercase text-emerald-400 block">Total Abonado:</span>
+                          <span className="text-[9px] font-black uppercase text-emerald-400 block">Total Abonado</span>
                           <p className="text-lg font-black text-emerald-400 leading-none mt-1">${totalAbonadoAprobado.toFixed(2)}</p>
                           <p className="text-[10px] font-bold text-emerald-500/70 mt-0.5">Bs. {(totalAbonadoAprobado * tasaBCV).toFixed(2)}</p>
                         </div>
@@ -2368,9 +2476,7 @@ export default function RecepcionElite() {
                       {cambioDevolver > 0.05 ? (
                         <div className="p-3.5 rounded-2xl border bg-cyan-500/20 border-cyan-500/60 text-cyan-300 flex justify-between items-center shadow-inner">
                           <div>
-                            <span className="text-[10px] font-black uppercase tracking-wider block text-cyan-300">
-                              💵 DINERO A DEVOLVER / CAMBIO:
-                            </span>
+                            <span className="text-[10px] font-black uppercase tracking-wider block text-cyan-300">DINERO A DEVOLVER (CAMBIO)</span>
                             <span className="text-xs font-bold block opacity-90 mt-0.5 text-cyan-200">
                               Bs. {(cambioDevolver * tasaBCV).toFixed(2)} VES
                             </span>
@@ -2381,12 +2487,14 @@ export default function RecepcionElite() {
                         </div>
                       ) : (
                         <div className={`p-3.5 rounded-2xl border flex justify-between items-center transition-all ${
-                          pendientePorCobrar > 0.05 
-                            ? "bg-amber-500/20 border-amber-500/60 text-amber-300" 
+                          pendientePorCobrar > 0.05
+                            ? "bg-amber-500/20 border-amber-500/60 text-amber-300"
                             : "bg-emerald-500/20 border-emerald-500/60 text-emerald-400"
                         }`}>
                           <div>
-                            <span className="text-[10px] font-black uppercase tracking-wider block">🔥 SALDO RESTANTE A COBRAR:</span>
+                            <span className="text-[10px] font-black uppercase tracking-wider block">
+                              SALDO RESTANTE A COBRAR
+                            </span>
                             <span className="text-xs font-bold block opacity-90 mt-0.5">Bs. {(pendientePorCobrar * tasaBCV).toFixed(2)} VES</span>
                           </div>
                           <div className="text-right">
@@ -2395,20 +2503,15 @@ export default function RecepcionElite() {
                         </div>
                       )}
                     </div>
-                  </div>
 
-                  <div className="lg:col-span-6 space-y-4">
                     <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
                       <button
-                        type="button"
                         onClick={() => setHistorialAbierto(!historialAbierto)}
                         className="w-full p-3.5 flex justify-between items-center bg-slate-100/80 hover:bg-slate-200/70 transition-colors text-left cursor-pointer"
                       >
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-slate-500">{historialAbierto ? "▼" : "▶"}</span>
-                          <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
-                            📜 Historial de Pagos ({historialAbonos.length})
-                          </h4>
+                          <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">Historial de Pagos ({historialAbonos.length})</h4>
                         </div>
                         <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200">
                           Aprobado: ${totalAbonadoAprobado.toFixed(2)}
@@ -2439,11 +2542,12 @@ export default function RecepcionElite() {
                                         Ref: <strong className="text-slate-800">{ab.reference || "S/R"}</strong>
                                       </p>
                                     </div>
-
                                     <div className="flex items-center gap-2 shrink-0">
                                       <div className="text-right">
-                                        <span className={`text-xs font-black block leading-none ${amountUsd < 0 ? "text-cyan-600" : esAprobado ? "text-emerald-700" : "text-amber-600"}`}>
-                                          {amountUsd < 0 ? `-$${Math.abs(amountUsd).toFixed(2)}` : `$${amountUsd.toFixed(2)}`}
+                                        <span className={`text-xs font-black block leading-none ${
+                                          amountUsd < 0 ? "text-cyan-600" : (esAprobado ? "text-emerald-700" : "text-amber-600")
+                                        }`}>
+                                          ${amountUsd < 0 ? `-Math.abs(amountUsd).toFixed(2)` : amountUsd.toFixed(2)}
                                         </span>
                                         <span className="text-[9px] font-bold text-slate-400 block mt-0.5">
                                           Bs. {amountBs.toFixed(2)}
@@ -2457,7 +2561,7 @@ export default function RecepcionElite() {
                                           disabled={procesando}
                                           className="bg-emerald-500 hover:bg-emerald-600 text-white text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg transition-colors shadow-sm cursor-pointer"
                                         >
-                                          ✓ Aprobar
+                                          Aprobar
                                         </button>
                                       )}
 
@@ -2484,14 +2588,13 @@ export default function RecepcionElite() {
                     {!esLiquidadoOficial && (
                       <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
                         <button
-                          type="button"
                           onClick={() => setCobroAbierto(!cobroAbierto)}
                           className="w-full p-3.5 flex justify-between items-center bg-slate-100/80 hover:bg-slate-200/70 transition-colors text-left cursor-pointer"
                         >
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-slate-500">{cobroAbierto ? "▼" : "▶"}</span>
                             <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
-                              💳 Registrar Cobro de Saldo en Sitio
+                              Registrar Cobro de Saldo en Sitio
                             </h4>
                           </div>
                           {pendientePorCobrar > 0.05 && (
@@ -2503,11 +2606,24 @@ export default function RecepcionElite() {
 
                         {cobroAbierto && (
                           <div className="p-3.5 sm:p-4 border-t border-slate-200 space-y-3 bg-white">
+                            
                             <div className="flex justify-between items-center">
-                              <p className="text-[10px] font-black uppercase text-slate-500">Moneda de Pago:</p>
+                              <p className="text-[10px] font-black uppercase text-slate-500">Moneda de Pago</p>
                               <div className="flex items-center bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
-                                <button type="button" onClick={() => setMonedaCobroPOS("USD")} className={`px-2 py-0.5 rounded-lg cursor-pointer ${monedaCobroPOS === "USD" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}>$ USD</button>
-                                <button type="button" onClick={() => setMonedaCobroPOS("VES")} className={`px-2 py-0.5 rounded-lg cursor-pointer ${monedaCobroPOS === "VES" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}>Bs. VES</button>
+                                <button
+                                  type="button"
+                                  onClick={() => setMonedaCobroPOS("USD")}
+                                  className={`px-2 py-0.5 rounded-lg cursor-pointer ${monedaCobroPOS === "USD" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}
+                                >
+                                  $ USD
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setMonedaCobroPOS("VES")}
+                                  className={`px-2 py-0.5 rounded-lg cursor-pointer ${monedaCobroPOS === "VES" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}
+                                >
+                                  Bs. VES
+                                </button>
                               </div>
                             </div>
 
@@ -2535,7 +2651,7 @@ export default function RecepcionElite() {
                               <input
                                 type="number"
                                 step="0.01"
-                                placeholder={`$${pendientePorCobrar.toFixed(2)}`}
+                                placeholder={pendientePorCobrar.toFixed(2)}
                                 value={montoAbonoManualPOS}
                                 onChange={(e) => setMontoAbonoManualPOS(e.target.value)}
                                 className="flex-1 bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold outline-none"
@@ -2545,7 +2661,7 @@ export default function RecepcionElite() {
                                 disabled={procesando}
                                 className="px-4 py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shrink-0 hover:bg-slate-800 transition-colors cursor-pointer"
                               >
-                                + Registrar
+                                Registrar
                               </button>
                             </div>
 
@@ -2556,7 +2672,7 @@ export default function RecepcionElite() {
                                 disabled={procesando}
                                 className="w-full py-2.5 bg-cyan-600 text-white font-black text-xs uppercase rounded-xl shadow-sm hover:bg-cyan-700 transition-colors cursor-pointer"
                               >
-                                💵 Entregar y Registrar Cambio (${cambioDevolver.toFixed(2)} USD)
+                                Entregar y Registrar Cambio (${cambioDevolver.toFixed(2)} USD)
                               </button>
                             )}
 
@@ -2588,155 +2704,161 @@ export default function RecepcionElite() {
                                 </span>
                               </div>
                             )}
+
                           </div>
                         )}
                       </div>
                     )}
+                  </div>
 
-                    {/* 3. CONSUMOS EXTRA EN SLIDER */}
-                    <div className="border-t border-slate-200 pt-3 space-y-3">
-                      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">🛒 Consumos Extra</h4>
-                          <span className="text-xs font-black text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border">
-                            ${totalExtras.toFixed(2)} (Bs. {(totalExtras * tasaBCV).toFixed(2)})
-                          </span>
+                  {/* 3. CONSUMOS EXTRA EN SLIDER */}
+                  <div className="lg:col-span-6 space-y-4">
+                    <div className="bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+                      
+                      <div className="p-3.5 sm:p-4 bg-white border-b border-slate-200 space-y-3">
+                        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xl">🏪</span>
+                            <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                              Consumos Extra
+                            </h4>
+                          </div>
+                          
+                          <div className="relative w-full sm:w-48">
+                            <input
+                              type="text"
+                              placeholder="🔍 Buscar artículo..."
+                              value={busquedaProducto}
+                              onChange={(e) => setBusquedaProducto(e.target.value)}
+                              disabled={esLiquidadoOficial}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1 text-xs font-bold outline-none focus:border-blue-500 disabled:opacity-50"
+                            />
+                          </div>
                         </div>
-                        
-                        <div className="relative w-full sm:w-48">
-                          <input
-                            type="text"
-                            placeholder="🔍 Buscar artículo..."
-                            value={busquedaProducto}
-                            onChange={(e) => setBusquedaProducto(e.target.value)}
-                            disabled={esLiquidadoOficial}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1 text-xs font-bold outline-none focus:border-blue-500 disabled:opacity-50"
-                          />
-                        </div>
+
+                        {esLiquidadoOficial && (
+                          <p className="text-[10px] font-bold text-amber-600 bg-amber-50 p-2 rounded-xl border border-amber-200">
+                            🔒 Ticket Liquidado - No es posible modificar consumos en facturas cerradas.
+                          </p>
+                        )}
                       </div>
 
-                      {esLiquidadoOficial && (
-                        <p className="text-[10px] font-bold text-amber-600 bg-amber-50 p-2 rounded-xl border border-amber-200">
-                          🔒 Ticket Liquidado - No es posible modificar consumos en facturas cerradas.
-                        </p>
-                      )}
+                      <div className="flex gap-3 overflow-x-auto pb-3 pt-1 px-1 bg-slate-50 rounded-2xl border border-slate-200 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                        
+                        <div className={`flex gap-3 px-3 py-2 ${esLiquidadoOficial ? "opacity-60 pointer-events-none" : ""}`}>
+                          {productosFiltrados.length === 0 ? (
+                            <p className="text-xs text-slate-400 font-bold p-3">No se encontraron productos.</p>
+                          ) : (
+                            productosFiltrados.map((prod) => {
+                              const qty = extras.filter((ex) => String(ex.id) === String(prod.id)).length;
+                              const pPrice = parseFloat(prod.price) || 0;
+                              const stockDisponible = prod.is_rental ? 999999 : (parseInt(prod.stock, 10) || 0);
+                              
+                              const alcanzadoLimiteStock = !prod.is_rental && qty >= stockDisponible;
+                              const sinStock = !prod.is_rental && stockDisponible <= 0;
 
-                      <div className={`flex gap-3 overflow-x-auto pb-3 pt-1 px-1 bg-slate-50 rounded-2xl border border-slate-200 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden ${
-                        esLiquidadoOficial ? "opacity-60 pointer-events-none" : ""
-                      }`}>
-                        {productosFiltrados.length === 0 ? (
-                          <p className="text-xs text-slate-400 font-bold p-3">No se encontraron productos.</p>
-                        ) : (
-                          productosFiltrados.map((prod) => {
-                            const qty = extras.filter((ex) => String(ex.id) === String(prod.id)).length;
-                            const pPrice = parseFloat(prod.price) || 0;
-                            const stockDisponible = prod.is_rental ? 999999 : (parseInt(prod.stock, 10) || 0);
-                            const alcanzadoLimiteStock = !prod.is_rental && qty >= stockDisponible;
-                            const sinStock = !prod.is_rental && stockDisponible <= 0;
-
-                            return (
-                              <div key={prod.id} className={`shrink-0 w-44 p-3 rounded-2xl border flex flex-col justify-between shadow-xs transition-all ${
-                                qty > 0 ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"
-                              }`}>
-                                <div>
-                                  <div className="flex justify-between items-center mb-0.5">
-                                    <span className="text-[9px] font-black uppercase text-blue-500 truncate">{prod.brand || "Tienda"}</span>
-                                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.2 rounded ${
-                                      prod.is_rental 
-                                        ? "bg-purple-100 text-purple-700" 
-                                        : sinStock 
-                                          ? "bg-rose-100 text-rose-700" 
-                                          : "bg-slate-100 text-slate-600"
-                                    }`}>
-                                      {prod.is_rental ? "Ilimitado" : `Stock: ${stockDisponible}`}
-                                    </span>
+                              return (
+                                <div
+                                  key={prod.id}
+                                  className={`shrink-0 w-44 p-3 rounded-2xl border flex flex-col justify-between shadow-xs transition-all ${
+                                    qty > 0 ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"
+                                  }`}
+                                >
+                                  <div>
+                                    <div className="flex justify-between items-center mb-0.5">
+                                      <span className="text-[9px] font-black uppercase text-blue-500 truncate">{prod.brand || "Tienda"}</span>
+                                      <span className={`text-[8px] font-black uppercase px-1.5 py-0.2 rounded ${
+                                        prod.is_rental ? "bg-purple-100 text-purple-700" : (sinStock ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600")
+                                      }`}>
+                                        {prod.is_rental ? "Ilimitado" : (sinStock ? "Agotado" : `Stock: ${stockDisponible}`)}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs font-black text-slate-900 truncate" title={prod.name}>{prod.name}</p>
                                   </div>
-
-                                  <p className="text-xs font-black text-slate-900 truncate" title={prod.name}>{prod.name}</p>
+                                  
                                   <div className="mt-0.5">
                                     <span className="text-[11px] font-black text-slate-900 block">${pPrice.toFixed(2)}</span>
                                     <span className="text-[9px] font-bold text-slate-400 block">Bs. {(pPrice * tasaBCV).toFixed(2)}</span>
                                   </div>
-                                </div>
 
-                                <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
-                                  {qty > 0 ? (
-                                    <div className="flex items-center justify-between w-full">
-                                      <button 
-                                        type="button" 
-                                        onClick={() => quitarUnExtraSilencioso(matchSeleccionado, prod.id)} 
-                                        disabled={esLiquidadoOficial}
-                                        className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-black text-xs flex items-center justify-center hover:bg-rose-200 transition-colors disabled:opacity-40 cursor-pointer"
-                                      >
-                                        -
-                                      </button>
-                                      <span className="text-xs font-black">{qty} und</span>
-                                      <button 
-                                        type="button" 
-                                        onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)} 
-                                        disabled={esLiquidadoOficial || alcanzadoLimiteStock}
-                                        className={`w-7 h-7 rounded-lg font-black text-xs flex items-center justify-center transition-colors cursor-pointer ${
-                                          (esLiquidadoOficial || alcanzadoLimiteStock)
-                                            ? "bg-slate-200 text-slate-400 cursor-not-allowed" 
-                                            : "bg-emerald-600 text-white hover:bg-emerald-700"
+                                  <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
+                                    {qty > 0 ? (
+                                      <div className="flex items-center justify-between w-full">
+                                        <button
+                                          type="button"
+                                          onClick={() => quitarUnExtraSilencioso(matchSeleccionado, prod.id)}
+                                          disabled={esLiquidadoOficial}
+                                          className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-black text-xs flex items-center justify-center hover:bg-rose-200 transition-colors disabled:opacity-40 cursor-pointer"
+                                        >
+                                          -
+                                        </button>
+                                        <span className="text-xs font-black">{qty} und</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)}
+                                          disabled={esLiquidadoOficial || alcanzadoLimiteStock}
+                                          className={`w-7 h-7 rounded-lg font-black text-xs flex items-center justify-center transition-colors cursor-pointer ${
+                                            esLiquidadoOficial || alcanzadoLimiteStock
+                                              ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                                              : "bg-slate-900 text-[#00FF9D] hover:bg-slate-800"
+                                          }`}
+                                        >
+                                          +
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)}
+                                        disabled={esLiquidadoOficial || sinStock || alcanzadoLimiteStock}
+                                        className={`w-full py-1.5 rounded-xl font-black text-[10px] uppercase transition-colors cursor-pointer ${
+                                          esLiquidadoOficial || sinStock || alcanzadoLimiteStock
+                                            ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                                            : "bg-slate-900 text-[#00FF9D] hover:bg-slate-800"
                                         }`}
                                       >
-                                        +
+                                        {sinStock ? "Agotado" : "+ Añadir"}
                                       </button>
-                                    </div>
-                                  ) : (
-                                    <button 
-                                      type="button" 
-                                      onClick={() => agregarUnExtraSilencioso(matchSeleccionado, prod)} 
-                                      disabled={esLiquidadoOficial || sinStock || alcanzadoLimiteStock}
-                                      className={`w-full py-1.5 rounded-xl font-black text-[10px] uppercase transition-colors cursor-pointer ${
-                                        (esLiquidadoOficial || sinStock || alcanzadoLimiteStock)
-                                          ? "bg-slate-200 text-slate-400 cursor-not-allowed" 
-                                          : "bg-slate-900 text-[#00FF9D] hover:bg-slate-800"
-                                      }`}
-                                    >
-                                      {sinStock ? "Agotado" : "+ Añadir"}
-                                    </button>
-                                  )}
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            );
-                          })
-                        )}
+                              );
+                            })
+                          )}
+                        </div>
                       </div>
-                    </div>
 
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex gap-2 pt-2 border-t">
-                  <button 
-                    onClick={solicitarCerrarModalDetalle} 
-                    disabled={procesando} 
+                <div className="flex gap-2 pt-2 border-t border-slate-200">
+                  <button
+                    onClick={solicitarCerrarModalDetalle}
+                    disabled={procesando}
                     className="w-1/3 py-3.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-2xl hover:bg-slate-200 transition-colors cursor-pointer"
                   >
-                    🚪 Salir / Cerrar
+                    Salir (Cerrar)
                   </button>
-                  
-                  <button 
-                    onClick={() => cerrarTicketYLiquidarReserva(matchSeleccionado)} 
-                    disabled={procesando || esLiquidadoOficial || pendientePorCobrar > 0.05} 
+
+                  <button
+                    onClick={() => cerrarTicketYLiquidarReserva(matchSeleccionado)}
+                    disabled={procesando || esLiquidadoOficial || pendientePorCobrar > 0.05}
                     className={`w-2/3 py-3.5 text-white font-black text-xs uppercase rounded-2xl shadow-md transition-all cursor-pointer ${
                       esLiquidadoOficial 
-                        ? "bg-slate-400 cursor-not-allowed" 
+                        ? "bg-slate-400 cursor-not-allowed"
                         : pendientePorCobrar > 0.05
                           ? "bg-slate-300 text-slate-500 cursor-not-allowed border border-slate-300"
                           : "bg-emerald-600 hover:bg-emerald-700 active:scale-98"
                     }`}
                   >
                     {esLiquidadoOficial 
-                      ? "✅ Ticket Ya Liquidado" 
+                      ? "🔒 Ticket Ya Liquidado" 
                       : pendientePorCobrar > 0.05
-                        ? `⚠️ Falta Cobrar $${pendientePorCobrar.toFixed(2)} USD`
-                        : "🔒 Liquidar Reserva"}
+                        ? `Falta Cobrar $${pendientePorCobrar.toFixed(2)} USD`
+                        : "✅ Liquidar Reserva"}
                   </button>
                 </div>
-
               </div>
             </div>
           );
@@ -2750,7 +2872,12 @@ export default function RecepcionElite() {
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-3 text-center">
             <h3 className="text-base font-black text-slate-900">{popupNotif.title}</h3>
             <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
-            <button onClick={() => setPopupNotif({ ...popupNotif, open: false })} className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl cursor-pointer">Entendido</button>
+            <button
+              onClick={() => setPopupNotif({ ...popupNotif, open: false })}
+              className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl cursor-pointer"
+            >
+              Entendido
+            </button>
           </div>
         </div>,
         document.body
@@ -2760,7 +2887,7 @@ export default function RecepcionElite() {
       {mounted && modalConfirm.open && createPortal(
         <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4 text-center">
-            <span className="text-3xl block">🚨</span>
+            <span className="text-3xl block">⚠️</span>
             <h3 className="text-base font-black text-slate-900">{modalConfirm.title}</h3>
             <p className="text-xs font-bold text-slate-600">{modalConfirm.message}</p>
             <div className="flex gap-2 pt-1">
@@ -2792,26 +2919,26 @@ export default function RecepcionElite() {
       {mounted && modalConfirmCambios && createPortal(
         <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4 text-center">
-            <span className="text-3xl block">⚠️</span>
+            <span className="text-3xl block">💾</span>
             <h3 className="text-base font-black text-slate-900">¿Guardar cambios en la reserva?</h3>
             <p className="text-xs font-bold text-slate-600">
               Has modificado los consumos extra de la reserva. ¿Deseas conservar los cambios realizados o descartarlos?
             </p>
             <div className="flex flex-col gap-2 pt-1">
-              <button 
-                onClick={guardarCambiosExtras} 
+              <button
+                onClick={guardarCambiosExtras}
                 className="w-full py-3 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shadow-md cursor-pointer"
               >
-                💾 Conservar Cambios
+                ✓ Conservar Cambios
               </button>
-              <button 
-                onClick={descartarCambiosExtras} 
+              <button
+                onClick={descartarCambiosExtras}
                 className="w-full py-2.5 bg-rose-50 text-rose-700 border border-rose-200 font-black text-xs uppercase rounded-xl cursor-pointer"
               >
-                🗑️ Descartar Cambios
+                ✕ Descartar Cambios
               </button>
-              <button 
-                onClick={() => setModalConfirmCambios(false)} 
+              <button
+                onClick={() => setModalConfirmCambios(false)}
                 className="w-full py-2 text-slate-400 font-extrabold text-[11px] uppercase hover:underline cursor-pointer"
               >
                 Continuar editando
@@ -2831,7 +2958,7 @@ export default function RecepcionElite() {
               onClick={() => setImagenEngrande(null)}
               className="absolute -top-10 right-0 text-white font-black text-sm bg-slate-800 px-3 py-1 rounded-full border border-slate-700 hover:bg-slate-700 transition-colors cursor-pointer"
             >
-              ✕ Cerrar Vista
+              Cerrar Vista
             </button>
             <img src={imagenEngrande} alt="Comprobante Ampliado" className="max-h-[80vh] w-auto object-contain rounded-2xl shadow-2xl border border-slate-800" />
           </div>

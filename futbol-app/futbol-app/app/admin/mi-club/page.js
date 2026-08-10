@@ -452,6 +452,23 @@ export default function MiClubConfigPage() {
                 <option value="Otra">Otra</option>
               </select>
             </div>
+            
+            {/* NUEVO CAMPO: DURACIÓN DE LOS BLOQUES */}
+            <div>
+              <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
+                Duración de los Turnos (Bloques)
+              </label>
+              <select
+                value={formClub.slot_duration_minutes}
+                onChange={(e) => setFormClub({ ...formClub, slot_duration_minutes: Number(e.target.value) })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+              >
+                <option value={30}>30 minutos</option>
+                <option value={60}>60 minutos (1 hora)</option>
+                <option value={90}>90 minutos (1.5 horas)</option>
+                <option value={120}>120 minutos (2 horas)</option>
+              </select>
+            </div>
 
             <div className="md:col-span-2">
               <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Dirección Detallada</label>

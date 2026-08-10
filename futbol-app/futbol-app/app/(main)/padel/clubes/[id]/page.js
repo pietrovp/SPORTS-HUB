@@ -36,32 +36,35 @@ export default function PublicClubDetailPage() {
   const [club, setClub] = useState(null);
   const [canchas, setCanchas] = useState([]);
   const [partidosClub, setPartidosClub] = useState([]);
-  const [bloqueosActivos, setBloqueosActivos] = useState([]); 
+  const [bloqueosActivos, setBloqueosActivos] = useState([]);
 
   // Tasa BCV Oficial
   const [tasaBCV, setTasaBCV] = useState(36.65);
 
   const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
-  const [promocionHoy, setPromocionHoy] = useState(null); 
+  const [promocionHoy, setPromocionHoy] = useState(null);
+
   const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
 
   const [modalReservaOpen, setModalReservaOpen] = useState(false);
   const [pasoModal, setPasoModal] = useState(1);
   const [bloqueSeleccionado, setBloqueSeleccionado] = useState(null);
   const [procesandoReserva, setProcesandoReserva] = useState(false);
-  
   const [tiempoRestante, setTiempoRestante] = useState(null);
+
+  // NUEVOS ESTADOS DE RESERVA
+  const [tipoReserva, setTipoReserva] = useState("privado");
+  const [cantidadJugadores, setCantidadJugadores] = useState(4);
   
-  const [tipoReserva, setTipoReserva] = useState("abierto");
-  const [modoCompetitivo, setModoCompetitivo] = useState(true);
   const [metodoPago, setMetodoPago] = useState("pago_movil");
-  const [monedaAbono, setMonedaAbono] = useState("USD"); 
+  const [monedaAbono, setMonedaAbono] = useState("USD");
   const [montoAbono, setMontoAbono] = useState("");
   const [numReferencia, setNumReferencia] = useState("");
   const [previewComprobante, setPreviewComprobante] = useState("");
 
   const [modalMiReservaOpen, setModalMiReservaOpen] = useState(false);
   const [matchMiReservaSel, setMatchMiReservaSel] = useState(null);
+
   const [formPagoExtra, setFormPagoExtra] = useState({
     monto: "",
     metodoPago: "pago_movil",
@@ -77,7 +80,7 @@ export default function PublicClubDetailPage() {
     } else {
       setLoading(false);
     }
-  }, [clubId]); 
+  }, [clubId]);
 
   async function cargarDatosIniciales() {
     setLoading(true);
@@ -87,7 +90,7 @@ export default function PublicClubDetailPage() {
         cargarDetalleClub()
       ]);
     } catch (e) {
-      console.error("Error en carga inicial:", e);
+      console.error("Error en carga inicial", e);
     } finally {
       setLoading(false);
     }
@@ -99,19 +102,23 @@ export default function PublicClubDetailPage() {
     }
   }, [fechaSeleccionada, clubId, mounted, loading]);
 
-  useEffect(() => {
+   useEffect(() => {
     if (!clubId || !supabase) return;
 
-    cargarBloqueos(); 
+    cargarBloqueos();
 
     const channel = supabase
-      .channel("realtime-locks")
+      .channel("realtime-app-cliente")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "padel_locks" },
-        () => {
-          cargarBloqueos();
-        }
+        () => cargarBloqueos()
+      )
+      .on(
+        "postgres_changes",
+        // OJO: Si tu tabla se llama "padel_matches", cámbialo a "padel_matches"
+        { event: "UPDATE", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` },
+        () => cargarDetalleClub() // Si hay una cancelación, recarga la grilla del jugador
       )
       .subscribe();
 
@@ -119,15 +126,16 @@ export default function PublicClubDetailPage() {
       supabase.removeChannel(channel);
     };
   }, [clubId]);
-
   useEffect(() => {
     let intervalo;
-    if (modalReservaOpen && tiempoRestante !== null && tiempoRestante > 0) {
-      intervalo = setInterval(() => {
-        setTiempoRestante((prev) => prev - 1);
-      }, 1000);
-    } else if (tiempoRestante === 0 && modalReservaOpen) {
-      cerrarModalPorTiempoAgotado();
+    if (modalReservaOpen && tiempoRestante !== null) {
+      if (tiempoRestante > 0) {
+        intervalo = setInterval(() => {
+          setTiempoRestante((prev) => prev - 1);
+        }, 1000);
+      } else if (tiempoRestante === 0 && modalReservaOpen) {
+        cerrarModalPorTiempoAgotado();
+      }
     }
     return () => clearInterval(intervalo);
   }, [tiempoRestante, modalReservaOpen]);
@@ -143,7 +151,6 @@ export default function PublicClubDetailPage() {
         const data = await res.json();
         if (data.usdRate) return setTasaBCV(parseFloat(data.usdRate));
       }
-      
       const resFallback = await fetch("https://ve.dolarapi.com/v1/dolares/oficial");
       if (resFallback.ok) {
         const dataFallback = await resFallback.json();
@@ -161,7 +168,6 @@ export default function PublicClubDetailPage() {
         .from("padel_locks")
         .select("*")
         .gt("expires_at", ahoraISO); 
-      
       setBloqueosActivos(data || []);
     } catch (error) {
       console.error("Error cargando bloqueos:", error);
@@ -172,11 +178,11 @@ export default function PublicClubDetailPage() {
     setModalReservaOpen(false);
     setTiempoRestante(null);
     mostrarNotificacion(
-      "⏳ Tiempo Expirado", 
+      "⏱️ Tiempo Expirado", 
       "Han pasado los 10 minutos. La pista ha sido liberada para otros usuarios.", 
       "warning"
     );
-    
+
     if (bloqueSeleccionado && user) {
       const d = bloqueSeleccionado.dateObj;
       const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
@@ -189,7 +195,7 @@ export default function PublicClubDetailPage() {
           scheduled_at: fechaFija,
           user_id: user.id
         });
-
+      
       await cargarBloqueos();
     }
   };
@@ -197,7 +203,7 @@ export default function PublicClubDetailPage() {
   const cerrarModalManual = async () => {
     setModalReservaOpen(false);
     setTiempoRestante(null);
-    
+
     if (bloqueSeleccionado && user) {
       const d = bloqueSeleccionado.dateObj;
       const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
@@ -218,10 +224,10 @@ export default function PublicClubDetailPage() {
   async function cargarPromocionDelDia() {
     try {
       const ano = fechaSeleccionada.getFullYear();
-      const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
-      const dia = String(fechaSeleccionada.getDate()).padStart(2, '0');
+      const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, "0");
+      const dia = String(fechaSeleccionada.getDate()).padStart(2, "0");
       const hoyStr = `${ano}-${mes}-${dia}`;
-      
+
       const { data: promoActiva } = await supabase
         .from("padel_promotions")
         .select("*")
@@ -229,7 +235,7 @@ export default function PublicClubDetailPage() {
         .lte("start_date", hoyStr)
         .gte("end_date", hoyStr)
         .maybeSingle();
-        
+
       setPromocionHoy(promoActiva || null);
     } catch (e) {
       console.error("Error buscando promo:", e);
@@ -242,7 +248,6 @@ export default function PublicClubDetailPage() {
       
       if (session && session.user) {
         setUser(session.user);
-        
         try {
           const { data: padelProf } = await supabase
             .from("padel_profiles")
@@ -251,7 +256,7 @@ export default function PublicClubDetailPage() {
             .maybeSingle();
           setUserPadelProfile(padelProf || null);
         } catch (e) {
-          console.warn("No se pudo cargar el perfil de padel del usuario (Opcional)", e);
+          console.warn("No se pudo cargar el perfil de padel del usuario (Opcional):", e);
         }
       } else {
         setUser(null);
@@ -267,9 +272,8 @@ export default function PublicClubDetailPage() {
       if (cErr || !clubData) {
         console.error("Club no encontrado en BD.");
         setClub(null);
-        return; 
+        return;
       }
-      
       setClub(clubData);
 
       const { data: courtsData } = await supabase
@@ -279,10 +283,7 @@ export default function PublicClubDetailPage() {
         .eq("is_active", true)
         .order("court_number", { ascending: true });
 
-      const canchasPadel = (courtsData || []).filter(
-        (c) => c.sport_type === "padel" || !c.sport_type
-      );
-
+      const canchasPadel = (courtsData || []).filter(c => c.sport_type === 'padel' || !c.sport_type);
       setCanchas(canchasPadel);
 
       const { data: matchesData } = await supabase
@@ -301,16 +302,16 @@ export default function PublicClubDetailPage() {
           .in("match_id", matchIds);
 
         const allUserIds = Array.from(new Set((playersData || []).map((p) => p.user_id).filter(Boolean)));
-
+        
         let profilesMap = {};
         let padelProfilesMap = {};
 
         if (allUserIds.length > 0) {
-          const [{ data: profsData }, { data: padelProfsData }] = await Promise.all([
+          const [ { data: profsData }, { data: padelProfsData } ] = await Promise.all([
             supabase.from("profiles").select("id, nombre, apellido, avatar_url, telefono").in("id", allUserIds),
             supabase.from("padel_profiles").select("cuenta_id, rating, categoria_oficial").in("cuenta_id", allUserIds),
           ]);
-
+          
           (profsData || []).forEach((p) => { profilesMap[p.id] = p; });
           (padelProfsData || []).forEach((pp) => { padelProfilesMap[pp.cuenta_id] = pp; });
         }
@@ -379,6 +380,7 @@ export default function PublicClubDetailPage() {
   const bloquesHorarios = useMemo(() => {
     if (!club) return [];
     const duracion = club.slot_duration_minutes || 60;
+    
     const horaApertura = parseInt((club.open_time || "07:00:00").split(":")[0], 10);
     const horaCierre = parseInt((club.close_time || "23:00:00").split(":")[0], 10);
 
@@ -389,15 +391,18 @@ export default function PublicClubDetailPage() {
     const end = new Date(fechaSeleccionada);
     end.setHours(horaCierre, 0, 0, 0);
 
-    while (cur <= end) {
+    while (cur < end || (cur.getHours() === horaCierre && cur.getMinutes() === 0)) {
       if (cur.getHours() === horaCierre && cur.getMinutes() > 0) break;
+
       const hStr = cur.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: true });
+      
       bloques.push({
         etiqueta: hStr,
         horaInt: cur.getHours(),
         minutosInt: cur.getMinutes(),
         dateObj: new Date(cur),
       });
+
       cur.setMinutes(cur.getMinutes() + duracion);
     }
     return bloques;
@@ -412,8 +417,8 @@ export default function PublicClubDetailPage() {
 
     const d = bloque.dateObj;
     const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
-
-    const lockExistente = bloqueosActivos.find(l => {
+    
+    const lockExistente = bloqueosActivos.find((l) => {
       if (l.court_id !== cancha.id) return false;
       const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
       return fechaLockStr === fechaFija.substring(0, 16);
@@ -428,10 +433,9 @@ export default function PublicClubDetailPage() {
     }
 
     try {
-      setProcesandoReserva(true); 
+      setProcesandoReserva(true);
       
       const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); 
-      
       const { error: lockErr } = await supabase
         .from("padel_locks")
         .upsert({
@@ -448,24 +452,26 @@ export default function PublicClubDetailPage() {
       }
 
       await cargarBloqueos();
-
-      setTiempoRestante(600); 
+      setTiempoRestante(600);
 
       const precioBaseTotal = precioCalculado || cancha.price_normal || 16;
-      const precioBaseInd = precioBaseTotal / 4;
-
+      
       setBloqueSeleccionado({
         cancha,
         dateObj: bloque.dateObj,
         horaLabel: bloque.etiqueta,
-        precioBaseTotal,
-        precioBaseInd,
+        precioBaseTotal: precioBaseTotal,
       });
 
-      setTipoReserva("abierto");
+      // RESTABLECER ESTADOS AL ABRIR
+      setTipoReserva("privado");
+      setCantidadJugadores(4);
       setMetodoPago("pago_movil");
       setMonedaAbono("USD");
-      setMontoAbono((precioBaseInd * 1.10).toFixed(2));
+      
+      const valUSD = precioBaseTotal * 1.10;
+      setMontoAbono(valUSD.toFixed(2));
+      
       setNumReferencia("");
       setPreviewComprobante("");
       setPasoModal(1);
@@ -477,14 +483,6 @@ export default function PublicClubDetailPage() {
     } finally {
       setProcesandoReserva(false);
     }
-  };
-
-  const handleCambioTipoReserva = (tipo) => {
-    setTipoReserva(tipo);
-    if (!bloqueSeleccionado) return;
-    const base = tipo === "privado" ? bloqueSeleccionado.precioBaseTotal : bloqueSeleccionado.precioBaseInd;
-    const totalUSD = base * 1.10;
-    setMontoAbono(monedaAbono === "USD" ? totalUSD.toFixed(2) : (totalUSD * tasaBCV).toFixed(2));
   };
 
   const handleSeleccionarImagen = (e, setPreview) => {
@@ -503,12 +501,20 @@ export default function PublicClubDetailPage() {
   };
 
   const calculosPrecio = useMemo(() => {
-    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0 };
-    const base = tipoReserva === "privado" ? bloqueSeleccionado.precioBaseTotal : bloqueSeleccionado.precioBaseInd;
-    const fee = base * 0.10;
-    const totalSug = base + fee;
-    return { base, fee, totalSug };
-  }, [bloqueSeleccionado, tipoReserva]);
+    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0 };
+    
+    // Si la pista vale $20, el precioBaseTotal siempre es 20
+    const baseTotal = bloqueSeleccionado.precioBaseTotal; 
+    const fee = baseTotal * 0.10;
+    
+    // Calculamos en cuánto le sale a CADA UNO dependiendo de cuántos sean
+    const baseInd = baseTotal / cantidadJugadores;
+    
+    // Si es Privado (pagan toda la pista junta). Si es Abierto/Amistoso (sugerimos pagar su parte).
+    const totalSug = tipoReserva === "privado" ? (baseTotal + fee) : (baseInd + (fee / cantidadJugadores));
+    
+    return { base: baseTotal, fee, totalSug, precioIndividual: baseInd };
+  }, [bloqueSeleccionado, tipoReserva, cantidadJugadores]);
 
   const cambiarMonedaAbono = (nuevaMoneda) => {
     if (nuevaMoneda === monedaAbono) return;
@@ -537,7 +543,6 @@ export default function PublicClubDetailPage() {
     }
 
     const montoUSD = monedaAbono === "VES" ? valIngresado / tasaBCV : valIngresado;
-    const esPrivado = tipoReserva === "privado";
 
     try {
       setProcesandoReserva(true);
@@ -548,10 +553,13 @@ export default function PublicClubDetailPage() {
         .eq("id", user.id)
         .maybeSingle();
 
-      const nombreUsuarioCompleto = userProf ? `${userProf.nombre || ""} ${userProf.apellido || ""}`.trim() : user.email;
+      const nombreUsuarioCompleto = userProf 
+        ? `${userProf.nombre} ${userProf.apellido}`.trim() 
+        : user.email;
+      
       const telefonoUsuario = userProf?.telefono || "Sin teléfono";
-
       const miCat = userPadelProfile?.categoria_oficial || "rookies";
+
       const estadoPagoFinal = metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion";
 
       const nuevoAbono = {
@@ -577,11 +585,11 @@ export default function PublicClubDetailPage() {
           court_id: bloqueSeleccionado.cancha.id,
           scheduled_at: fechaFija,
           total_price: bloqueSeleccionado.precioBaseTotal,
-          price_per_player: bloqueSeleccionado.precioBaseInd,
+          price_per_player: calculosPrecio.precioIndividual,
           app_fee: calculosPrecio.fee,
-          match_type: esPrivado ? "privado" : "abierto",
-          is_private: esPrivado,
-          is_competitive: modoCompetitivo,
+          match_type: tipoReserva,
+          is_private: tipoReserva !== "ranking", 
+          is_competitive: tipoReserva === "ranking",
           category_restriction: miCat,
           status: "programado",
           payment_status: estadoPagoFinal,
@@ -613,17 +621,17 @@ export default function PublicClubDetailPage() {
 
       setTiempoRestante(null);
       setModalReservaOpen(false);
-      
+
       mostrarNotificacion(
-        "🎉 ¡Reserva Registrada!",
-        metodoPago === "efectivo"
-          ? "Reserva creada con éxito. Pagará el monto restante directamente en recepción."
-          : "📩 Comprobante enviado. La reserva queda en estado 'PENDIENTE' hasta que el club valide tu pago.",
+        "¡Reserva Registrada!",
+        metodoPago === "efectivo" 
+          ? "✅ Reserva creada con éxito. Pagar el monto restante directamente en recepción." 
+          : "✅ Comprobante enviado. La reserva queda en estado PENDIENTE hasta que el club valide tu pago.",
         "success"
       );
-
+      
       await cargarDetalleClub();
-     } catch (err) {
+    } catch (err) {
       console.error("Error al procesar reserva:", err);
       if (err.message && err.message.includes("unique_court_time")) {
         mostrarNotificacion("Pista ya no disponible", "Alguien más acaba de confirmar una reserva para esta pista hace unos instantes.", "error");
@@ -637,12 +645,12 @@ export default function PublicClubDetailPage() {
 
   const abrirModalMiReserva = (match) => {
     setMatchMiReservaSel(match);
-
+    
     const historial = Array.isArray(match.payments_history) ? match.payments_history : [];
     const totalAbonado = historial
-      .filter((a) => a.status === "aprobado" || a.status === "pendiente")
+      .filter(a => a.status === "aprobado" || a.status === "pendiente")
       .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
-
+    
     const totalCancha = (match.total_price || 15) + (match.app_fee || 1.50);
     const restante = Math.max(0, totalCancha - totalAbonado);
 
@@ -677,7 +685,10 @@ export default function PublicClubDetailPage() {
         .eq("id", user.id)
         .maybeSingle();
 
-      const nombreUsuarioCompleto = userProf ? `${userProf.nombre || ""} ${userProf.apellido || ""}`.trim() : user.email;
+      const nombreUsuarioCompleto = userProf 
+        ? `${userProf.nombre} ${userProf.apellido}`.trim() 
+        : user.email;
+      
       const telefonoUsuario = userProf?.telefono || "Sin teléfono";
 
       const nuevoAbono = {
@@ -697,8 +708,8 @@ export default function PublicClubDetailPage() {
       const historialNuevo = [...historialActual, nuevoAbono];
 
       const proofUrlsActuales = Array.isArray(matchMiReservaSel.payment_proof_urls) ? matchMiReservaSel.payment_proof_urls : [];
-      const proofUrlsNuevas = formPagoExtra.previewComprobante
-        ? [...proofUrlsActuales, formPagoExtra.previewComprobante]
+      const proofUrlsNuevas = formPagoExtra.previewComprobante 
+        ? [...proofUrlsActuales, formPagoExtra.previewComprobante] 
         : proofUrlsActuales;
 
       const { error: updateErr } = await supabase
@@ -713,7 +724,12 @@ export default function PublicClubDetailPage() {
       if (updateErr) throw updateErr;
 
       setModalMiReservaOpen(false);
-      mostrarNotificacion("✅ Comprobante Enviado", "¡Nuevo comprobante enviado con éxito! El gerente del club lo revisará en la recepción.", "success");
+      mostrarNotificacion(
+        "Comprobante Enviado",
+        "✅ ¡Nuevo comprobante enviado con éxito! El gerente del club lo revisará en la recepción.",
+        "success"
+      );
+      
       await cargarDetalleClub();
     } catch (err) {
       console.error("Error al enviar pago extra:", err);
@@ -727,13 +743,13 @@ export default function PublicClubDetailPage() {
     if (segundos === null) return "";
     const m = Math.floor(segundos / 60);
     const s = segundos % 60;
-    return `${m}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, "0")}`;
   };
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }
@@ -750,44 +766,51 @@ export default function PublicClubDetailPage() {
   }
 
   const listAmenidades = Array.isArray(club.amenities) ? club.amenities : ["wifi", "free_parking", "changing_room"];
+
   const numIngresado = parseFloat(montoAbono) || 0;
-  const equivalenteCalculado = monedaAbono === "USD" ? numIngresado * tasaBCV : numIngresado / tasaBCV;
+  const equivalenteCalculado = monedaAbono === "USD" 
+    ? numIngresado * tasaBCV 
+    : numIngresado / tasaBCV;
 
   return (
     <div className="min-h-screen bg-slate-50/50 px-2 py-4 sm:px-6 md:px-8 space-y-6 sm:space-y-8">
       <div className="mx-auto max-w-7xl space-y-6 sm:space-y-8">
-
+        
         {/* HERO BANNER */}
         <div className="relative w-full h-52 sm:h-80 bg-slate-900 rounded-3xl sm:rounded-[2.5rem] overflow-hidden shadow-xl border border-slate-200">
           {club.image_url ? (
             <img src={club.image_url} alt={club.name} className="w-full h-full object-cover" />
           ) : (
-            <div className="w-full h-full bg-gradient-to-r from-[#0B0C2A] to-[#161848]" />
+            <div className="w-full h-full bg-gradient-to-r from-[#0B0C2A] to-[#161848]"></div>
           )}
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
-
+          
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent"></div>
+          
           <div className="absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-6 text-white flex flex-col md:flex-row md:items-end justify-between gap-3">
             <div className="space-y-1 max-w-2xl">
               <span className="bg-[#00FF9D] text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-full shadow-sm">
-                Complejo Verificado
+                ✓ Complejo Verificado
               </span>
               <h1 className="text-xl sm:text-4xl font-black">{club.name}</h1>
               <p className="text-[11px] sm:text-sm text-slate-300 font-medium">
                 📍 {club.address || "Cabudare"}, {club.city}
               </p>
             </div>
-
-            <a
-              href="#reserva-pistas"
-              className="px-5 py-2.5 sm:px-6 sm:py-3 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl sm:rounded-2xl shadow-lg transition-all text-center"
-            >
-              ⚡ Reservar Pista
-            </a>
+            
+            <div>
+              <a 
+                href="#reserva-pistas" 
+                className="px-5 py-2.5 sm:px-6 sm:py-3 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl sm:rounded-2xl shadow-lg transition-all text-center"
+              >
+                Reservar Pista ↓
+              </a>
+            </div>
           </div>
         </div>
 
         {/* LAYOUT 2 COLUMNAS */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
+          
           <div className="lg:col-span-4 space-y-6">
             <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-3">
               <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-tight">Amenidades</h3>
@@ -813,7 +836,7 @@ export default function PublicClubDetailPage() {
               </div>
 
               {/* Selector de Días */}
-              <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-2">
+              <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {diasSiguientes.map((d, i) => {
                   const isSel = fechaSeleccionada.toDateString() === d.toDateString();
                   return (
@@ -821,7 +844,9 @@ export default function PublicClubDetailPage() {
                       key={i}
                       onClick={() => setFechaSeleccionada(d)}
                       className={`shrink-0 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-center border transition-all ${
-                        isSel ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md" : "bg-slate-50 text-slate-600 border-slate-200"
+                        isSel
+                          ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                       }`}
                     >
                       <span className="text-[9px] sm:text-[10px] font-black uppercase block opacity-60">
@@ -851,8 +876,8 @@ export default function PublicClubDetailPage() {
               )}
 
               {/* GRILLA DE CANCHAS DE PÁDEL */}
-              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
-                <div className="inline-min-w-full min-w-[500px] w-full">
+              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                <div className="inline-block min-w-full min-w-[500px] w-full">
                   
                   {/* CABECERA PISTAS */}
                   <div className="flex bg-slate-950 text-white border-b-2 border-slate-800 sticky top-0 z-30">
@@ -864,139 +889,116 @@ export default function PublicClubDetailPage() {
                         {c.name}
                       </div>
                     ))}
+                    {canchas.length === 0 && (
+                      <div className="p-8 text-center text-xs font-bold text-slate-400">
+                        Este complejo no tiene pistas de pádel configuradas.
+                      </div>
+                    )}
                   </div>
 
-                  {canchas.length === 0 ? (
-                    <div className="p-8 text-center text-xs font-bold text-slate-400">
-                      Este complejo no tiene pistas de pádel configuradas.
-                    </div>
-                  ) : (
-                    /* FILAS DE HORARIOS */
-                    bloquesHorarios.map((bloque, idx) => (
-                      <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
+                  {/* FILAS DE HORARIOS */}
+                  {bloquesHorarios.map((bloque, idx) => (
+                    <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
+                      <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center sticky left-0 z-20 shadow-xs">
+                        <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
+                        <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
+                      </div>
+
+                      {/* CELDAS PISTAS */}
+                      {canchas.map((cancha) => {
+                        const ano = fechaSeleccionada.getFullYear();
+                        const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
+                        const dia = String(fechaSeleccionada.getDate()).padStart(2, '0');
+                        const hora = String(bloque.horaInt).padStart(2, '0');
+                        const minutos = String(bloque.minutosInt).padStart(2, '0');
+                        const fechaSlotGrid = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
+
+                        const partidoOcupado = partidosClub.find((m) => {
+                          if (m.court_id !== cancha.id) return false;
+                          const fechaCitaDB = m.scheduled_at.substring(0, 16); 
+                          return fechaCitaDB === fechaSlotGrid;
+                        });
+
+                        const lockOcupado = bloqueosActivos.find((l) => {
+                          if (l.court_id !== cancha.id) return false;
+                          const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
+                          return fechaLockStr === fechaSlotGrid;
+                        });
+
+                        const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.horaInt, bloque.minutosInt);
                         
-                        <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center sticky left-0 z-20 shadow-xs">
-                          <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
-                          <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
-                        </div>
+                        let precioUSD = precioOriginal;
+                        let esPromoAplicada = false;
 
-                        {/* CELDAS PISTAS */}
-                        {canchas.map((cancha) => {
-                          const ano = fechaSeleccionada.getFullYear();
-                          const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
-                          const dia = String(fechaSeleccionada.getDate()).padStart(2, '0');
-                          const hora = String(bloque.horaInt).padStart(2, '0');
-                          const minutos = String(bloque.minutosInt).padStart(2, '0');
-                          const fechaSlotGrid = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
-
-                          const partidoOcupado = partidosClub.find((m) => {
-                            if (m.court_id !== cancha.id) return false;
-                            const fechaCitaDB = m.scheduled_at.substring(0, 16);
-                            return fechaCitaDB === fechaSlotGrid;
-                          });
-
-                          const lockOcupado = bloqueosActivos.find((l) => {
-                            if (l.court_id !== cancha.id) return false;
-                            const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
-                            return fechaLockStr === fechaSlotGrid;
-                          });
-
-                          const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.horaInt, bloque.minutosInt);
-                          let precioUSD = precioOriginal;
-
-                          let esPromoAplicada = false;
-
-                          if (promocionHoy) {
-                            const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
-
-                            if (hasBlocks) {
-                              const horaBotonStr = `${hora}:${minutos}`;
-                              const bloqueAplicable = promocionHoy.time_blocks.find((b) => {
-                                return horaBotonStr >= (b.start_time || "00:00") && horaBotonStr < (b.end_time || "23:59");
-                              });
-
-                              if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
-                                precioUSD = parseFloat(bloqueAplicable.price); 
-                                esPromoAplicada = true;
-                              }
-                            } else {
-                              const promoPrice = parseFloat(promocionHoy.price_normal);
-                              precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
+                        if (promocionHoy) {
+                          const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
+                          if (hasBlocks) {
+                            const horaBotonStr = `${hora}:${minutos}`;
+                            const bloqueAplicable = promocionHoy.time_blocks.find(b => {
+                              return horaBotonStr >= (b.start_time || "00:00") && horaBotonStr < (b.end_time || "23:59");
+                            });
+                            
+                            if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
+                              precioUSD = parseFloat(bloqueAplicable.price); 
                               esPromoAplicada = true;
                             }
+                          } else {
+                            const promoPrice = parseFloat(promocionHoy.price_normal);
+                            precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
+                            esPromoAplicada = true;
                           }
+                        }
 
-                          if (partidoOcupado) {
-                            const esPrivado = partidoOcupado.is_private || partidoOcupado.match_type === "privado";
-                            const totalAbonado = Array.isArray(partidoOcupado.payments_history)
-                              ? partidoOcupado.payments_history.filter((a) => a.status === "aprobado").reduce((sum, a) => sum + parseFloat(a.amount || 0), 0)
-                              : 0;
+                        if (partidoOcupado) {
+                          const esPrivado = partidoOcupado.is_private || partidoOcupado.match_type === "privado";
+                          
+                          const totalAbonado = Array.isArray(partidoOcupado.payments_history)
+                            ? partidoOcupado.payments_history.filter(a => a.status === "aprobado").reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0)
+                            : 0;
+                          
+                          const canchaBaseFee = (partidoOcupado.total_price || 15) + (partidoOcupado.app_fee || ((partidoOcupado.total_price || 15) * 0.1));
+                          const canchaTotalmentePagada = partidoOcupado.payment_status === "aprobado" || totalAbonado >= (canchaBaseFee - 0.5);
 
-                            const canchaBaseFee = (partidoOcupado.total_price || 15) + (partidoOcupado.app_fee || (partidoOcupado.total_price || 15) * 0.1);
-                            const canchaTotalmentePagada = partidoOcupado.payment_status === "aprobado" || totalAbonado >= canchaBaseFee - 0.5;
-                            const esPendiente = !canchaTotalmentePagada && (partidoOcupado.payment_status === "pendiente_aprobacion" || partidoOcupado.payment_status === "pago_en_sitio");
-                            const esMiReserva = !!user && (partidoOcupado.created_by === user.id || (Array.isArray(partidoOcupado.players) && partidoOcupado.players.some((p) => p.user_id === user.id)));
+                          const esPendiente = !canchaTotalmentePagada || partidoOcupado.payment_status === "pendiente_aprobacion" || partidoOcupado.payment_status === "pago_en_sitio";
 
-                            if (esMiReserva) {
-                              return (
-                                <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                  <button
-                                    onClick={() => abrirModalMiReserva(partidoOcupado)}
-                                    className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-                                      esPendiente ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400" : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
-                                    }`}
-                                  >
-                                    <div className="flex justify-between items-center w-full">
-                                      <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
-                                        MI RESERVA
-                                      </span>
-                                    </div>
-                                    <div className="my-0.5">
-                                      <p className="text-[11px] sm:text-[12px] font-black truncate text-white">Ver / Agregar Pago</p>
-                                      <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
-                                    </div>
-                                  </button>
-                                </div>
-                              );
-                            }
+                          const esMiReserva = !!user && (
+                            partidoOcupado.created_by === user.id || 
+                            (Array.isArray(partidoOcupado.players) && partidoOcupado.players.some(p => p.user_id === user.id))
+                          );
 
-                            if (esPrivado) {
-                              return (
-                                <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                  <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
-                                    <div className="flex justify-between items-center w-full">
-                                      <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">PRIVADO</span>
-                                    </div>
-                                    <p className="text-[11px] sm:text-[12px] font-black text-slate-400">Pista Reservada</p>
-                                  </div>
-                                </div>
-                              );
-                            }
-
+                          if (esMiReserva) {
                             return (
                               <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
-                                  <div className={`h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-                                    esPendiente ? "bg-amber-500 text-slate-950 border-amber-600" : "bg-slate-900 text-white border-slate-800 hover:border-blue-500"
-                                  }`}>
-                                    <div className="flex justify-between items-center w-full">
-                                      <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">ABIERTO</span>
-                                      <span className="text-[9px] font-black px-1 py-0.5 bg-white/10 rounded">{partidoOcupado.players?.length || 1} / 4</span>
-                                    </div>
-                                    <p className="text-[11px] sm:text-xs font-black truncate">Cat. {partidoOcupado.category_restriction || "Libre"}</p>
+                                <button
+                                  onClick={() => abrirModalMiReserva(partidoOcupado)}
+                                  className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+                                    esPendiente 
+                                      ? "bg-amber-500 text-slate-950 border-amber-600 animate-pulse hover:bg-amber-400"
+                                      : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
+                                  }`}
+                                >
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
+                                      ✨ MI RESERVA
+                                    </span>
                                   </div>
-                                </Link>
+                                  <div className="my-0.5">
+                                    <p className="text-[11px] sm:text-[12px] font-black truncate text-white">Ver / Agregar Pago</p>
+                                    <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
+                                  </div>
+                                </button>
                               </div>
                             );
                           }
 
-                          if (lockOcupado) {
+                          if (esPrivado) {
                             return (
                               <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
-                                  <span className="text-xl animate-pulse">⏳</span>
-                                  <p className="text-[10px] sm:text-[11px] font-black text-amber-600 mt-1">En proceso...</p>
-                                  <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Alguien está pagando</p>
+                                <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">PRIVADO</span>
+                                  </div>
+                                  <p className="text-[11px] sm:text-[12px] font-black text-slate-400">Pista Reservada</p>
                                 </div>
                               </div>
                             );
@@ -1004,39 +1006,70 @@ export default function PublicClubDetailPage() {
 
                           return (
                             <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                              <button
-                                onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
-                                className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative cursor-pointer"
-                              >
-                                {esPromoAplicada && (
-                                  <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
-                                    Promo
-                                  </span>
-                                )}
-
-                                <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
-                                  + Agendar
-                                </span>
-
-                                {esPromoAplicada ? (
-                                  <div className="flex flex-col items-center">
-                                    <div className="flex items-center gap-1">
-                                      <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
-                                      <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
-                                    </div>
+                              <Link href={`/padel/partidos/${partidoOcupado.id}`} className="block h-full">
+                                <div className={`h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
+                                  esPendiente 
+                                    ? "bg-amber-500 text-slate-950 border-amber-600" 
+                                    : "bg-slate-900 text-white border-slate-800 hover:border-blue-500"
+                                }`}>
+                                  <div className="flex justify-between items-center w-full">
+                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300">ABIERTO</span>
+                                    <span className="text-[9px] font-black px-1 py-0.5 bg-white/10 rounded">{partidoOcupado.players?.length || 1}/4</span>
                                   </div>
-                                ) : (
-                                  <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
-                                )}
-                              </button>
+                                  <p className="text-[11px] sm:text-xs font-black truncate">Cat. {partidoOcupado.category_restriction || "Libre"}</p>
+                                </div>
+                              </Link>
                             </div>
                           );
-                        })}
-                      </div>
-                    ))
-                  )}
+                        }
+
+                        if (lockOcupado) {
+                          return (
+                            <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                              <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
+                                <span className="text-xl animate-pulse">⏳</span>
+                                <p className="text-[10px] sm:text-[11px] font-black text-amber-600 mt-1">En proceso...</p>
+                                <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Alguien está pagando</p>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                            <button
+                              onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
+                              className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative cursor-pointer"
+                            >
+                              {esPromoAplicada && (
+                                <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
+                                  Promo
+                                </span>
+                              )}
+
+                              <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
+                                + Agendar
+                              </span>
+
+                              {esPromoAplicada ? (
+                                <div className="flex flex-col items-center">
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
+                                    <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
+                              )}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
               </div>
+
             </div>
           </div>
         </div>
@@ -1054,20 +1087,20 @@ export default function PublicClubDetailPage() {
           const totalAbonado = historialAbonos
             .filter((a) => a.status === "aprobado" || a.status === "pendiente")
             .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
-
+          
           const restante = Math.max(0, totalCancha - totalAbonado);
 
           const dbDate = matchMiReservaSel.scheduled_at;
-          const [datePart, timePart] = dbDate.split("T");
-          const [year, month, day] = datePart.split("-").map(Number);
-          const [hour, minute] = timePart.split(":").map(Number);
+          const [datePart, timePart] = dbDate.split('T');
+          const [year, month, day] = datePart.split('-').map(Number);
+          const [hour, minute] = timePart.split(':').map(Number);
           
           const visualDate = new Date(year, month - 1, day);
           const formattedDate = visualDate.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
           
-          const ampm = hour >= 12 ? 'PM' : 'AM';
+          const ampm = hour >= 12 ? "PM" : "AM";
           const hora12 = hour % 12 || 12;
-          const formattedTime = `${hora12}:${String(minute).padStart(2, '0')} ${ampm}`;
+          const formattedTime = `${hora12}:${String(minute).padStart(2, "0")} ${ampm}`;
 
           return (
             <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={() => setModalMiReservaOpen(false)}>
@@ -1076,10 +1109,10 @@ export default function PublicClubDetailPage() {
                 <div className="border-b pb-3 space-y-2">
                   <div className="flex justify-between items-start">
                     <div>
-                      <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">Gestionar Mi Reserva</span>
+                      <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">⚙️ Gestionar Mi Reserva</span>
                       <div className="flex items-center gap-2 mt-0.5">
                         <h3 className="text-lg font-black text-slate-900">{matchMiReservaSel.court?.name || "Pista"}</h3>
-                        <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">🏟️ {club?.name}</span>
+                        <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">{club?.name}</span>
                       </div>
                     </div>
                     <button onClick={() => setModalMiReservaOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
@@ -1115,6 +1148,7 @@ export default function PublicClubDetailPage() {
                     <span>Total Pista:</span>
                     <span className="text-[#00FF9D]">${totalCancha.toFixed(2)}</span>
                   </div>
+
                   <div className="flex justify-between text-xs pt-1 border-t border-slate-800/60">
                     <span className="text-emerald-400">Abonado: ${totalAbonado.toFixed(2)}</span>
                     <span className={restante > 0 ? "text-amber-400 font-black" : "text-slate-400"}>Restante: ${restante.toFixed(2)}</span>
@@ -1122,7 +1156,8 @@ export default function PublicClubDetailPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <h4 className="text-xs font-black uppercase text-slate-900 tracking-wider">Comprobantes Enviados ({historialAbonos.length}):</h4>
+                  <h4 className="text-xs font-black uppercase text-slate-900 tracking-wider">🧾 Comprobantes Enviados ({historialAbonos.length})</h4>
+                  
                   {historialAbonos.length === 0 ? (
                     <p className="text-xs font-bold text-slate-400 bg-slate-50 p-3 rounded-xl text-center">Aún no hay comprobantes registrados.</p>
                   ) : (
@@ -1134,7 +1169,7 @@ export default function PublicClubDetailPage() {
                             <p className="text-[10px] font-bold text-slate-500 uppercase">{ab.method} • Ref: {ab.reference}</p>
                           </div>
                           <div className="text-right">
-                            <span className="font-black text-slate-900 block">${parseFloat(ab.amount || 0).toFixed(2)}</span>
+                            <span className="font-black text-slate-900 block">${(parseFloat(ab.amount) || 0).toFixed(2)}</span>
                           </div>
                         </div>
                       ))}
@@ -1143,8 +1178,10 @@ export default function PublicClubDetailPage() {
                 </div>
 
                 <div className="bg-blue-50/70 border border-blue-200 p-3.5 sm:p-4 rounded-2xl space-y-3">
-                  <h4 className="text-xs font-black text-blue-950 uppercase tracking-wide">+ Adjuntar Nuevo Pago / Comprobante Extra</h4>
-
+                  <h4 className="text-xs font-black text-blue-950 uppercase tracking-wide">
+                    ➕ Adjuntar Nuevo Pago / Comprobante Extra
+                  </h4>
+                  
                   <div className="space-y-3 text-xs font-bold text-slate-700">
                     <div>
                       <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Monto que Pagas ($)</label>
@@ -1153,7 +1190,7 @@ export default function PublicClubDetailPage() {
                         step="0.01"
                         value={formPagoExtra.monto}
                         onChange={(e) => setFormPagoExtra({ ...formPagoExtra, monto: e.target.value })}
-                        className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-black text-slate-900 outline-none"
+                        className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-black text-slate-900 outline-none placeholder:text-slate-400"
                         placeholder="Ej. 5.00"
                       />
                     </div>
@@ -1186,13 +1223,12 @@ export default function PublicClubDetailPage() {
                           <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Número de Referencia</label>
                           <input
                             type="text"
-                            placeholder="Ej. #123456"
+                            placeholder="Ej. 123456..."
                             value={formPagoExtra.numReferencia}
                             onChange={(e) => setFormPagoExtra({ ...formPagoExtra, numReferencia: e.target.value })}
                             className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
                           />
                         </div>
-
                         <div>
                           <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Foto / Captura del Comprobante</label>
                           <input
@@ -1201,7 +1237,6 @@ export default function PublicClubDetailPage() {
                             onChange={(e) => handleSeleccionarImagen(e, (res) => setFormPagoExtra({ ...formPagoExtra, previewComprobante: res }))}
                             className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-slate-900 file:text-[#00FF9D]"
                           />
-
                           {formPagoExtra.previewComprobante && (
                             <div className="mt-2 relative rounded-xl overflow-hidden border border-slate-200 max-h-28 bg-slate-950 flex items-center justify-center">
                               <img src={formPagoExtra.previewComprobante} alt="Preview Comprobante" className="max-h-28 object-contain" />
@@ -1215,9 +1250,9 @@ export default function PublicClubDetailPage() {
                       type="button"
                       onClick={agregarComprobanteExtraUser}
                       disabled={enviandoPagoExtra}
-                      className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-xl shadow-md mt-1"
+                      className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-xl shadow-md mt-1 cursor-pointer"
                     >
-                      {enviandoPagoExtra ? "Enviando Comprobante..." : "+ Enviar Comprobante Adicional"}
+                      {enviandoPagoExtra ? "Enviando Comprobante..." : "✓ Enviar Comprobante Adicional"}
                     </button>
                   </div>
                 </div>
@@ -1229,6 +1264,7 @@ export default function PublicClubDetailPage() {
         document.body
       )}
 
+
       {/* MODAL PASARELA DE PAGO CLIENTE CON TEMPORIZADOR INTEGRADO */}
       {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={cerrarModalManual}>
@@ -1238,75 +1274,109 @@ export default function PublicClubDetailPage() {
               <div className="flex justify-between items-start">
                 <div>
                   <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider block">
-                    Paso {pasoModal} de 2 • {pasoModal === 1 ? "Modalidad de Juego" : "Abono / Pago"}
+                    Paso {pasoModal} de 2: {pasoModal === 1 ? "Modalidad de Juego" : "Abono / Pago"}
                   </span>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <h3 className="text-lg font-black text-slate-900">{bloqueSeleccionado.cancha.name}</h3>
-                    <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
-                      🏟️ {club?.name}
-                    </span>
-                  </div>
                 </div>
-                <button onClick={cerrarModalManual} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <h3 className="text-lg font-black text-slate-900">{bloqueSeleccionado.cancha.name}</h3>
+                  <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">{club?.name}</span>
+                </div>
               </div>
+              <button onClick={cerrarModalManual} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
 
               {tiempoRestante !== null && (
-                <div className={`absolute top-0 right-8 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-sm ${tiempoRestante < 60 ? 'bg-rose-100 text-rose-700 border-rose-200 animate-pulse' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>
+                <div className={`absolute top-0 right-8 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-sm ${
+                  tiempoRestante <= 60 ? "bg-rose-100 text-rose-700 border-rose-200 animate-pulse" : "bg-amber-100 text-amber-800 border-amber-200"
+                }`}>
                   <span>⏳</span>
                   <span>{formatoTiempo(tiempoRestante)}</span>
                 </div>
               )}
+            </div>
 
-              <div className="bg-slate-900 text-white p-2.5 rounded-2xl flex justify-between items-center text-xs font-bold shadow-sm">
-                <div className="flex items-center gap-2 min-w-0 pr-2">
-                  <span className="text-base shrink-0">📅</span>
-                  <div className="min-w-0">
-                    <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha de Juego</span>
-                    <p className="text-xs font-black truncate capitalize mt-0.5">
-                      {fechaSeleccionada.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
-                    </p>
-                  </div>
+            <div className="bg-slate-900 text-white p-2.5 rounded-2xl flex justify-between items-center text-xs font-bold shadow-sm">
+              <div className="flex items-center gap-2 min-w-0 pr-2">
+                <span className="text-base shrink-0">📅</span>
+                <div className="min-w-0">
+                  <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha de Juego</span>
+                  <p className="text-xs font-black truncate capitalize mt-0.5">
+                    {fechaSeleccionada.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
+                  </p>
                 </div>
-                
-                <div className="bg-[#00FF9D] text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1 shadow-sm">
-                  <span>⏰</span>
-                  <span>{bloqueSeleccionado.horaLabel}</span>
-                </div>
+              </div>
+              <div className="bg-[#00FF9D] text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1 shadow-sm">
+                <span>⏰</span>
+                <span>{bloqueSeleccionado.horaLabel}</span>
               </div>
             </div>
 
             {/* PASO 1 */}
             {pasoModal === 1 && (
               <div className="space-y-4">
-                <div
-                  onClick={() => handleCambioTipoReserva("abierto")}
-                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex justify-between gap-3 ${
-                    tipoReserva === "abierto" ? "border-[#00FF9D] bg-emerald-50/50" : "border-slate-100 bg-slate-50"
-                  }`}
-                >
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-4">
                   <div>
-                    <p className="font-black text-slate-900 text-sm">🌐 Abrir Partido Público</p>
-                    <p className="text-[11px] text-slate-500 font-medium">Creas el partido abierto. Puedes pagar tu cuota o abonar un monto libre.</p>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">¿Qué tipo de partido vas a jugar?</label>
+                    <select
+                      value={tipoReserva}
+                      onChange={(e) => {
+                        const tipo = e.target.value;
+                        setTipoReserva(tipo);
+                        setCantidadJugadores(tipo === 'amistoso' ? 6 : 4);
+                        
+                        if (bloqueSeleccionado) {
+                          const valUSD = tipo === "privado" 
+                            ? (bloqueSeleccionado.precioBaseTotal * 1.10) 
+                            : ((bloqueSeleccionado.precioBaseTotal / (tipo === 'amistoso' ? 6 : 4)) * 1.10);
+                          setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
+                        }
+                      }}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D]"
+                    >
+                      <option value="privado">🔒 Privado (Pista Completa con mi grupo)</option>
+                      <option value="amistoso">🔄 Amistoso (Rotación con más amigos)</option>
+                      <option value="ranking">🏆 Ranking (Público, para subir de nivel)</option>
+                    </select>
+                    
+                    {tipoReserva === "ranking" && (
+                      <p className="text-[9px] font-bold text-slate-500 mt-1">Tu partido será público para que personas de tu nivel se unan.</p>
+                    )}
                   </div>
-                  <span className="text-sm font-black text-emerald-700">${bloqueSeleccionado.precioBaseInd.toFixed(2)}</span>
-                </div>
 
-                <div
-                  onClick={() => handleCambioTipoReserva("privado")}
-                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex justify-between gap-3 ${
-                    tipoReserva === "privado" ? "border-[#00FF9D] bg-emerald-50/50" : "border-slate-100 bg-slate-50"
-                  }`}
-                >
                   <div>
-                    <p className="font-black text-slate-900 text-sm">🔒 Reservar Pista Completa</p>
-                    <p className="text-[11px] text-slate-500 font-medium">Reservas el turno completo para tu grupo exclusivo.</p>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Cantidad de Jugadores en Total</label>
+                    <select
+                      value={cantidadJugadores}
+                      onChange={(e) => {
+                        const cant = Number(e.target.value);
+                        setCantidadJugadores(cant);
+                        if (bloqueSeleccionado && tipoReserva !== "privado") {
+                           const valUSD = (bloqueSeleccionado.precioBaseTotal / cant) * 1.10;
+                           setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
+                        }
+                      }}
+                      disabled={tipoReserva === "ranking"}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D] disabled:opacity-50 disabled:bg-slate-100"
+                    >
+                      {tipoReserva === 'amistoso' ? (
+                        <>
+                          <option value={5}>5 Jugadores</option>
+                          <option value={6}>6 Jugadores (3 Duplas rotando)</option>
+                          <option value={7}>7 Jugadores</option>
+                          <option value={8}>8 Jugadores</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value={2}>2 Jugadores (Singles)</option>
+                          <option value={4}>4 Jugadores (Dobles oficial)</option>
+                        </>
+                      )}
+                    </select>
                   </div>
-                  <span className="text-sm font-black text-slate-900">${bloqueSeleccionado.precioBaseTotal.toFixed(2)}</span>
                 </div>
 
                 <button
                   onClick={() => setPasoModal(2)}
-                  className="w-full py-4 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md"
+                  className="w-full py-4 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md cursor-pointer"
                 >
                   Continuar a Datos de Pago →
                 </button>
@@ -1316,7 +1386,6 @@ export default function PublicClubDetailPage() {
             {/* PASO 2 */}
             {pasoModal === 2 && (
               <div className="space-y-4 text-xs font-bold text-slate-700">
-                
                 <div className="bg-slate-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs">
                   <div className="flex justify-between items-start text-[#00FF9D]">
                     <span>Cancha Base ({tipoReserva === "privado" ? "Pista Completa" : "Cuota Jugador"}):</span>
@@ -1350,30 +1419,26 @@ export default function PublicClubDetailPage() {
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
                   <div className="flex justify-between items-center">
                     <label className="text-[10px] font-black uppercase text-slate-500">
-                      Monto a Abonar Hoy ({monedaAbono === "USD" ? "$" : "Bs."}):
+                      Monto a Abonar Hoy ({monedaAbono === "USD" ? "$" : "Bs."})
                     </label>
                     <div className="flex items-center bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
                       <button
                         type="button"
                         onClick={() => cambiarMonedaAbono("USD")}
-                        className={`px-2.5 py-1 rounded-lg transition-all ${
-                          monedaAbono === "USD" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"
-                        }`}
+                        className={`px-2.5 py-1 rounded-lg transition-all ${monedaAbono === "USD" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"}`}
                       >
                         $ USD
                       </button>
                       <button
                         type="button"
                         onClick={() => cambiarMonedaAbono("VES")}
-                        className={`px-2.5 py-1 rounded-lg transition-all ${
-                          monedaAbono === "VES" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"
-                        }`}
+                        className={`px-2.5 py-1 rounded-lg transition-all ${monedaAbono === "VES" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"}`}
                       >
                         Bs. VES
                       </button>
                     </div>
                   </div>
-                  
+
                   <input
                     type="number"
                     step="0.01"
@@ -1388,12 +1453,12 @@ export default function PublicClubDetailPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        const valUSD = bloqueSeleccionado.precioBaseInd * 1.10;
+                        const valUSD = calculosPrecio.precioIndividual * 1.10;
                         setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
                       }}
-                      className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold hover:bg-slate-100"
+                      className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold hover:bg-slate-100 cursor-pointer"
                     >
-                      Cuota 1/4 ({monedaAbono === "USD" ? `$${(bloqueSeleccionado.precioBaseInd * 1.10).toFixed(2)}` : `Bs. ${(bloqueSeleccionado.precioBaseInd * 1.10 * tasaBCV).toFixed(2)}`})
+                      Cuota Individual ({monedaAbono === "USD" ? `$${(calculosPrecio.precioIndividual * 1.10).toFixed(2)}` : `Bs. ${((calculosPrecio.precioIndividual * 1.10) * tasaBCV).toFixed(2)}`})
                     </button>
                     <button
                       type="button"
@@ -1401,7 +1466,7 @@ export default function PublicClubDetailPage() {
                         const valUSD = calculosPrecio.totalSug;
                         setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
                       }}
-                      className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold hover:bg-slate-100"
+                      className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold hover:bg-slate-100 cursor-pointer"
                     >
                       Total Sugerido ({monedaAbono === "USD" ? `$${calculosPrecio.totalSug.toFixed(2)}` : `Bs. ${(calculosPrecio.totalSug * tasaBCV).toFixed(2)}`})
                     </button>
@@ -1409,7 +1474,7 @@ export default function PublicClubDetailPage() {
 
                   {numIngresado > 0 && (
                     <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900 mt-2">
-                      <span>🧮 Conversión Tasa BCV (Bs. {tasaBCV.toFixed(2)}):</span>
+                      <span>🧮 Conversión (Tasa BCV: Bs. {tasaBCV.toFixed(2)})</span>
                       <span>
                         {monedaAbono === "USD"
                           ? `Bs. ${equivalenteCalculado.toFixed(2)} VES`
@@ -1431,7 +1496,7 @@ export default function PublicClubDetailPage() {
                         key={m.id}
                         type="button"
                         onClick={() => setMetodoPago(m.id)}
-                        className={`py-3 px-2 rounded-xl text-[10px] font-black uppercase border transition-all ${
+                        className={`py-3 px-2 rounded-xl text-[10px] font-black uppercase border transition-all cursor-pointer ${
                           metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-slate-50 text-slate-600 border-slate-200"
                         }`}
                       >
@@ -1443,14 +1508,13 @@ export default function PublicClubDetailPage() {
 
                 {metodoPago === "pago_movil" && (
                   <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl text-[11px] text-blue-900 space-y-1">
-                    <p className="font-black">🏦 Datos Pago Móvil:</p>
-                    <p>Banco: Banesco (0134) • C.I: V-12345678 • Tel: 0414-1234567</p>
+                    <p className="font-black">🏦 Datos Pago Móvil</p>
+                    <p>Banco Banesco (0134) • C.I: V-12345678 • Tel: 0414-1234567</p>
                   </div>
                 )}
-
                 {metodoPago === "zelle" && (
                   <div className="bg-purple-50 border border-purple-200 p-3 rounded-2xl text-[11px] text-purple-900 space-y-1">
-                    <p className="font-black">🇺🇸 Datos Zelle:</p>
+                    <p className="font-black">🇺🇸 Datos Zelle</p>
                     <p>Correo: pagos@sportshub.com • Titular: Sports Hub LLC</p>
                   </div>
                 )}
@@ -1459,17 +1523,16 @@ export default function PublicClubDetailPage() {
                   <>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                        Número de Referencia de Transacción
+                        Número de Referencia de Transacción *
                       </label>
                       <input
                         type="text"
-                        placeholder="Ej. #123456"
+                        placeholder="Ej. 123456..."
                         value={numReferencia}
                         onChange={(e) => setNumReferencia(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
                       />
                     </div>
-
                     <div>
                       <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
                         Adjuntar Captura / Foto del Comprobante (Imagen)
@@ -1480,7 +1543,6 @@ export default function PublicClubDetailPage() {
                         onChange={(e) => handleSeleccionarImagen(e, setPreviewComprobante)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold outline-none file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-slate-900 file:text-[#00FF9D]"
                       />
-
                       {previewComprobante && (
                         <div className="mt-2 relative rounded-2xl overflow-hidden border border-slate-200 max-h-36 bg-slate-950 flex items-center justify-center">
                           <img src={previewComprobante} alt="Preview Comprobante" className="max-h-36 object-contain" />
@@ -1494,17 +1556,17 @@ export default function PublicClubDetailPage() {
                   <button
                     type="button"
                     onClick={() => setPasoModal(1)}
-                    className="w-1/3 py-3.5 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl"
+                    className="w-1/3 py-3.5 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl cursor-pointer"
                   >
-                    ← Volver
+                    Volver
                   </button>
                   <button
                     type="button"
                     onClick={confirmarReservaYPago}
                     disabled={procesandoReserva}
-                    className="w-2/3 py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md"
+                    className="w-2/3 py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md cursor-pointer disabled:opacity-50"
                   >
-                    {procesandoReserva ? "Enviando..." : "Confirmar y Enviar Abono"}
+                    {procesandoReserva ? "Enviando..." : "✓ Confirmar y Enviar Abono"}
                   </button>
                 </div>
               </div>
@@ -1523,7 +1585,7 @@ export default function PublicClubDetailPage() {
             <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
             <button
               onClick={() => setPopupNotif({ ...popupNotif, open: false })}
-              className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl hover:bg-slate-800 transition-colors"
+              className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl hover:bg-slate-800 transition-colors cursor-pointer"
             >
               Entendido
             </button>
@@ -1531,7 +1593,6 @@ export default function PublicClubDetailPage() {
         </div>,
         document.body
       )}
-
     </div>
   );
 }
