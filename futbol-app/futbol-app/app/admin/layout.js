@@ -4,7 +4,8 @@ import "../globals.css";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import POSReservaAlertModal from "@/components/POSReservaAlertModal";
 
 export default function GerenciaLayout({ children }) {
   const pathname = usePathname();
@@ -13,8 +14,12 @@ export default function GerenciaLayout({ children }) {
   const [mounted, setMounted] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [hasClub, setHasClub] = useState(true);
+  const [clubId, setClubId] = useState(null);
   const [checkingRole, setCheckingRole] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  
+  // Estado global para activar/silenciar las alertas de audio POS
+  const [audioSilenciado, setAudioSilenciado] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -40,19 +45,20 @@ export default function GerenciaLayout({ children }) {
       const userIsAdmin = !!profile?.is_admin;
       setIsAdmin(userIsAdmin);
 
-      let clubId = profile?.club_id;
+      let targetClubId = profile?.club_id;
 
-      if (!clubId) {
+      if (!targetClubId) {
         const { data: clubCreado } = await supabase
           .from("clubs")
           .select("id")
           .eq("created_by", user.id)
           .maybeSingle();
 
-        clubId = clubCreado?.id || null;
+        targetClubId = clubCreado?.id || null;
       }
 
-      const tieneClub = !!clubId;
+      setClubId(targetClubId);
+      const tieneClub = !!targetClubId;
       setHasClub(tieneClub);
       setCheckingRole(false);
 
@@ -72,6 +78,21 @@ export default function GerenciaLayout({ children }) {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
+  };
+
+  const toggleSonidoAlertas = () => {
+    // Si se está activando, se desbloquea el contexto de audio del navegador mediante un beep rápido de prueba
+    if (audioSilenciado) {
+      try {
+        const testAudio = new Audio("/alerta-reserva.wav");
+        testAudio.volume = 0.5;
+        testAudio.play().then(() => {
+          testAudio.pause();
+          testAudio.currentTime = 0;
+        }).catch(() => {});
+      } catch (e) {}
+    }
+    setAudioSilenciado(!audioSilenciado);
   };
 
   if (!mounted || checkingRole) {
@@ -103,6 +124,15 @@ export default function GerenciaLayout({ children }) {
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-100 font-sans w-full overflow-hidden">
       
+      {/* ALERTA FLOTANTE GLOBAL DE RESERVA */}
+      {clubId && (
+        <POSReservaAlertModal
+          clubId={clubId}
+          audioSilenciado={audioSilenciado}
+          setAudioSilenciado={setAudioSilenciado}
+        />
+      )}
+
       {/* HEADER SUPERIOR EXCLUSIVO PARA MÓVILES */}
       <header className="md:hidden bg-slate-950 text-white p-3.5 border-b border-slate-800 flex items-center justify-between z-30 shrink-0 shadow-md">
         <div>
@@ -112,12 +142,26 @@ export default function GerenciaLayout({ children }) {
           </p>
         </div>
 
-        <button
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="px-3 py-1.5 rounded-xl bg-slate-800 text-[#00FF9D] font-black text-xs border border-slate-700 active:scale-95 transition-all"
-        >
-          {mobileMenuOpen ? "✕ Cerrar" : "☰ Menú"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleSonidoAlertas}
+            className={`px-2.5 py-1.5 rounded-xl font-black text-[10px] uppercase border transition-all ${
+              audioSilenciado 
+                ? "bg-rose-950/60 text-rose-300 border-rose-800" 
+                : "bg-emerald-950/60 text-[#00FF9D] border-emerald-800"
+            }`}
+          >
+            {audioSilenciado ? "🔇 Silenciado" : "🔊 Audio ON"}
+          </button>
+
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 text-[#00FF9D] font-black text-xs border border-slate-700 active:scale-95 transition-all"
+          >
+            {mobileMenuOpen ? "✕ Cerrar" : "☰ Menú"}
+          </button>
+        </div>
       </header>
 
       {/* DROPDOWN MENÚ NAVEGACIÓN MÓVIL */}
@@ -164,6 +208,27 @@ export default function GerenciaLayout({ children }) {
           <p className="text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-widest">
             {isAdmin ? "Super Admin / App Owner" : "Gerencia de Club / POS"}
           </p>
+        </div>
+
+        {/* BOTÓN CONTROL DE SONIDO INTEGRADO EN SIDEBAR */}
+        <div className="px-4 pt-4">
+          <button
+            type="button"
+            onClick={toggleSonidoAlertas}
+            className={`w-full py-2.5 px-3 rounded-xl font-black text-xs uppercase border flex items-center justify-between transition-all cursor-pointer ${
+              audioSilenciado
+                ? "bg-rose-950/40 text-rose-300 border-rose-800/60 hover:bg-rose-900/50"
+                : "bg-emerald-950/40 text-[#00FF9D] border-emerald-800/60 hover:bg-emerald-900/50"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-base">{audioSilenciado ? "🔇" : "🔊"}</span>
+              <span>{audioSilenciado ? "Alertas Silenciadas" : "Alertas Activas"}</span>
+            </div>
+            <span className="text-[9px] font-black opacity-80 bg-slate-900 px-2 py-0.5 rounded-md">
+              {audioSilenciado ? "Pausado" : "ON"}
+            </span>
+          </button>
         </div>
 
         {!hasClub && !isAdmin && (
