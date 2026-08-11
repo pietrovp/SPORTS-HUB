@@ -23,7 +23,6 @@ export default function PadelPartidosPage() {
   const [user, setUser] = useState(null);
   const [userCreditos, setUserCreditos] = useState(0);
 
-  // Filtros
   const [filtroCategoria, setFiltroCategoria] = useState("todas");
   const [filtroTipo, setFiltroTipo] = useState("todos");
 
@@ -116,7 +115,7 @@ export default function PadelPartidosPage() {
       const partidosFinales = partidosVisibles.map((m) => ({
         ...m,
         players: playersByMatch[m.id] || [],
-      }));
+      })).sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
 
       setMatches(partidosFinales);
     } catch (error) {
@@ -126,7 +125,6 @@ export default function PadelPartidosPage() {
     }
   }
 
-  // 1. MIS PARTIDOS PRÓXIMOS (PROGRAMADOS)
   const misPartidosProximos = useMemo(() => {
     if (!user) return [];
     return matches.filter((m) => {
@@ -137,7 +135,6 @@ export default function PadelPartidosPage() {
     });
   }, [matches, user]);
 
-  // 2. PARTIDOS ABIERTOS DE LA COMUNIDAD
   const partidosAbiertos = useMemo(() => {
     return matches.filter((m) => {
       if (m.status === "jugado") return false;
@@ -154,15 +151,14 @@ export default function PadelPartidosPage() {
     });
   }, [matches, user, filtroCategoria, filtroTipo]);
 
-  // 3. HISTORIAL DE MIS PARTIDOS ANTERIORES JUGADOS (COMPACTO)
   const misPartidosJugados = useMemo(() => {
     if (!user) return [];
-    return matches.filter((m) => {
+    return [...matches].filter((m) => {
       if (m.status !== "jugado") return false;
       const soyCreador = m.created_by === user.id;
       const soyJugador = m.players?.some((p) => p.user_id === user.id);
       return soyCreador || soyJugador;
-    });
+    }).sort((a, b) => new Date(b.scheduled_at) - new Date(a.scheduled_at));
   }, [matches, user]);
 
   if (loading) {
@@ -177,7 +173,6 @@ export default function PadelPartidosPage() {
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 space-y-8">
       <div className="mx-auto max-w-7xl space-y-8">
 
-        {/* HEADER */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200/80 pb-5">
           <div>
             <span className="text-xs font-black uppercase tracking-widest text-blue-600">Sports Hub · Pádel</span>
@@ -195,7 +190,6 @@ export default function PadelPartidosPage() {
           </Link>
         </div>
 
-        {/* 1. SECCIÓN: MIS PRÓXIMOS PARTIDOS Y RESERVAS */}
         {user && (
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
@@ -232,7 +226,6 @@ export default function PadelPartidosPage() {
           </div>
         )}
 
-        {/* 2. SECCIÓN: PARTIDOS ABIERTOS DE LA COMUNIDAD */}
         <div className="space-y-4 pt-2">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -243,7 +236,6 @@ export default function PadelPartidosPage() {
               </span>
             </div>
 
-            {/* FILTROS RÁPIDOS */}
             <div className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] font-black text-slate-400">Cat:</span>
@@ -253,8 +245,8 @@ export default function PadelPartidosPage() {
                   className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800 outline-none"
                 >
                   <option value="todas">Todas</option>
-                  {["Rookies", "7ma", "6ta", "5ta", "4ta", "3era", "2da", "Open"].map((c) => (
-                    <option key={c} value={c}>{c}</option>
+                  {["7ma", "6ta", "5ta", "4ta", "3era", "2da", "Open"].map((c) => (
+                    <option key={c} value={c.toLowerCase()}>{c}</option>
                   ))}
                 </select>
               </div>
@@ -274,7 +266,6 @@ export default function PadelPartidosPage() {
             </div>
           </div>
 
-          {/* SLIDER DE PARTIDOS ABIERTOS */}
           {partidosAbiertos.length === 0 ? (
             <div className="bg-white rounded-3xl p-8 text-center border border-dashed border-slate-300 space-y-3">
               <span className="text-3xl block">🎾</span>
@@ -305,9 +296,8 @@ export default function PadelPartidosPage() {
           )}
         </div>
 
-        {/* 📜 3. SECCIÓN COMPACTA ABAJO: HISTORIAL DE PARTIDOS JUGADOS ANTERIORMENTE */}
         {user && misPartidosJugados.length > 0 && (
-          <div className="space-y-3 pt-4 border-t border-slate-200">
+          <div className="space-y-3 pt-6 border-t border-slate-200">
             <div className="flex items-center gap-2 px-1">
               <span className="text-lg">🏆</span>
               <h2 className="text-base font-black text-slate-900">Historial de Partidos Jugados Anteriores</h2>

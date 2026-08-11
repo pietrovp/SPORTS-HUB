@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
-// Banderas por código de país
 const BANDERAS_PAIS = {
   VE: "🇻🇪",
   AR: "🇦🇷",
@@ -18,7 +17,6 @@ const BANDERAS_PAIS = {
 
 const CATEGORIAS = [
   { value: "todas", label: "Todas las categorías" },
-  { value: "rookies", label: "Rookies" },
   { value: "7ma", label: "7ma Categoría" },
   { value: "6ta", label: "6ta Categoría" },
   { value: "5ta", label: "5ta Categoría" },
@@ -33,7 +31,6 @@ export default function PadelRankingPage() {
   const [jugadores, setJugadores] = useState([]);
   const [user, setUser] = useState(null);
 
-  // Filtros
   const [filtroPais, setFiltroPais] = useState("todos");
   const [filtroCiudad, setFiltroCiudad] = useState("todas");
   const [filtroCategoria, setFiltroCategoria] = useState("todas");
@@ -49,7 +46,6 @@ export default function PadelRankingPage() {
       const { data: { user: authUser } } = await supabase.auth.getUser();
       setUser(authUser);
 
-      // Cargar perfiles de pádel unidos con profiles global
       const { data, error } = await supabase
         .from("padel_profiles")
         .select(`
@@ -60,7 +56,6 @@ export default function PadelRankingPage() {
 
       if (error) throw error;
 
-      // Cargar partidos para estadísticas de victorias
       const { data: matchPlayers } = await supabase
         .from("match_players")
         .select(`user_id, team, match:padel_matches!inner(status, winner_team)`);
@@ -90,7 +85,7 @@ export default function PadelRankingPage() {
           pais: item.profiles?.pais || "VE",
           ciudad: item.profiles?.ciudad || "Sin especificar",
           rating: Number(item.rating) || 1.50,
-          categoria: item.categoria_oficial || "rookies",
+          categoria: item.categoria_oficial || "7ma",
           partidos_jugados: st.pj,
           victorias: st.vic,
           pct_victorias: pct,
@@ -105,7 +100,6 @@ export default function PadelRankingPage() {
     }
   }
 
-  // 🔥 Lista de ciudades dinámicas filtradas por el país seleccionado
   const ciudadesDisponibles = useMemo(() => {
     const setC = new Set();
     jugadores.forEach((j) => {
@@ -115,13 +109,11 @@ export default function PadelRankingPage() {
     return Array.from(setC).sort();
   }, [jugadores, filtroPais]);
 
-  // Manejar cambio de país y resetear ciudad si es necesario
   function manejarCambioPais(nuevoPais) {
     setFiltroPais(nuevoPais);
     setFiltroCiudad("todas");
   }
 
-  // FILTRADO Y ORDENAMIENTO DE JUGADORES
   const rankingFiltrado = useMemo(() => {
     const list = jugadores.filter((j) => {
       if (filtroPais !== "todos" && j.pais !== filtroPais) return false;
@@ -138,7 +130,6 @@ export default function PadelRankingPage() {
     });
   }, [jugadores, filtroPais, filtroCiudad, filtroCategoria, busqueda]);
 
-  // Posición del usuario actual
   const puestoUsuario = useMemo(() => {
     if (!user) return null;
     const index = rankingFiltrado.findIndex((j) => j.cuenta_id === user.id);
@@ -161,7 +152,6 @@ export default function PadelRankingPage() {
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8">
       <div className="mx-auto max-w-6xl space-y-5">
 
-        {/* HEADER */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div>
             <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest text-blue-600">
@@ -186,7 +176,6 @@ export default function PadelRankingPage() {
           </div>
         </div>
 
-        {/* BARRA DE FILTROS */}
         <div className="bg-white p-3 sm:p-4 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm grid grid-cols-1 sm:grid-cols-3 gap-2.5">
           <div>
             <label className="text-[9px] font-black uppercase text-slate-400 block mb-1">País</label>
@@ -234,7 +223,6 @@ export default function PadelRankingPage() {
           </div>
         </div>
 
-        {/* MI POSICIÓN DESTACADA */}
         {puestoUsuario && (
           <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-slate-900 text-white p-3.5 sm:p-4.5 rounded-2xl sm:rounded-3xl shadow-md flex items-center justify-between gap-2 overflow-hidden">
             <div className="flex items-center gap-2.5 min-w-0">
@@ -254,11 +242,9 @@ export default function PadelRankingPage() {
           </div>
         )}
 
-        {/* 👑 PODIO TOP 3 */}
         {rankingFiltrado.length >= 3 && (
           <div className="grid grid-cols-3 gap-1.5 sm:gap-4 items-end pt-5 pb-2">
             
-            {/* #2 SEGUNDO LUGAR (PLATA) */}
             {top2 && (
               <div className="bg-white rounded-2xl sm:rounded-3xl p-2 sm:p-4 border border-slate-200 shadow-sm text-center flex flex-col items-center justify-between min-h-[180px] sm:min-h-[220px] relative">
                 <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-slate-200 text-slate-800 font-black text-[9px] sm:text-[10px] px-2 sm:px-3 py-0.5 rounded-full border border-slate-300 whitespace-nowrap shadow-sm">
@@ -289,7 +275,6 @@ export default function PadelRankingPage() {
               </div>
             )}
 
-            {/* #1 PRIMER LUGAR (ORO - CENTRO DESTACADO) */}
             {top1 && (
               <div className="bg-gradient-to-b from-amber-500/10 via-white to-white rounded-2xl sm:rounded-[2.5rem] p-2.5 sm:p-5 border-2 border-amber-400 shadow-lg sm:shadow-xl text-center flex flex-col items-center justify-between min-h-[210px] sm:min-h-[260px] relative transform -translate-y-1.5 sm:-translate-y-2">
                 <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-black text-[9px] sm:text-xs px-2.5 sm:px-4 py-0.5 sm:py-1 rounded-full shadow-md tracking-wider whitespace-nowrap">
@@ -320,7 +305,6 @@ export default function PadelRankingPage() {
               </div>
             )}
 
-            {/* #3 TERCER LUGAR (BRONCE) */}
             {top3 && (
               <div className="bg-white rounded-2xl sm:rounded-3xl p-2 sm:p-4 border border-slate-200 shadow-sm text-center flex flex-col items-center justify-between min-h-[180px] sm:min-h-[220px] relative">
                 <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-amber-800/10 text-amber-800 font-black text-[9px] sm:text-[10px] px-2 sm:px-3 py-0.5 rounded-full border border-amber-800/20 whitespace-nowrap shadow-sm">
@@ -354,7 +338,6 @@ export default function PadelRankingPage() {
           </div>
         )}
 
-        {/* LISTA COMPLETA DE JUGADORES ENUMERADA */}
         <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
           
           <div className="p-3 sm:p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest">
@@ -382,14 +365,12 @@ export default function PadelRankingPage() {
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       
-                      {/* Puesto */}
                       <span className={`w-6 sm:w-8 text-center text-xs sm:text-sm font-black shrink-0 ${
                         puesto === 1 ? "text-amber-500" : puesto === 2 ? "text-slate-400" : puesto === 3 ? "text-amber-700" : "text-slate-400"
                       }`}>
                         #{puesto}
                       </span>
 
-                      {/* Avatar */}
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center font-black text-slate-700 text-xs">
                         {jugador.avatar_url ? (
                           <img src={jugador.avatar_url} alt={jugador.nombre} className="w-full h-full object-cover" />
@@ -398,7 +379,6 @@ export default function PadelRankingPage() {
                         )}
                       </div>
 
-                      {/* Nombre y Ubicación */}
                       <div className="min-w-0">
                         <div className="flex items-center gap-1">
                           <p className="text-xs sm:text-sm font-black text-slate-900 truncate">

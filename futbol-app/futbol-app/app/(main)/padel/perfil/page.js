@@ -6,7 +6,6 @@ import { supabase } from "@/lib/supabaseClient";
 import PartidoPadelCard from "@/components/padel/PartidoPadelCard";
 
 const TODAS_CATEGORIAS = [
-  { value: "rookies", label: "Rookies" },
   { value: "7ma", label: "7ma Categoría" },
   { value: "6ta", label: "6ta Categoría" },
   { value: "5ta", label: "5ta Categoría" },
@@ -17,8 +16,8 @@ const TODAS_CATEGORIAS = [
 ];
 
 const DEFAULT_PROFILE = {
-  categoria_solicitada: "rookies",
-  categoria_oficial: "rookies",
+  categoria_solicitada: "7ma",
+  categoria_oficial: "7ma",
   estado_categoria: "aprobada",
   motivo_solicitud: "",
   rating: 1.50,
@@ -32,7 +31,6 @@ const DEFAULT_PROFILE = {
 
 const LABELS = {
   categoria: {
-    rookies: "Rookies",
     "7ma": "7ma",
     "6ta": "6ta",
     "5ta": "5ta",
@@ -65,8 +63,7 @@ const LABELS = {
 };
 
 const NIVEL_LABELS = {
-  rookies: { label: "Rookies", desc: "Sin clases o menos de 6 meses jugando. Golpes básicos en desarrollo." },
-  "7ma": { label: "7ma Categoría", desc: "Conoces reglas básicas, mantienes peloteos lentos sin mucha consistencia." },
+  "7ma": { label: "7ma Categoría", desc: "Nivel de iniciación o jugador de club con conocimientos básicos y peloteos en desarrollo." },
   "6ta": { label: "6ta Categoría", desc: "Juegas con regularidad, dominas saques y voleas básicas." },
   "5ta": { label: "5ta Categoría", desc: "Nivel intermedio-avanzado, controlas pared de fondo y dirección." },
   "4ta": { label: "4ta Categoría", desc: "Alto nivel técnico y táctico, participas en torneos locales." },
@@ -81,7 +78,7 @@ const ONBOARDING_STEPS = [
     titulo: "¿Cómo te autoevalúas en la siguiente escala?",
     campo: "q_nivel_escala",
     opciones: [
-      { label: "Iniciación / Principiante", value: "iniciacion", peso: 0, cats: "Rookies · 7ma" },
+      { label: "Iniciación / Principiante", value: "iniciacion", peso: 0, cats: "7ma" },
       { label: "Intermedio", value: "intermedio", peso: 0.8, cats: "6ta" },
       { label: "Avanzado", value: "avanzado", peso: 1.6, cats: "5ta · 4ta" },
       { label: "Profesional / Competitivo", value: "profesional", peso: 2.5, cats: "3era · 2da · Open" },
@@ -169,7 +166,6 @@ function calcularRatingInicial(respuestas) {
 
 function categoriaDesdeRating(r) {
   const num = Number(r) || 1.0;
-  if (num < 2.0) return "rookies";
   if (num < 3.0) return "7ma";
   if (num < 4.0) return "6ta";
   if (num < 4.8) return "5ta";
@@ -181,8 +177,7 @@ function categoriaDesdeRating(r) {
 
 function getInfoRating(ratingVal) {
   const r = Number(ratingVal) || 1.0;
-  if (r < 2.0) return { catActual: "Rookies", nextCat: "7ma", floor: 1.0, ceiling: 2.0 };
-  if (r < 3.0) return { catActual: "7ma", nextCat: "6ta", floor: 2.0, ceiling: 3.0 };
+  if (r < 3.0) return { catActual: "7ma", nextCat: "6ta", floor: 1.0, ceiling: 3.0 };
   if (r < 4.0) return { catActual: "6ta", nextCat: "5ta", floor: 3.0, ceiling: 4.0 };
   if (r < 4.8) return { catActual: "5ta", nextCat: "4ta", floor: 4.0, ceiling: 4.8 };
   if (r < 5.5) return { catActual: "4ta", nextCat: "3era", floor: 4.8, ceiling: 5.5 };
@@ -227,7 +222,6 @@ function formatFechaGrafico(fechaStr) {
   });
 }
 
-// 📈 TRACKER GRÁFICO (CORREGIDO TOOLTIP CON FOREIGN-OBJECT)
 function RatingTrackerChart({ partidosJugados, currentRating }) {
   const [filtro, setFiltro] = useState("10"); 
   const [pointSpacing, setPointSpacing] = useState(65);
@@ -391,7 +385,6 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
                     <text x={pt.x} y={pt.y + 28} textAnchor="middle" fill="#94A3B8" fontSize="7" fontWeight="600">{pt.dateStr}</text>
                   )}
                   
-                  {/* TOOLTIP PERFECTAMENTE CENTRADO SOBRE EL PUNTO USANDO FOREIGN-OBJECT */}
                   {isActive && !esInicio && (
                     <foreignObject x={pt.x - 60} y={pt.y - 70} width="120" height="60" className="overflow-visible pointer-events-none">
                       <div className="flex flex-col items-center justify-end w-full h-full pb-2 animate-in zoom-in-95 duration-200">
@@ -445,7 +438,7 @@ export default function PadelPerfilPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   const [formPerfil, setFormPerfil] = useState(DEFAULT_PROFILE);
-  const [catSolicitada, setCatSolicitada] = useState("rookies");
+  const [catSolicitada, setCatSolicitada] = useState("7ma");
   const [motivoSolicitud, setMotivoSolicitud] = useState("");
 
   useEffect(() => {
@@ -501,7 +494,7 @@ export default function PadelPerfilPage() {
         edad: finalPadel.edad || 25,
       });
 
-      setCatSolicitada(finalPadel.categoria_solicitada || finalPadel.categoria_oficial || "rookies");
+      setCatSolicitada(finalPadel.categoria_solicitada || finalPadel.categoria_oficial || "7ma");
       setMotivoSolicitud(finalPadel.motivo_solicitud || "");
 
       if (!finalPadel.evaluacion_inicial_completada) {
@@ -775,7 +768,7 @@ export default function PadelPerfilPage() {
 
   const estadoCat = padelProfile?.estado_categoria || "pendiente";
   const catOficialKey = padelProfile?.categoria_oficial || categoriaDesdeRating(ratingActual);
-  const catOficialLabel = LABELS.categoria[catOficialKey] || "Rookies";
+  const catOficialLabel = LABELS.categoria[catOficialKey] || "7ma";
   const tieneSolicitudPendiente = estadoCat === "pendiente";
 
   const TOTAL_STEPS = ONBOARDING_STEPS.length + 1;
