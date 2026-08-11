@@ -23,6 +23,7 @@ export default function PadelPartidosPage() {
   const [user, setUser] = useState(null);
   const [userCreditos, setUserCreditos] = useState(0);
 
+  // Filtros
   const [filtroCategoria, setFiltroCategoria] = useState("todas");
   const [filtroTipo, setFiltroTipo] = useState("todos");
 
@@ -67,10 +68,15 @@ export default function PadelPartidosPage() {
 
       if (matchesErr) throw matchesErr;
 
+      // 🔴 FILTRADO ROBUTO DE VISIBILIDAD (SOPORTA PUBLICOS CREADOS POR CUALQUIERA)
       const partidosVisibles = (matchesData || []).filter((m) => {
-        const esPrivado = m.is_private || m.match_type === "privado";
+        const typeStr = (m.match_type || "").toString().toLowerCase();
+        const esPrivado = m.is_private === true || typeStr === "privado";
+        
+        // Si no es privado, ES PÚBLICO y todos los usuarios lo pueden ver
         if (!esPrivado) return true;
         if (!authUser) return false;
+        
         return m.created_by === authUser.id || misPartidosIds.includes(m.id);
       });
 
@@ -125,6 +131,7 @@ export default function PadelPartidosPage() {
     }
   }
 
+  // 1. MIS PARTIDOS PRÓXIMOS
   const misPartidosProximos = useMemo(() => {
     if (!user) return [];
     return matches.filter((m) => {
@@ -135,15 +142,25 @@ export default function PadelPartidosPage() {
     });
   }, [matches, user]);
 
+  // 2. PARTIDOS ABIERTOS DE LA COMUNIDAD (COMPARACIÓN INSENSIBLE A MAYÚSCULAS)
   const partidosAbiertos = useMemo(() => {
     return matches.filter((m) => {
       if (m.status === "jugado") return false;
-      const esPrivado = m.is_private || m.match_type === "privado";
+      
+      const typeStr = (m.match_type || "").toString().toLowerCase();
+      const esPrivado = m.is_private === true || typeStr === "privado";
       if (esPrivado) return false;
 
+      // Si el usuario ya está metido, no sale en descubrimientos de la comunidad
       if (user && m.players?.some((p) => p.user_id === user.id)) return false;
 
-      if (filtroCategoria !== "todas" && m.category_restriction !== filtroCategoria) return false;
+      // Normalización de categoría para comparación insensible
+      if (filtroCategoria !== "todas") {
+        const catMatch = (m.category_restriction || "").toString().toLowerCase().trim();
+        const catFiltro = filtroCategoria.toLowerCase().trim();
+        if (catMatch !== catFiltro && catMatch !== "libre") return false;
+      }
+
       if (filtroTipo === "competitivo" && !m.is_competitive) return false;
       if (filtroTipo === "amistoso" && m.is_competitive) return false;
 
@@ -151,6 +168,7 @@ export default function PadelPartidosPage() {
     });
   }, [matches, user, filtroCategoria, filtroTipo]);
 
+  // 3. HISTORIAL DE PARTIDOS JUGADOS ANTERIORMENTE
   const misPartidosJugados = useMemo(() => {
     if (!user) return [];
     return [...matches].filter((m) => {
@@ -173,6 +191,7 @@ export default function PadelPartidosPage() {
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 space-y-8">
       <div className="mx-auto max-w-7xl space-y-8">
 
+        {/* HEADER */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200/80 pb-5">
           <div>
             <span className="text-xs font-black uppercase tracking-widest text-blue-600">Sports Hub · Pádel</span>
@@ -190,6 +209,7 @@ export default function PadelPartidosPage() {
           </Link>
         </div>
 
+        {/* 1. SECCIÓN: MIS PRÓXIMOS PARTIDOS Y RESERVAS */}
         {user && (
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
@@ -226,6 +246,7 @@ export default function PadelPartidosPage() {
           </div>
         )}
 
+        {/* 2. SECCIÓN: PARTIDOS ABIERTOS DE LA COMUNIDAD */}
         <div className="space-y-4 pt-2">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -236,6 +257,7 @@ export default function PadelPartidosPage() {
               </span>
             </div>
 
+            {/* FILTROS RÁPIDOS */}
             <div className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] font-black text-slate-400">Cat:</span>
@@ -266,6 +288,7 @@ export default function PadelPartidosPage() {
             </div>
           </div>
 
+          {/* SLIDER DE PARTIDOS ABIERTOS */}
           {partidosAbiertos.length === 0 ? (
             <div className="bg-white rounded-3xl p-8 text-center border border-dashed border-slate-300 space-y-3">
               <span className="text-3xl block">🎾</span>
@@ -296,6 +319,7 @@ export default function PadelPartidosPage() {
           )}
         </div>
 
+        {/* 3. HISTORIAL DE PARTIDOS JUGADOS ANTERIORMENTE */}
         {user && misPartidosJugados.length > 0 && (
           <div className="space-y-3 pt-6 border-t border-slate-200">
             <div className="flex items-center gap-2 px-1">

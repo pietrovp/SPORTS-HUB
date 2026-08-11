@@ -17,6 +17,44 @@ const AMENIDADES_MAP = {
   lockers: { label: "Lockers / Casilleros", icon: "🔒" },
 };
 
+function obtenerEpoch(fechaStr) {
+  if (!fechaStr) return 0;
+  if (fechaStr instanceof Date) return fechaStr.getTime();
+  let clean = String(fechaStr).trim().replace(" ", "T");
+  
+  const tieneOffset = clean.includes("Z") || clean.includes("+") || clean.indexOf("-", 10) !== -1;
+  if (!tieneOffset) {
+    clean = `${clean.substring(0, 19)}-04:00`;
+  }
+  return new Date(clean).getTime();
+}
+
+function parsearFechaVET(fechaStr) {
+  if (!fechaStr) return new Date();
+  const cleanStr = fechaStr.replace(" ", "T").substring(0, 19);
+  const isoVET = `${cleanStr.endsWith("Z") ? cleanStr.slice(0, -1) : cleanStr}-04:00`;
+  return new Date(isoVET);
+}
+
+function formatearFechaISOVET(dateObj) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Caracas",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(dateObj);
+  const year = parts.find((p) => p.type === "year").value;
+  const month = parts.find((p) => p.type === "month").value;
+  const day = parts.find((p) => p.type === "day").value;
+  return `${year}-${month}-${day}`;
+}
+
+function crearFechaVET(dateYYYYMMDD, hora24, minutos24) {
+  const hStr = String(hora24).padStart(2, "0");
+  const mStr = String(minutos24).padStart(2, "0");
+  return new Date(`${dateYYYYMMDD}T${hStr}:${mStr}:00-04:00`);
+}
+
 export default function PublicClubDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -33,7 +71,7 @@ export default function PublicClubDetailPage() {
   const [bloqueosActivos, setBloqueosActivos] = useState([]);
 
   const [tasaBCV, setTasaBCV] = useState(36.65);
-  const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(() => new Date());
   const [promocionHoy, setPromocionHoy] = useState(null);
 
   const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
@@ -88,8 +126,12 @@ export default function PublicClubDetailPage() {
 
     cargarBloqueos();
 
-    const channel = supabase
-      .channel("realtime-app-cliente")
+    // Canal unificado de Broadcast + Postgres Changes
+    const channel = supabase.channel(`locks_club_${clubId}`, {
+      config: { broadcast: { self: true } }
+    });
+
+    channel
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "padel_locks" },
@@ -105,6 +147,20 @@ export default function PublicClubDetailPage() {
         { event: "*", schema: "public", table: "match_players" },
         () => cargarDetalleClub()
       )
+      .on("broadcast", { event: "lock_event" }, (payload) => {
+        const data = payload.payload;
+        if (data?.type === "INSERT") {
+          setBloqueosActivos((prev) => [
+            ...prev.filter(l => !(l.court_id === data.lock.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.lock.scheduled_at)) < 5000)),
+            data.lock
+          ]);
+        } else if (data?.type === "DELETE") {
+          setBloqueosActivos((prev) =>
+            prev.filter(l => !(l.court_id === data.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.scheduled_at)) < 5000))
+          );
+        }
+        cargarBloqueos();
+      })
       .subscribe();
 
     return () => {
@@ -170,17 +226,24 @@ export default function PublicClubDetailPage() {
     );
 
     if (bloqueSeleccionado && user) {
-      const d = bloqueSeleccionado.dateObj;
-      const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
-      
+      const scheduledAtISO = bloqueSeleccionado.dateObj.toISOString();
+
+      const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "lock_event",
+        payload: { 
+          type: "DELETE", 
+          court_id: bloqueSeleccionado.cancha.id, 
+          scheduled_at: scheduledAtISO 
+        }
+      });
+
       await supabase
         .from("padel_locks")
         .delete()
-        .match({
-          court_id: bloqueSeleccionado.cancha.id,
-          scheduled_at: fechaFija,
-          user_id: user.id
-        });
+        .eq("court_id", bloqueSeleccionado.cancha.id)
+        .eq("user_id", user.id);
       
       await cargarBloqueos();
     }
@@ -191,17 +254,24 @@ export default function PublicClubDetailPage() {
     setTiempoRestante(null);
 
     if (bloqueSeleccionado && user) {
-      const d = bloqueSeleccionado.dateObj;
-      const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
-      
+      const scheduledAtISO = bloqueSeleccionado.dateObj.toISOString();
+
+      const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "lock_event",
+        payload: { 
+          type: "DELETE", 
+          court_id: bloqueSeleccionado.cancha.id, 
+          scheduled_at: scheduledAtISO 
+        }
+      });
+
       await supabase
         .from("padel_locks")
         .delete()
-        .match({
-          court_id: bloqueSeleccionado.cancha.id,
-          scheduled_at: fechaFija,
-          user_id: user.id
-        });
+        .eq("court_id", bloqueSeleccionado.cancha.id)
+        .eq("user_id", user.id);
 
       await cargarBloqueos();
     }
@@ -209,10 +279,7 @@ export default function PublicClubDetailPage() {
 
   async function cargarPromocionDelDia() {
     try {
-      const ano = fechaSeleccionada.getFullYear();
-      const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, "0");
-      const dia = String(fechaSeleccionada.getDate()).padStart(2, "0");
-      const hoyStr = `${ano}-${mes}-${dia}`;
+      const hoyStr = formatearFechaISOVET(fechaSeleccionada);
 
       const { data: promoActiva } = await supabase
         .from("padel_promotions")
@@ -334,10 +401,13 @@ export default function PublicClubDetailPage() {
 
   const diasSiguientes = useMemo(() => {
     const list = [];
+    const hoyISO = formatearFechaISOVET(new Date());
+    const [y, m, d] = hoyISO.split("-").map(Number);
+
     for (let i = 0; i < 7; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() + i);
-      list.push(d);
+      const dateObj = crearFechaVET(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`, 12, 0);
+      dateObj.setDate(dateObj.getDate() + i);
+      list.push(dateObj);
     }
     return list;
   }, []);
@@ -349,26 +419,35 @@ export default function PublicClubDetailPage() {
     const horaApertura = parseInt((club.open_time || "07:00:00").split(":")[0], 10);
     const horaCierre = parseInt((club.close_time || "23:00:00").split(":")[0], 10);
 
+    const fechaSelISO = formatearFechaISOVET(fechaSeleccionada);
     const bloques = [];
-    let cur = new Date(fechaSeleccionada);
-    cur.setHours(horaApertura, 0, 0, 0);
 
-    const end = new Date(fechaSeleccionada);
-    end.setHours(horaCierre, 0, 0, 0);
+    let curH = horaApertura;
+    let curM = 0;
 
-    while (cur < end || (cur.getHours() === horaCierre && cur.getMinutes() === 0)) {
-      if (cur.getHours() === horaCierre && cur.getMinutes() > 0) break;
+    while (curH < horaCierre || (curH === horaCierre && curM === 0)) {
+      if (curH === horaCierre && curM > 0) break;
 
-      const hStr = cur.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", hour12: true });
-      
-      bloques.push({
-        etiqueta: hStr,
-        horaInt: cur.getHours(),
-        minutosInt: cur.getMinutes(),
-        dateObj: new Date(cur),
+      const dateObjSlot = crearFechaVET(fechaSelISO, curH, curM);
+      const hLabel = dateObjSlot.toLocaleTimeString("es-ES", {
+        timeZone: "America/Caracas",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
       });
 
-      cur.setMinutes(cur.getMinutes() + duracion);
+      bloques.push({
+        etiqueta: hLabel,
+        horaInt: curH,
+        minutosInt: curM,
+        dateObj: dateObjSlot,
+      });
+
+      curM += duracion;
+      if (curM >= 60) {
+        curH += Math.floor(curM / 60);
+        curM = curM % 60;
+      }
     }
     return bloques;
   }, [club, fechaSeleccionada]);
@@ -380,16 +459,15 @@ export default function PublicClubDetailPage() {
       return;
     }
 
-    const d = bloque.dateObj;
-    const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
-    
+    const slotTime = bloque.dateObj.getTime();
+
     const lockExistente = bloqueosActivos.find((l) => {
       if (l.court_id !== cancha.id) return false;
-      const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
-      return fechaLockStr === fechaFija.substring(0, 16);
+      const lockTime = obtenerEpoch(l.scheduled_at);
+      return Math.abs(lockTime - slotTime) < 5000;
     });
 
-    if (lockExistente) {
+    if (lockExistente && lockExistente.user_id !== user.id) {
       return mostrarNotificacion(
         "Pista en proceso de reserva", 
         "Alguien más está procesando el pago para esta pista ahora mismo.", 
@@ -401,20 +479,40 @@ export default function PublicClubDetailPage() {
       setProcesandoReserva(true);
       
       const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); 
+      const fechaISO = formatearFechaISOVET(bloque.dateObj);
+      const hStr = String(bloque.horaInt).padStart(2, "0");
+      const mStr = String(bloque.minutosInt).padStart(2, "0");
+      const scheduledAtISO = `${fechaISO}T${hStr}:${mStr}:00-04:00`;
+
+      const nuevoLock = {
+        court_id: cancha.id,
+        scheduled_at: scheduledAtISO,
+        user_id: user.id,
+        expires_at: expiresAt
+      };
+
+      // 1. Actualización local inmediata
+      setBloqueosActivos((prev) => [
+        ...prev.filter(l => !(l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - slotTime) < 5000)),
+        nuevoLock
+      ]);
+
+      // 2. Broadcast instantáneo por WebSocket a todos los usuarios
+      const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "lock_event",
+        payload: { type: "INSERT", lock: nuevoLock }
+      });
+
+      // 3. Persistencia en la base de datos
       const { error: lockErr } = await supabase
         .from("padel_locks")
-        .upsert({
-          court_id: cancha.id,
-          scheduled_at: fechaFija,
-          user_id: user.id,
-          expires_at: expiresAt
-        }, { onConflict: 'court_id,scheduled_at' });
+        .upsert(nuevoLock, { onConflict: 'court_id,scheduled_at' });
 
       if (lockErr) throw lockErr;
 
-      await cargarBloqueos();
       setTiempoRestante(600);
-
       const precioBaseTotal = precioCalculado || cancha.price_normal || 16;
       
       setBloqueSeleccionado({
@@ -441,6 +539,7 @@ export default function PublicClubDetailPage() {
     } catch (e) {
       console.error("Error al bloquear la pista:", e);
       mostrarNotificacion("Error", "No se pudo iniciar la reserva.", "error");
+      await cargarBloqueos();
     } finally {
       setProcesandoReserva(false);
     }
@@ -463,11 +562,15 @@ export default function PublicClubDetailPage() {
     if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0 };
     
     const baseTotal = bloqueSeleccionado.precioBaseTotal; 
-    const fee = baseTotal * 0.10;
-    const baseInd = baseTotal / cantidadJugadores;
-    const totalSug = tipoReserva === "privado" ? (baseTotal + fee) : (baseInd + (fee / cantidadJugadores));
+    const feeTotal = baseTotal * 0.10;
+    const cant = tipoReserva === "ranking" ? 4 : cantidadJugadores;
     
-    return { base: baseTotal, fee, totalSug, precioIndividual: baseInd };
+    const baseCalculada = tipoReserva === "privado" ? baseTotal : (baseTotal / cant);
+    const feeCalculado = tipoReserva === "privado" ? feeTotal : (feeTotal / cant);
+    const totalSug = baseCalculada + feeCalculado;
+    const precioIndividual = baseTotal / cant;
+    
+    return { base: baseCalculada, fee: feeCalculado, totalSug, precioIndividual };
   }, [bloqueSeleccionado, tipoReserva, cantidadJugadores]);
 
   const cambiarMonedaAbono = (nuevaMoneda) => {
@@ -508,7 +611,7 @@ export default function PublicClubDetailPage() {
         : user.email;
       
       const telefonoUsuario = userProf?.telefono || "Sin teléfono";
-      const miCat = userPadelProfile?.categoria_oficial || "rookies";
+      const miCat = userPadelProfile?.categoria_oficial || "7ma";
 
       const estadoPagoFinal = metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion";
 
@@ -525,20 +628,18 @@ export default function PublicClubDetailPage() {
         created_at: new Date().toISOString(),
       };
 
-      const d = bloqueSeleccionado.dateObj;
-      const fechaFija = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
-
       const esCompetitivo = tipoReserva === "ranking" || (tipoReserva === "privado" && activarRankedPrivado);
+      const scheduledAtISO = bloqueSeleccionado.dateObj.toISOString();
 
       const { data: newMatch, error: matchErr } = await supabase
         .from("matches")
         .insert({
           club_id: clubId,
           court_id: bloqueSeleccionado.cancha.id,
-          scheduled_at: fechaFija,
+          scheduled_at: scheduledAtISO,
           total_price: bloqueSeleccionado.precioBaseTotal,
           price_per_player: calculosPrecio.precioIndividual,
-          app_fee: calculosPrecio.fee,
+          app_fee: bloqueSeleccionado.precioBaseTotal * 0.10,
           match_type: tipoReserva,
           is_private: tipoReserva !== "ranking", 
           is_competitive: esCompetitivo,
@@ -561,13 +662,23 @@ export default function PublicClubDetailPage() {
         team: "A",
       });
 
+      // Notificar eliminación del bloqueo vía broadcast
+      const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "lock_event",
+        payload: { 
+          type: "DELETE", 
+          court_id: bloqueSeleccionado.cancha.id, 
+          scheduled_at: scheduledAtISO 
+        }
+      });
+
       await supabase
         .from("padel_locks")
         .delete()
-        .match({
-          court_id: bloqueSeleccionado.cancha.id,
-          scheduled_at: fechaFija,
-        });
+        .eq("court_id", bloqueSeleccionado.cancha.id)
+        .eq("user_id", user.id);
 
       await cargarBloqueos();
 
@@ -684,12 +795,12 @@ export default function PublicClubDetailPage() {
 
               {/* Selector de Días Horizontal */}
               <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                {diasSiguientes.map((d, i) => {
-                  const isSel = fechaSeleccionada.toDateString() === d.toDateString();
+                {diasSiguientes.map((dObj, i) => {
+                  const isSel = formatearFechaISOVET(fechaSeleccionada) === formatearFechaISOVET(dObj);
                   return (
                     <button
                       key={i}
-                      onClick={() => setFechaSeleccionada(d)}
+                      onClick={() => setFechaSeleccionada(dObj)}
                       className={`shrink-0 px-2.5 py-1.5 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-center border transition-all ${
                         isSel
                           ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md"
@@ -697,10 +808,10 @@ export default function PublicClubDetailPage() {
                       }`}
                     >
                       <span className="text-[8px] sm:text-[10px] font-black uppercase block opacity-60">
-                        {i === 0 ? "Hoy" : d.toLocaleDateString("es-ES", { weekday: "short" })}
+                        {i === 0 ? "Hoy" : dObj.toLocaleDateString("es-ES", { timeZone: "America/Caracas", weekday: "short" })}
                       </span>
                       <span className="text-xs sm:text-sm font-black block mt-0.5">
-                        {d.getDate()} {d.toLocaleDateString("es-ES", { month: "short" })}
+                        {dObj.toLocaleDateString("es-ES", { timeZone: "America/Caracas", day: "numeric" })} {dObj.toLocaleDateString("es-ES", { timeZone: "America/Caracas", month: "short" })}
                       </span>
                     </button>
                   );
@@ -748,23 +859,18 @@ export default function PublicClubDetailPage() {
 
                       {/* CELDAS PISTAS */}
                       {canchas.map((cancha) => {
-                        const ano = fechaSeleccionada.getFullYear();
-                        const mes = String(fechaSeleccionada.getMonth() + 1).padStart(2, '0');
-                        const dia = String(fechaSeleccionada.getDate()).padStart(2, '0');
-                        const hora = String(bloque.horaInt).padStart(2, '0');
-                        const minutos = String(bloque.minutosInt).padStart(2, '0');
-                        const fechaSlotGrid = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
+                        const targetTime = bloque.dateObj.getTime();
 
                         const partidoOcupado = partidosClub.find((m) => {
                           if (m.court_id !== cancha.id) return false;
-                          const fechaCitaDB = m.scheduled_at.substring(0, 16); 
-                          return fechaCitaDB === fechaSlotGrid;
+                          const mTime = obtenerEpoch(m.scheduled_at);
+                          return Math.abs(mTime - targetTime) < 5000;
                         });
 
                         const lockOcupado = bloqueosActivos.find((l) => {
                           if (l.court_id !== cancha.id) return false;
-                          const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
-                          return fechaLockStr === fechaSlotGrid;
+                          const lockTime = obtenerEpoch(l.scheduled_at);
+                          return Math.abs(lockTime - targetTime) < 5000;
                         });
 
                         const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.horaInt, bloque.minutosInt);
@@ -775,7 +881,9 @@ export default function PublicClubDetailPage() {
                         if (promocionHoy) {
                           const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
                           if (hasBlocks) {
-                            const horaBotonStr = `${hora}:${minutos}`;
+                            const hStr = String(bloque.horaInt).padStart(2, '0');
+                            const mStr = String(bloque.minutosInt).padStart(2, '0');
+                            const horaBotonStr = `${hStr}:${mStr}`;
                             const bloqueAplicable = promocionHoy.time_blocks.find(b => {
                               return horaBotonStr >= (b.start_time || "00:00") && horaBotonStr < (b.end_time || "23:59");
                             });
@@ -800,7 +908,6 @@ export default function PublicClubDetailPage() {
                             (Array.isArray(partidoOcupado.players) && partidoOcupado.players.some(p => p.user_id === user.id))
                           );
 
-                          // REDIRECCIÓN DIRECTA A LA PANTALLA DEL PARTIDO PARA MI RESERVA
                           if (esMiReserva) {
                             return (
                               <div key={cancha.id} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
@@ -854,11 +961,15 @@ export default function PublicClubDetailPage() {
                         }
 
                         if (lockOcupado) {
+                          const esMiBloqueo = user && lockOcupado.user_id === user.id;
                           return (
                             <div key={cancha.id} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                              <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
-                                <span className="text-lg animate-pulse">⏳</span>
-                                <p className="text-[9px] sm:text-[10px] font-black text-amber-600 mt-0.5">En proceso...</p>
+                              <div className="h-full w-full rounded-xl p-1.5 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/60 text-center cursor-not-allowed">
+                                <span className="text-base sm:text-lg animate-pulse">⏳</span>
+                                <p className="text-[9px] sm:text-[10px] font-black text-amber-700 mt-0.5 leading-tight">En proceso...</p>
+                                <p className="text-[7px] sm:text-[8px] font-bold text-amber-800/80 mt-0.5">
+                                  {esMiBloqueo ? "Tu reserva en curso" : "otro usuario esta reservando"}
+                                </p>
                               </div>
                             </div>
                           );
@@ -908,7 +1019,6 @@ export default function PublicClubDetailPage() {
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-2.5 sm:p-4" onClick={cerrarModalManual}>
           <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-6 max-w-md w-full shadow-2xl space-y-3 sm:space-y-4 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
             
-            {/* CABECERA LIMPIA Y RECTIFICADA */}
             <div className="border-b pb-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[10px] font-black uppercase text-blue-600 tracking-wider">
@@ -942,7 +1052,7 @@ export default function PublicClubDetailPage() {
                 <div className="min-w-0">
                   <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha</span>
                   <p className="text-xs font-black truncate capitalize mt-0.5">
-                    {fechaSeleccionada.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
+                    {fechaSeleccionada.toLocaleDateString("es-ES", { timeZone: "America/Caracas", weekday: "long", day: "numeric", month: "long" })}
                   </p>
                 </div>
               </div>
@@ -963,10 +1073,17 @@ export default function PublicClubDetailPage() {
                       onChange={(e) => {
                         const tipo = e.target.value;
                         setTipoReserva(tipo);
-                        setCantidadJugadores(4);
+                        const cant = tipo === "ranking" ? 4 : cantidadJugadores;
+                        setCantidadJugadores(cant);
                         
                         if (bloqueSeleccionado) {
-                          const valUSD = bloqueSeleccionado.precioBaseTotal * 1.10;
+                          const baseTotal = bloqueSeleccionado.precioBaseTotal;
+                          const feeTotal = baseTotal * 0.10;
+                          
+                          const valUSD = tipo === "privado" 
+                            ? (baseTotal + feeTotal) 
+                            : ((baseTotal + feeTotal) / 4);
+
                           setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
                         }
                       }}
@@ -982,7 +1099,7 @@ export default function PublicClubDetailPage() {
                       <div className="pr-2">
                         <span className="text-xs font-black text-slate-900 block">⚡ Activar Modo Ranked / Competitivo</span>
                         <span className="text-[9px] text-slate-400 font-bold block leading-tight">
-                          Valida el nivel del grupo ($\pm 1$ cat.) para ajustar ratings al finalizar.
+                          Valida el nivel del grupo para ajustar ratings al finalizar.
                         </span>
                       </div>
                       <input
@@ -1002,8 +1119,10 @@ export default function PublicClubDetailPage() {
                         const cant = Number(e.target.value);
                         setCantidadJugadores(cant);
                         if (bloqueSeleccionado && tipoReserva !== "privado") {
-                           const valUSD = (bloqueSeleccionado.precioBaseTotal / cant) * 1.10;
-                           setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
+                          const baseTotal = bloqueSeleccionado.precioBaseTotal;
+                          const feeTotal = baseTotal * 0.10;
+                          const valUSD = (baseTotal + feeTotal) / cant;
+                          setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
                         }
                       }}
                       disabled={tipoReserva === "ranking"}
@@ -1030,7 +1149,7 @@ export default function PublicClubDetailPage() {
               <div className="space-y-3.5 text-xs font-bold text-slate-700">
                 <div className="bg-slate-900 text-white p-3 rounded-2xl space-y-1.5 text-xs">
                   <div className="flex justify-between items-start text-[#00FF9D]">
-                    <span>Cancha Base ({tipoReserva === "privado" ? "Pista Completa" : "Cuota Jugador"}):</span>
+                    <span>Base ({tipoReserva === "privado" ? "Pista Completa" : "Tu Cuota Individual"}):</span>
                     <div className="text-right">
                       <span className="text-[#00FF9D] font-black block">${calculosPrecio.base.toFixed(2)}</span>
                     </div>
@@ -1045,7 +1164,7 @@ export default function PublicClubDetailPage() {
                   
                   <div className="flex justify-between items-end border-t border-slate-800 pt-2 text-white">
                     <div>
-                      <span className="text-xs font-black block">Total Sugerido:</span>
+                      <span className="text-xs font-black block">Total Sugerido a Abonar:</span>
                     </div>
                     <div className="text-right">
                       <span className="text-lg font-black text-[#00FF9D] block">${calculosPrecio.totalSug.toFixed(2)}</span>
@@ -1160,7 +1279,7 @@ export default function PublicClubDetailPage() {
         <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-3 text-center">
             <h3 className="text-base font-black text-slate-900">{popupNotif.title}</h3>
-            <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
+            <p className="text-xs font-semibold text-slate-500">{popupNotif.message}</p>
             <button
               onClick={() => setPopupNotif({ ...popupNotif, open: false })}
               className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl hover:bg-slate-800 transition-colors cursor-pointer"

@@ -4,21 +4,43 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
 
+function obtenerEpoch(fechaStr) {
+  if (!fechaStr) return 0;
+  if (fechaStr instanceof Date) return fechaStr.getTime();
+  let clean = String(fechaStr).trim().replace(" ", "T");
+  
+  const tieneOffset = clean.includes("Z") || clean.includes("+") || clean.indexOf("-", 10) !== -1;
+  if (!tieneOffset) {
+    clean = `${clean.substring(0, 19)}-04:00`;
+  }
+  return new Date(clean).getTime();
+}
+
+function formatearFechaISOVET(dateObj) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Caracas",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(dateObj);
+  const year = parts.find((p) => p.type === "year").value;
+  const month = parts.find((p) => p.type === "month").value;
+  const day = parts.find((p) => p.type === "day").value;
+  return `${year}-${month}-${day}`;
+}
+
+function crearFechaVET(dateYYYYMMDD, hora24, minutos24) {
+  const hStr = String(hora24).padStart(2, "0");
+  const mStr = String(minutos24).padStart(2, "0");
+  return new Date(`${dateYYYYMMDD}T${hStr}:${mStr}:00-04:00`);
+}
+
 function parsearFechaBD(fechaStr) {
   if (!fechaStr) return new Date();
   const cleanStr = fechaStr.replace(" ", "T").substring(0, 19);
   return new Date(`${cleanStr}-04:00`);
 }
 
-function formatearHora12(hora24Str) {
-  if (!hora24Str) return "";
-  const [h, m] = hora24Str.split(":").map(Number);
-  const periodo = h >= 12 ? "PM" : "AM";
-  const hora12 = h % 12 || 12;
-  return `${hora12}:${String(m).padStart(2, "0")} ${periodo}`;
-}
-
-// CALENDARIO FLOTANTE EN MODO OSCURO
 function CustomDarkDatePicker({ value, onChange }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
@@ -127,19 +149,14 @@ export default function RecepcionElite() {
   const [clubId, setClubId] = useState(null);
   const [clubInfo, setClubInfo] = useState(null);
   
-  // Tasa BCV
   const [tasaBCV, setTasaBCV] = useState(36.65);
 
-  const [fechaBase, setFechaBase] = useState(() => {
-    return new Date(new Date().toLocaleString("en-US", { timeZone: "America/Caracas" }));
-  });
+  const [fechaBase, setFechaBase] = useState(() => new Date());
 
-  // Vistas Calendario
   const [vistaCalendario, setVistaCalendario] = useState("dia");
   const [canchaFiltro, setCanchaFiltro] = useState("todas");
   const [alertaNuevaReserva, setAlertaNuevaReserva] = useState(null);
 
-  // Datos
   const [canchas, setCanchas] = useState([]);
   const [partidosPeriodo, setPartidosPeriodo] = useState([]);
   const [productos, setProductos] = useState([]);
@@ -147,11 +164,9 @@ export default function RecepcionElite() {
   const [promocionesPeriodo, setPromocionesPeriodo] = useState([]); 
   const [bloqueosActivos, setBloqueosActivos] = useState([]);
 
-  // Notificaciones
   const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
   const [modalConfirm, setModalConfirm] = useState({ open: false, title: "", message: "", action: null });
 
-  // Modal Agendar POS Cancha
   const [modalAgendarOpen, setModalAgendarOpen] = useState(false);
   const [bloqueAgendar, setBloqueAgendar] = useState(null);
   const [monedaAgendarPOS, setMonedaAgendarPOS] = useState("USD");
@@ -164,18 +179,15 @@ export default function RecepcionElite() {
     previewComprobante: "",
   });
 
-  // Modal Reserva Existente
   const [modalDetalleMatch, setModalDetalleMatch] = useState(false);
   const [matchSeleccionado, setMatchSeleccionado] = useState(null);
   const [extrasBackup, setExtrasBackup] = useState([]);
   const [modalConfirmCambios, setModalConfirmCambios] = useState(false);
   const [imagenEngrande, setImagenEngrande] = useState(null);
 
-  // ESTADOS PARA REEMBOLSO EN RECEPCIÓN
   const [metodoDevolucionPOS, setMetodoDevolucionPOS] = useState("pago_movil");
   const [refDevolucionPOS, setRefDevolucionPOS] = useState("");
 
-  // Modal Venta Directa Tienda
   const [modalTiendaOpen, setModalTiendaOpen] = useState(false);
   const [busquedaTienda, setBusquedaTienda] = useState("");
   const [carritoTienda, setCarritoTienda] = useState([]);
@@ -196,6 +208,16 @@ export default function RecepcionElite() {
   const [previewAbonoManualPOS, setPreviewAbonoManualPOS] = useState("");
   const [procesando, setProcesando] = useState(false);
 
+  const [refreshMatches, setRefreshMatches] = useState(0);
+
+  const canchasRef = useRef(canchas);
+  const canchaFiltroRef = useRef(canchaFiltro);
+
+  useEffect(() => {
+    canchasRef.current = canchas;
+    canchaFiltroRef.current = canchaFiltro;
+  }, [canchas, canchaFiltro]);
+
   useEffect(() => {
     setMounted(true);
     cargarDatosGenerales();
@@ -204,86 +226,81 @@ export default function RecepcionElite() {
 
   const diasVisibles = useMemo(() => {
     const list = [];
-    const base = new Date(fechaBase);
-    base.setHours(0, 0, 0, 0);
+    const baseISO = formatearFechaISOVET(fechaBase);
+    const [y, m, d] = baseISO.split("-").map(Number);
 
     let cantidadDias = 1;
     if (vistaCalendario === "4dias") cantidadDias = 4;
     if (vistaCalendario === "semana") cantidadDias = 7;
 
     for (let i = 0; i < cantidadDias; i++) {
-      const d = new Date(base);
-      d.setDate(d.getDate() + i);
-      list.push(d);
+      const dateObj = crearFechaVET(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`, 12, 0);
+      dateObj.setDate(dateObj.getDate() + i);
+      list.push(dateObj);
     }
     return list;
   }, [fechaBase, vistaCalendario]);
 
   useEffect(() => {
-    if (clubId) {
-      cargarPartidosPeriodo();
-      cargarPromocionesPeriodo(clubId);
-    }
-  }, [clubId, diasVisibles]);
-
-  // SUSCRIPCIÓN REALTIME TOTAL DE TRANSACCIONES Y RESERVAS
-  useEffect(() => {
     if (!clubId || !supabase) return;
 
     cargarBloqueos();
 
-    const channel = supabase
-      .channel(`pos-realtime-full-${clubId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` },
-        (payload) => {
-          cargarPartidosPeriodo();
-          if (payload.eventType === "INSERT") {
-            const nuevaReserva = payload.new;
-            const canchaReserva = canchas.find((c) => c.id === nuevaReserva.court_id);
-            if (canchaReserva) {
-              const esFutbol = canchaReserva.sport_type === "futbol";
-              const deporteAviso = esFutbol ? "Fútbol ⚽" : "Pádel 🎾";
-              if (canchaFiltro !== "todas" && canchaFiltro !== canchaReserva.id) {
-                setAlertaNuevaReserva({
-                  canchaNombre: canchaReserva.name,
-                  deporte: deporteAviso
-                });
-              }
-            }
-          }
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "sales", filter: `club_id=eq.${clubId}` },
-        () => {
-          cargarDatosGenerales();
-          cargarPartidosPeriodo();
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "products", filter: `club_id=eq.${clubId}` },
-        () => cargarDatosGenerales()
-      )
+    // Suscripción al canal unificado Broadcast + Postgres Changes
+    const channel = supabase.channel(`locks_club_${clubId}`, {
+      config: { broadcast: { self: true } }
+    });
+
+    channel
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "padel_locks" },
         () => cargarBloqueos()
       )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "match_players" },
-        () => cargarPartidosPeriodo()
-      )
+      .on("broadcast", { event: "lock_event" }, (payload) => {
+        const data = payload.payload;
+        if (data?.type === "INSERT") {
+          setBloqueosActivos((prev) => [
+            ...prev.filter(l => !(l.court_id === data.lock.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.lock.scheduled_at)) < 5000)),
+            data.lock
+          ]);
+        } else if (data?.type === "DELETE") {
+          setBloqueosActivos((prev) =>
+            prev.filter(l => !(l.court_id === data.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.scheduled_at)) < 5000))
+          );
+        }
+        cargarBloqueos();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` }, (payload) => {
+        if (payload.eventType === "INSERT") {
+          const nuevaReserva = payload.new;
+          const canchaReserva = canchasRef.current.find((c) => c.id === nuevaReserva.court_id);
+          if (canchaReserva) {
+            const esFutbol = canchaReserva.sport_type === "futbol";
+            const deporteAviso = esFutbol ? "Fútbol ⚽" : "Pádel 🎾";
+            if (canchaFiltroRef.current !== "todas" && canchaFiltroRef.current !== canchaReserva.id) {
+              setAlertaNuevaReserva({ canchaNombre: canchaReserva.name, deporte: deporteAviso });
+            }
+          }
+        }
+        setRefreshMatches(r => r + 1);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "sales", filter: `club_id=eq.${clubId}` }, () => setRefreshMatches(r => r + 1))
+      .on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `club_id=eq.${clubId}` }, () => setRefreshMatches(r => r + 1))
+      .on("postgres_changes", { event: "*", schema: "public", table: "match_players" }, () => setRefreshMatches(r => r + 1))
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [clubId, diasVisibles, canchas, canchaFiltro]);
+  }, [clubId]);
+
+  useEffect(() => {
+    if (clubId && mounted && !loading) {
+      cargarPartidosPeriodo();
+      cargarPromocionesPeriodo(clubId);
+    }
+  }, [fechaBase, clubId, mounted, loading, refreshMatches]);
 
   const mostrarNotificacion = (title, message, type = "info") => {
     setPopupNotif({ open: true, title, message, type });
@@ -326,8 +343,8 @@ export default function RecepcionElite() {
   async function cargarPromocionesPeriodo(clubIdActual) {
     if (!clubIdActual || diasVisibles.length === 0) return;
     
-    const inicioStr = `${diasVisibles[0].getFullYear()}-${String(diasVisibles[0].getMonth() + 1).padStart(2, '0')}-${String(diasVisibles[0].getDate()).padStart(2, '0')}`;
-    const finStr = `${diasVisibles[diasVisibles.length - 1].getFullYear()}-${String(diasVisibles[diasVisibles.length - 1].getMonth() + 1).padStart(2, '0')}-${String(diasVisibles[diasVisibles.length - 1].getDate()).padStart(2, '0')}`;
+    const inicioStr = formatearFechaISOVET(diasVisibles[0]);
+    const finStr = formatearFechaISOVET(diasVisibles[diasVisibles.length - 1]);
 
     try {
       const { data } = await supabase
@@ -344,7 +361,7 @@ export default function RecepcionElite() {
   } 
 
   const promocionHoy = useMemo(() => {
-    const hoyStr = `${fechaBase.getFullYear()}-${String(fechaBase.getMonth() + 1).padStart(2, '0')}-${String(fechaBase.getDate()).padStart(2, '0')}`;
+    const hoyStr = formatearFechaISOVET(fechaBase);
     return promocionesPeriodo.find(p => p.start_date <= hoyStr && p.end_date >= hoyStr) || null;
   }, [promocionesPeriodo, fechaBase]);
 
@@ -394,10 +411,10 @@ export default function RecepcionElite() {
     if (!clubId || diasVisibles.length === 0) return;
 
     const dIni = diasVisibles[0];
-    const inicioFijo = `${dIni.getFullYear()}-${String(dIni.getMonth() + 1).padStart(2, '0')}-${String(dIni.getDate()).padStart(2, '0')}T00:00:00`;
+    const inicioFijo = `${formatearFechaISOVET(dIni)}T00:00:00-04:00`;
 
     const dFin = diasVisibles[diasVisibles.length - 1];
-    const finFijo = `${dFin.getFullYear()}-${String(dFin.getMonth() + 1).padStart(2, '0')}-${String(dFin.getDate()).padStart(2, '0')}T23:59:59`;
+    const finFijo = `${formatearFechaISOVET(dFin)}T23:59:59-04:00`;
 
     const { data: matches, error: matchErr } = await supabase
       .from("matches")
@@ -435,17 +452,48 @@ export default function RecepcionElite() {
       const playersMap = {};
       (players || []).forEach((p) => {
         if (!playersMap[p.match_id]) playersMap[p.match_id] = [];
-        playersMap[p.match_id].push({
-          ...p,
-          profile: userProfilesMap[p.user_id] || null
-        });
+        playersMap[p.match_id].push(p);
       });
 
-      const finalMatches = (matches || []).map((m) => ({
-        ...m,
-        creator_profile: userProfilesMap[m.created_by] || null,
-        players: playersMap[m.id] || [],
-      }));
+      const finalMatches = (matches || []).map((m) => {
+        let history = Array.isArray(m.payments_history) ? [...m.payments_history] : [];
+        const creatorProf = userProfilesMap[m.created_by] || null;
+
+        if (m.created_by && creatorProf) {
+          const tieneAbonoCreador = history.some(p => p.user_id === m.created_by);
+          if (!tieneAbonoCreador) {
+            const cuotaCalculada = Number(m.price_per_player) > 0 
+              ? Number(m.price_per_player)
+              : ((Number(m.total_price) || 0) + (Number(m.app_fee) || 0)) / 4;
+
+            if (cuotaCalculada > 0 && m.payment_status && m.payment_status !== "pendiente") {
+              const statusAbono = (m.payment_status === "aprobado" || m.payment_status === "liquidado") 
+                ? "aprobado" 
+                : "pendiente_aprobacion";
+
+              history.unshift({
+                id: `pay-creator-${m.id}`,
+                user_id: m.created_by,
+                user_name: `${creatorProf.nombre || ''} ${creatorProf.apellido || ''}`.trim() || creatorProf.email,
+                user_phone: creatorProf.telefono || "En sitio",
+                amount: cuotaCalculada,
+                method: m.payment_method || "pago_movil",
+                reference: "Reserva Creador Partido",
+                receipt_url: Array.isArray(m.payment_proof_urls) && m.payment_proof_urls.length > 0 ? m.payment_proof_urls[0] : null,
+                status: statusAbono,
+                created_at: m.created_at || new Date().toISOString(),
+              });
+            }
+          }
+        }
+
+        return {
+          ...m,
+          creator_profile: creatorProf,
+          players: playersMap[m.id] || [],
+          payments_history: history,
+        };
+      });
 
       setPartidosPeriodo(finalMatches);
 
@@ -466,11 +514,6 @@ export default function RecepcionElite() {
 
     nueva.setDate(nueva.getDate() + offset * salto);
     setFechaBase(nueva);
-  };
-
-  const irAHoy = () => {
-    const hoyVET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Caracas" }));
-    setFechaBase(hoyVET);
   };
 
   const canchasFiltradas = useMemo(() => {
@@ -500,115 +543,10 @@ export default function RecepcionElite() {
     });
   }, [diasVisibles, canchasFiltradas]);
 
-  const abrirModalDetalle = (reservado) => {
-    setMatchSeleccionado(reservado);
-    setExtrasBackup(Array.isArray(reservado.extra_items) ? [...reservado.extra_items] : []);
-    setHistorialAbierto(true);
-    setCobroAbierto(reservado.payment_status !== "liquidado");
-    setMetodoDevolucionPOS("pago_movil");
-    setRefDevolucionPOS("");
-    setModalDetalleMatch(true);
-  };
-
-  const solicitarCerrarModalDetalle = () => {
-    const actualStr = JSON.stringify(matchSeleccionado?.extra_items || []);
-    const backupStr = JSON.stringify(extrasBackup || []);
-
-    if (actualStr !== backupStr) {
-      setModalConfirmCambios(true);
-    } else {
-      setModalDetalleMatch(false);
-    }
-  };
-
-  const descartarCambiosExtras = async () => {
-    if (!matchSeleccionado) return;
-    try {
-      setProcesando(true);
-
-      const totalAbonado = (Array.isArray(matchSeleccionado.payments_history) ? matchSeleccionado.payments_history : [])
-        .filter((item) => item.status === "aprobado")
-        .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
-
-      const precioBase = matchSeleccionado.total_price || 15;
-      const fee = matchSeleccionado.app_fee || precioBase * 0.10;
-      const totalExtrasBackup = extrasBackup.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
-      const totalGranEsperado = precioBase + fee + totalExtrasBackup;
-
-      const pagoCompleto = totalAbonado >= totalGranEsperado - 0.05;
-      const estadoPagoFinal = matchSeleccionado.payment_status === "liquidado" 
-        ? "liquidado" 
-        : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
-
-      await supabase
-        .from("matches")
-        .update({
-          extra_items: extrasBackup,
-          payment_status: estadoPagoFinal,
-        })
-        .eq("id", matchSeleccionado.id);
-
-      await cargarPartidosPeriodo();
-    } catch (e) {
-      console.error("Error restaurando extras:", e);
-    } finally {
-      setProcesando(false);
-      setModalConfirmCambios(false);
-      setModalDetalleMatch(false);
-    }
-  };
-
-  const guardarCambiosExtras = () => {
-    setModalConfirmCambios(false);
-    setModalDetalleMatch(false);
-    mostrarNotificacion("Cambios Guardados", "✅ Se han conservado las modificaciones en la reserva.", "success");
-  };
-
-  const obtenerNombreCliente = (reservado) => {
-    if (!reservado) return "Cliente Mostrador";
-    if (reservado.creator_profile?.nombre) {
-      return `${reservado.creator_profile.nombre} ${reservado.creator_profile.apellido || ""}`.trim();
-    }
-    if (Array.isArray(reservado.players) && reservado.players.length > 0) {
-      const pCreador = reservado.players.find(p => p.user_id === reservado.created_by && p.profile?.nombre);
-      if (pCreador) return `${pCreador.profile.nombre} ${pCreador.profile.apellido || ""}`.trim();
-      const pPrimero = reservado.players.find(p => p.profile?.nombre);
-      if (pPrimero) return `${pPrimero.profile.nombre} ${pPrimero.profile.apellido || ""}`.trim();
-    }
-    if (Array.isArray(reservado.payments_history) && reservado.payments_history.length > 0) {
-      const p = reservado.payments_history.find(x => x.user_name && x.user_name !== "Cliente Mostrador (POS)");
-      if (p) return p.user_name;
-    }
-    if (reservado.notes && reservado.notes.trim()) {
-      return reservado.notes.replace(/^Cliente:\s*/i, "").split("(")[0].trim();
-    }
-    return "Cliente Mostrador";
-  };
-
-  const obtenerTelefonoCliente = (reservado) => {
-    if (!reservado) return "—";
-    if (reservado.creator_profile?.telefono) return reservado.creator_profile.telefono;
-    if (Array.isArray(reservado.players) && reservado.players.length > 0) {
-      const pCreador = reservado.players.find(p => p.user_id === reservado.created_by && p.profile?.telefono);
-      if (pCreador) return pCreador.profile.telefono;
-      const pPrimero = reservado.players.find(p => p.profile?.telefono);
-      if (pPrimero) return pPrimero.profile.telefono;
-    }
-    if (Array.isArray(reservado.payments_history) && reservado.payments_history.length > 0) {
-      const p = reservado.payments_history.find(x => x.user_phone && x.user_phone !== "En sitio");
-      if (p) return p.user_phone;
-    }
-    if (reservado.notes && reservado.notes.includes("(")) {
-      const m = reservado.notes.match(/\(([^)]+)\)/);
-      if (m && m[1]) return m[1].trim();
-    }
-    return "—";
-  };
-
   const calcularPrecioPorBloque = (cancha, dateObj) => {
     try {
-      const hora = dateObj.getUTCHours();
-      const minutos = dateObj.getUTCMinutes();
+      const hora = dateObj.getHours();
+      const minutos = dateObj.getMinutes();
       const horaFormateada = `${String(hora).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`;
 
       if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
@@ -633,9 +571,10 @@ export default function RecepcionElite() {
   };
 
   const bloquesHorarios = useMemo(() => {
-    const duracion = clubInfo?.slot_duration_minutes || 60;
-    const horaApertura = parseInt((clubInfo?.open_time || "07:00:00").split(":")[0], 10);
-    const horaCierre = parseInt((clubInfo?.close_time || "23:00:00").split(":")[0], 10);
+    if (!clubInfo) return [];
+    const duracion = clubInfo.slot_duration_minutes || 60;
+    const horaApertura = parseInt((clubInfo.open_time || "07:00:00").split(":")[0], 10);
+    const horaCierre = parseInt((clubInfo.close_time || "23:00:00").split(":")[0], 10);
 
     const bloques = [];
     let curH = horaApertura;
@@ -662,36 +601,14 @@ export default function RecepcionElite() {
     return bloques;
   }, [clubInfo]);
 
-  const obtenerReserva = (canchaId, bloqueDateObj) => {
-    return partidosPeriodo.find((p) => {
-      if (p.court_id !== canchaId) return false;
-      const fechaCitaDB = p.scheduled_at.substring(0, 16); 
-      
-      const ano = bloqueDateObj.getUTCFullYear();
-      const mes = String(bloqueDateObj.getUTCMonth() + 1).padStart(2, '0');
-      const dia = String(bloqueDateObj.getUTCDate()).padStart(2, '0');
-      const hora = String(bloqueDateObj.getUTCHours()).padStart(2, '0');
-      const minutos = String(bloqueDateObj.getUTCMinutes()).padStart(2, '0');
-      
-      const fechaSlotGrid = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
-      return fechaCitaDB === fechaSlotGrid;
-    });
-  };
-
-  const abrirModalAgendarPOS = async (cancha, dateObj, horaLabel, precioCalculado) => {
+  const abrirModalAgendarPOS = async (cancha, fechaHoraBD, horaLabel, precioCalculado) => {
     if (!user) return;
-    
-    const ano = dateObj.getUTCFullYear();
-    const mes = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
-    const dia = String(dateObj.getUTCDate()).padStart(2, '0');
-    const hora = String(dateObj.getUTCHours()).padStart(2, '0');
-    const minutos = String(dateObj.getUTCMinutes()).padStart(2, '0');
-    const fechaFija = `${ano}-${mes}-${dia}T${hora}:${minutos}:00`;
+
+    const targetTime = obtenerEpoch(fechaHoraBD);
 
     const lockExistente = bloqueosActivos.find((l) => {
       if (l.court_id !== cancha.id) return false;
-      const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
-      return fechaLockStr === fechaFija.substring(0, 16);
+      return Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000;
     });
 
     if (lockExistente && lockExistente.user_id !== user.id) {
@@ -706,28 +623,37 @@ export default function RecepcionElite() {
       setProcesando(true);
       const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); 
       
+      const nuevoLock = {
+        court_id: cancha.id,
+        scheduled_at: fechaHoraBD,
+        user_id: user.id,
+        expires_at: expiresAt,
+      };
+
+      setBloqueosActivos((prev) => [
+        ...prev.filter(l => !(l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000)),
+        nuevoLock
+      ]);
+
+      // Emitir evento Broadcast instantáneo a todos los clientes
+      const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "lock_event",
+        payload: { type: "INSERT", lock: nuevoLock }
+      });
+
       const { error: lockErr } = await supabase
         .from("padel_locks")
-        .upsert({
-          court_id: cancha.id,
-          scheduled_at: fechaFija,
-          user_id: user.id,
-          expires_at: expiresAt
-        }, { onConflict: 'court_id,scheduled_at' });
+        .upsert(nuevoLock, { onConflict: 'court_id,scheduled_at' });
 
-      if (lockErr) {
-        console.error("Error al bloquear pista en POS:", lockErr);
-        setProcesando(false);
-        return mostrarNotificacion("Error al Bloquear", lockErr.message || "No se pudo registrar el bloqueo.", "error");
-      }
-
-      await cargarBloqueos();
+      if (lockErr) throw lockErr;
 
       const precioBaseTotal = precioCalculado || cancha.price_credits || 15;
       const feeSugerido = precioBaseTotal * 0.10;
       const totalSugerido = precioBaseTotal + feeSugerido;
 
-      setBloqueAgendar({ cancha, dateObj, horaLabel, precioBaseTotal });
+      setBloqueAgendar({ cancha, fechaHoraBD, horaLabel, precioBaseTotal });
       setMonedaAgendarPOS("USD");
       setFormAgendarPOS({
         nombreCliente: "",
@@ -741,6 +667,7 @@ export default function RecepcionElite() {
     } catch (e) {
       console.error("Error bloqueando la pista en POS:", e);
       mostrarNotificacion("Error", "Ocurrió un fallo al intentar bloquear la pista.", "error");
+      await cargarBloqueos();
     } finally {
       setProcesando(false);
     }
@@ -749,15 +676,23 @@ export default function RecepcionElite() {
   const cerrarModalAgendarPOS = async () => {
     setModalAgendarOpen(false);
     if (bloqueAgendar && user) {
-      const d = bloqueAgendar.dateObj;
-      const fechaFija = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:00`;
-      
+      const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "lock_event",
+        payload: { 
+          type: "DELETE", 
+          court_id: bloqueAgendar.cancha.id, 
+          scheduled_at: bloqueAgendar.fechaHoraBD 
+        }
+      });
+
       await supabase
         .from("padel_locks")
         .delete()
         .match({
           court_id: bloqueAgendar.cancha.id,
-          scheduled_at: fechaFija,
+          scheduled_at: bloqueAgendar.fechaHoraBD,
           user_id: user.id
         });
 
@@ -802,8 +737,7 @@ export default function RecepcionElite() {
     }
 
     const montoUSD = monedaAgendarPOS === "VES" ? valIngresado / tasaBCV : valIngresado;
-    const { cancha, dateObj } = bloqueAgendar;
-    const scheduledAtFijo = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObj.getUTCDate()).padStart(2, '0')}T${String(dateObj.getUTCHours()).padStart(2, '0')}:${String(dateObj.getUTCMinutes()).padStart(2, '0')}:00`;
+    const { cancha, fechaHoraBD } = bloqueAgendar;
 
     try {
       setProcesando(true);
@@ -812,12 +746,12 @@ export default function RecepcionElite() {
         .from("matches")
         .select("id")
         .eq("court_id", cancha.id)
-        .eq("scheduled_at", scheduledAtFijo)
+        .eq("scheduled_at", fechaHoraBD)
         .neq("status", "cancelado")
         .maybeSingle();
 
       if (matchExistente) {
-        await supabase.from("padel_locks").delete().match({ court_id: cancha.id, scheduled_at: scheduledAtFijo, user_id: user.id });
+        await supabase.from("padel_locks").delete().match({ court_id: cancha.id, scheduled_at: fechaHoraBD, user_id: user.id });
         await cargarBloqueos();
         setModalAgendarOpen(false);
         return mostrarNotificacion("Pista Ocupada", "Un usuario acaba de confirmar la reserva en esta pista para el mismo horario.", "warning");
@@ -849,7 +783,7 @@ export default function RecepcionElite() {
         .insert({
           club_id: clubId,
           court_id: cancha.id,
-          scheduled_at: scheduledAtFijo,
+          scheduled_at: fechaHoraBD,
           total_price: base,
           price_per_player: base / 4,
           app_fee: fee,
@@ -874,12 +808,24 @@ export default function RecepcionElite() {
         team: "A",
       });
 
+      // Emitir evento Broadcast de liberación
+      const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "lock_event",
+        payload: { 
+          type: "DELETE", 
+          court_id: cancha.id, 
+          scheduled_at: fechaHoraBD 
+        }
+      });
+
       await supabase
         .from("padel_locks")
         .delete()
         .match({
           court_id: cancha.id,
-          scheduled_at: scheduledAtFijo
+          scheduled_at: fechaHoraBD
         });
 
       await cargarBloqueos();
@@ -902,7 +848,6 @@ export default function RecepcionElite() {
     }
   }
 
-  // VENTA DIRECTA TIENDA
   const abrirModalTienda = () => {
     setCarritoTienda([]);
     setBusquedaTienda("");
@@ -1053,6 +998,111 @@ export default function RecepcionElite() {
     }
   }
 
+  const abrirModalDetalle = (reservado) => {
+    setMatchSeleccionado(reservado);
+    setExtrasBackup(Array.isArray(reservado.extra_items) ? [...reservado.extra_items] : []);
+    setHistorialAbierto(true);
+    setCobroAbierto(reservado.payment_status !== "liquidado");
+    setMetodoDevolucionPOS("pago_movil");
+    setRefDevolucionPOS("");
+    setModalDetalleMatch(true);
+  };
+
+  const solicitarCerrarModalDetalle = () => {
+    const actualStr = JSON.stringify(matchSeleccionado?.extra_items || []);
+    const backupStr = JSON.stringify(extrasBackup || []);
+
+    if (actualStr !== backupStr) {
+      setModalConfirmCambios(true);
+    } else {
+      setModalDetalleMatch(false);
+    }
+  };
+
+  const descartarCambiosExtras = async () => {
+    if (!matchSeleccionado) return;
+    try {
+      setProcesando(true);
+
+      const totalAbonado = (Array.isArray(matchSeleccionado.payments_history) ? matchSeleccionado.payments_history : [])
+        .filter((item) => item.status === "aprobado")
+        .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+
+      const precioBase = matchSeleccionado.total_price || 15;
+      const fee = matchSeleccionado.app_fee || precioBase * 0.10;
+      const totalExtrasBackup = extrasBackup.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
+      const totalGranEsperado = precioBase + fee + totalExtrasBackup;
+
+      const pagoCompleto = totalAbonado >= totalGranEsperado - 0.05;
+      const estadoPagoFinal = matchSeleccionado.payment_status === "liquidado" 
+        ? "liquidado" 
+        : (pagoCompleto ? "aprobado" : "pendiente_aprobacion");
+
+      await supabase
+        .from("matches")
+        .update({
+          extra_items: extrasBackup,
+          payment_status: estadoPagoFinal,
+        })
+        .eq("id", matchSeleccionado.id);
+
+      await cargarPartidosPeriodo();
+    } catch (e) {
+      console.error("Error restaurando extras:", e);
+    } finally {
+      setProcesando(false);
+      setModalConfirmCambios(false);
+      setModalDetalleMatch(false);
+    }
+  };
+
+  const guardarCambiosExtras = () => {
+    setModalConfirmCambios(false);
+    setModalDetalleMatch(false);
+    mostrarNotificacion("Cambios Guardados", "✅ Se han conservado las modificaciones en la reserva.", "success");
+  };
+
+  const obtenerNombreCliente = (reservado) => {
+    if (!reservado) return "Cliente Mostrador";
+    if (reservado.creator_profile?.nombre) {
+      return `${reservado.creator_profile.nombre} ${reservado.creator_profile.apellido || ""}`.trim();
+    }
+    if (Array.isArray(reservado.players) && reservado.players.length > 0) {
+      const pCreador = reservado.players.find(p => p.user_id === reservado.created_by && p.profile?.nombre);
+      if (pCreador) return `${pCreador.profile.nombre} ${pCreador.profile.apellido || ""}`.trim();
+      const pPrimero = reservado.players.find(p => p.profile?.nombre);
+      if (pPrimero) return `${pPrimero.profile.nombre} ${pPrimero.profile.apellido || ""}`.trim();
+    }
+    if (Array.isArray(reservado.payments_history) && reservado.payments_history.length > 0) {
+      const p = reservado.payments_history.find(x => x.user_name && x.user_name !== "Cliente Mostrador (POS)");
+      if (p) return p.user_name;
+    }
+    if (reservado.notes && reservado.notes.trim()) {
+      return reservado.notes.replace(/^Cliente:\s*/i, "").split("(")[0].trim();
+    }
+    return "Cliente Mostrador";
+  };
+
+  const obtenerTelefonoCliente = (reservado) => {
+    if (!reservado) return "—";
+    if (reservado.creator_profile?.telefono) return reservado.creator_profile.telefono;
+    if (Array.isArray(reservado.players) && reservado.players.length > 0) {
+      const pCreador = reservado.players.find(p => p.user_id === reservado.created_by && p.profile?.telefono);
+      if (pCreador) return pCreador.profile.telefono;
+      const pPrimero = reservado.players.find(p => p.profile?.telefono);
+      if (pPrimero) return pPrimero.profile.telefono;
+    }
+    if (Array.isArray(reservado.payments_history) && reservado.payments_history.length > 0) {
+      const p = reservado.payments_history.find(x => x.user_phone && x.user_phone !== "En sitio");
+      if (p) return p.user_phone;
+    }
+    if (reservado.notes && reservado.notes.includes("(")) {
+      const m = reservado.notes.match(/\(([^)]+)\)/);
+      if (m && m[1]) return m[1].trim();
+    }
+    return "—";
+  };
+
   const calcularTotalExtras = (match) => {
     const extras = Array.isArray(match?.extra_items) ? match.extra_items : [];
     return extras.reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
@@ -1144,7 +1194,6 @@ export default function RecepcionElite() {
     }
   }
 
-  // REGISTRAR CAMBIO/ENTREGA DE EXCEDENTE EN CAJA Y FACTURA
   async function registrarDevolucionCambioPOS(match, cambioUSD) {
     if (cambioUSD <= 0.05) return;
     if (match.payment_status === "liquidado") {
@@ -1156,7 +1205,6 @@ export default function RecepcionElite() {
       const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
       const montoNegativo = -Math.abs(cambioUSD);
 
-      // 1. REGISTRAR EL EGRESO/ENTREGA DE CAMBIO EN SALES (CAJA)
       const { data: ventaDev } = await supabase
         .from("sales")
         .insert({
@@ -1180,7 +1228,6 @@ export default function RecepcionElite() {
         });
       }
 
-      // 2. AÑADIR LA SALIDA A LA HISTORIA DE PAGOS DEL PARTIDO
       const nuevoAbono = {
         id: `pay-pos-change-${Date.now()}`,
         user_id: user.id,
@@ -1203,7 +1250,6 @@ export default function RecepcionElite() {
         })
         .eq("id", match.id);
 
-      // ACTUALIZAR ESTADO LOCAL INMEDIATO
       setMatchSeleccionado((prev) => prev ? { ...prev, payments_history: historialNuevo } : null);
 
       mostrarNotificacion(
@@ -1394,7 +1440,6 @@ export default function RecepcionElite() {
     return productos.filter(p => p.name.toLowerCase().includes(term) || (p.brand && p.brand.toLowerCase().includes(term)));
   }, [productos, busquedaProducto]);
 
-  // CERRAR TICKET Y LIQUIDAR RESERVA (CORREGIDO SIN DUPLICAR ABONOS)
   async function cerrarTicketYLiquidarReserva(match) {
     if (match.payment_status === "liquidado") {
       return mostrarNotificacion("Ya Liquidado", "Esta reserva ya fue liquidada e ingresada al historial de ventas.", "info");
@@ -1410,7 +1455,6 @@ export default function RecepcionElite() {
 
       const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
 
-      // 1. APROBAR TODOS LOS PAGOS EXISTENTES
       let historialNuevo = historialActual.map((item) => ({
         ...item,
         status: "aprobado",
@@ -1421,7 +1465,6 @@ export default function RecepcionElite() {
         0
       );
 
-      // 2. SOLO SI QUEDA UN SALDO REAL PENDIENTE, AGREGAR EL PAGO DE CIERRE
       const restante = Math.max(0, totalGranEsperado - totalAbonadoAprobado);
       if (restante > 0.05) {
         historialNuevo.push({
@@ -1544,14 +1587,12 @@ export default function RecepcionElite() {
     }
   }
 
-  // PROCESAR REEMBOLSO Y LIBERAR CANCHA (+6H)
   async function procesarDevolucionYLiberarCancha(match) {
     try {
       setProcesando(true);
 
       const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
       
-      // SOLO SUMAR DINERO QUE HAYA SIDO EFECTIVAMENTE APROBADO O LIQUIDADO EN CAJA
       const totalAbonadoAprobado = historialActual
         .filter((item) => item.status === "aprobado" || item.status === "liquidado")
         .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
@@ -1559,7 +1600,6 @@ export default function RecepcionElite() {
       const clienteNom = obtenerNombreCliente(match);
       const clienteTel = obtenerTelefonoCliente(match);
 
-      // 1. SOLO SI HABÍA DINERO APROBADO EN CAJA, SE REGISTRA EL EGRESO/DEVOLUCIÓN EN VENTAS
       if (totalAbonadoAprobado > 0) {
         const { data: ventaDevolucion } = await supabase
           .from("sales")
@@ -1585,7 +1625,6 @@ export default function RecepcionElite() {
         }
       }
 
-      // 2. MARCAR EL PARTIDO COMO CANCELADO
       const { error: errMatch } = await supabase
         .from("matches")
         .update({
@@ -1596,13 +1635,11 @@ export default function RecepcionElite() {
 
       if (errMatch) throw errMatch;
 
-      // 3. LIMPIAR BLOQUEOS TEMPORALES
       await supabase
         .from("padel_locks")
         .delete()
         .eq("court_id", match.court_id);
 
-      // 4. LIMPIAR INTEGRANTES
       await supabase
         .from("match_players")
         .delete()
@@ -1634,7 +1671,6 @@ export default function RecepcionElite() {
     }
   }
 
-  // CANCELACIÓN DIRECTA DESDE POS CON EVALUACIÓN DE 6 HORAS
   async function cancelarReserva(match) {
     if (match.payment_status === "liquidado") {
       return mostrarNotificacion("Ticket Liquidado", "No se puede anular una reserva que ya fue liquidada e ingresada en las ventas oficiales.", "warning");
@@ -1659,7 +1695,6 @@ export default function RecepcionElite() {
 
           const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
           
-          // SOLO SUMAR PAGOS EFECTIVAMENTE APROBADOS
           const totalAbonadoAprobado = historialActual.reduce((sum, item) => {
             const amt = parseFloat(item.amount) || 0;
             if (amt > 0 && (item.status === "aprobado" || item.status === "liquidado")) return sum + amt;
@@ -1670,7 +1705,6 @@ export default function RecepcionElite() {
           const clienteTel = obtenerTelefonoCliente(match);
 
           if (esConMasDe6Horas) {
-            // Se marca en azul
             await supabase
               .from("matches")
               .update({
@@ -1686,7 +1720,6 @@ export default function RecepcionElite() {
               "info"
             );
           } else {
-            // Menos de 6h: retener dinero e ingresar a caja solo si hubo cobro aprobado
             if (totalAbonadoAprobado > 0) {
               const { data: ventaCancelacion } = await supabase
                 .from("sales")
@@ -1712,7 +1745,6 @@ export default function RecepcionElite() {
               }
             }
 
-            // Eliminar relaciones y liberar pista inmediatamente
             await supabase.from("match_players").delete().eq("match_id", match.id);
             await supabase.from("matches").update({ status: "cancelado", payment_status: "liquidado" }).eq("id", match.id);
             await supabase.from("padel_locks").delete().eq("court_id", match.court_id);
@@ -1954,163 +1986,159 @@ export default function RecepcionElite() {
                       return (
                         <div key={idx} className={`flex h-24 border-b border-slate-100 last:border-b-0 ${esFilaPar ? "bg-white" : "bg-slate-50/50"}`}>
                           {bloqueDia.canchas.map((col) => {
-                            const dateObjSlot = new Date(Date.UTC(
-                              bloqueDia.diaObj.getFullYear(),
-                              bloqueDia.diaObj.getMonth(),
-                              bloqueDia.diaObj.getDate(),
-                              bloque.horaInt,
-                              bloque.minutosInt,
-                              0, 0
-                            ));
-
-                            const reservado = obtenerReserva(col.cancha.id, dateObjSlot);
-
-                            const { precio: precioOriginal } = calcularPrecioPorBloque(col.cancha, dateObjSlot);
-
-                            const slotFechaStr = `${dateObjSlot.getUTCFullYear()}-${String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0')}-${String(dateObjSlot.getUTCDate()).padStart(2, '0')}`;
-                            const promoSlot = promocionesPeriodo.find(p => p.start_date <= slotFechaStr && p.end_date >= slotFechaStr);
                             
-                            const ano = dateObjSlot.getUTCFullYear();
-                            const mes = String(dateObjSlot.getUTCMonth() + 1).padStart(2, '0');
-                            const dia = String(dateObjSlot.getUTCDate()).padStart(2, '0');
-                            const hora = String(dateObjSlot.getUTCHours()).padStart(2, '0');
-                            const minutos = String(dateObjSlot.getUTCMinutes()).padStart(2, '0');
-                            const fechaFija = `${ano}-${mes}-${dia}T${hora}:${minutos}`;
+                            const slotFechaStr = formatearFechaISOVET(bloqueDia.diaObj);
+                            const hStr = String(bloque.horaInt).padStart(2, '0');
+                            const mStr = String(bloque.minutosInt).padStart(2, '0');
+                            const fechaHoraBDSlot = `${slotFechaStr}T${hStr}:${mStr}:00-04:00`;
+                            
+                            const targetTime = obtenerEpoch(fechaHoraBDSlot);
+
+                            const partidoOcupado = partidosPeriodo.find((m) => {
+                              if (m.court_id !== col.cancha.id) return false;
+                              return Math.abs(obtenerEpoch(m.scheduled_at) - targetTime) < 5000;
+                            });
 
                             const lockOcupado = bloqueosActivos.find((l) => {
                               if (l.court_id !== col.cancha.id) return false;
-                              const fechaLockStr = l.scheduled_at.replace(" ", "T").substring(0, 16);
-                              return fechaLockStr === fechaFija.substring(0, 16);
+                              return Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000;
                             });
 
+                            const { precio: precioOriginal } = calcularPrecioPorBloque(col.cancha, bloqueDia.diaObj);
+                            
                             let precioUSD = precioOriginal;
                             let esPromoAplicada = false;
 
-                            if (promoSlot) {
-                              esPromoAplicada = true;
-                              const hasBlocks = promoSlot.time_blocks && promoSlot.time_blocks.length > 0;
+                            if (promocionHoy) {
+                              const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
                               if (hasBlocks) {
-                                const horaBotonStr = `${String(bloque.horaInt).padStart(2, '0')}:${String(bloque.minutosInt).padStart(2, '0')}`;
-                                const bloqueAplicable = promoSlot.time_blocks.find(b => horaBotonStr >= b.start_time && horaBotonStr < b.end_time);
-                                if (bloqueAplicable) {
+                                const horaBotonStr = `${hStr}:${mStr}`;
+                                const bloqueAplicable = promocionHoy.time_blocks.find(b => {
+                                  return horaBotonStr >= (b.start_time || "00:00") && horaBotonStr < (b.end_time || "23:59");
+                                });
+                                
+                                if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
                                   precioUSD = parseFloat(bloqueAplicable.price); 
-                                } else {
-                                  esPromoAplicada = false;
+                                  esPromoAplicada = true;
                                 }
                               } else {
-                                precioUSD = promoSlot.price_normal;
+                                const promoPrice = parseFloat(promocionHoy.price_normal);
+                                precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
+                                esPromoAplicada = true;
                               }
                             }
 
-                            return (
-                              <div
-                                key={col.keyCol}
-                                className={`p-1 border-r border-slate-100 last:border-r-0 relative group ${
-                                  vistaCalendario === "dia" ? "flex-1 min-w-[140px]" : "w-[160px] shrink-0"
-                                }`}
-                              >
-                                {reservado ? (() => {
-                                  const esReembolsoPendiente = reservado.status === "cancelado_pendiente_reembolso" || reservado.payment_status === "reembolso_pendiente";
-                                  const isLiquidado = reservado.payment_status === "liquidado";
-                                  const precioCanchaBaseFee = (reservado.total_price || 15) + (reservado.app_fee || 1.50);
-                                  const totalAbonado = (Array.isArray(reservado.payments_history) ? reservado.payments_history : [])
-                                    .filter((a) => a.status === "aprobado")
-                                    .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
-                                  const totalExtras = (Array.isArray(reservado.extra_items) ? reservado.extra_items : [])
-                                    .reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
-                                  const totalGranEsperado = precioCanchaBaseFee + totalExtras;
+                            if (partidoOcupado) {
+                              const esReembolsoPendiente = partidoOcupado.status === "cancelado_pendiente_reembolso" || partidoOcupado.payment_status === "reembolso_pendiente";
+                              const isLiquidado = partidoOcupado.payment_status === "liquidado";
+                              const precioCanchaBaseFee = (partidoOcupado.total_price || 15) + (partidoOcupado.app_fee || 1.50);
+                              const totalAbonado = (Array.isArray(partidoOcupado.payments_history) ? partidoOcupado.payments_history : [])
+                                .filter((a) => a.status === "aprobado")
+                                .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
+                              const totalExtras = (Array.isArray(partidoOcupado.extra_items) ? partidoOcupado.extra_items : [])
+                                .reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
+                              const totalGranEsperado = precioCanchaBaseFee + totalExtras;
 
-                                  const canchaCubierta = totalAbonado >= (precioCanchaBaseFee - 0.05);
-                                  const todoPagado = totalAbonado >= (totalGranEsperado - 0.05);
-                                  const esAbierto = reservado.match_type === "abierto" && !reservado.is_private;
+                              const canchaCubierta = totalAbonado >= (precioCanchaBaseFee - 0.05);
+                              const todoPagado = totalAbonado >= (totalGranEsperado - 0.05);
+                              const esAbierto = partidoOcupado.match_type === "abierto" && !partidoOcupado.is_private;
 
-                                  let cardStyle = "";
-                                  let badgeText = "";
-                                  let badgeStyle = "";
+                              let cardStyle = "";
+                              let badgeText = "";
+                              let badgeStyle = "";
 
-                                  if (esReembolsoPendiente) {
-                                    cardStyle = "bg-sky-100/90 text-sky-950 border-sky-400 hover:bg-sky-200/90 shadow-sm animate-pulse";
-                                    badgeText = "🔵 REEMBOLSO (+6H)";
-                                    badgeStyle = "bg-sky-600 text-white font-black";
-                                  } else if (isLiquidado) {
-                                    cardStyle = "bg-emerald-100/90 text-emerald-950 border-emerald-400 hover:bg-emerald-200/90 shadow-sm";
-                                    badgeText = "✅ LIQUIDADA";
-                                    badgeStyle = "bg-emerald-600 text-white font-black";
-                                  } else if (todoPagado) {
-                                    cardStyle = "bg-slate-950 text-white border-slate-800 hover:border-emerald-400";
-                                    badgeText = "✅ PAGADA";
-                                    badgeStyle = "bg-emerald-500/20 text-[#00FF9D] font-black";
-                                  } else if (canchaCubierta) {
-                                    cardStyle = "bg-amber-400/90 text-slate-950 border-amber-500 animate-pulse hover:bg-amber-400";
-                                    badgeText = "⚠️ EXTRAS PENDIENTES";
-                                    badgeStyle = "bg-slate-950 text-amber-300 font-black";
-                                  } else {
-                                    cardStyle = "bg-rose-500/90 text-white border-rose-600 animate-pulse hover:bg-rose-500";
-                                    badgeText = "🚨 PENDIENTE CONFIRMACIÓN";
-                                    badgeStyle = "bg-slate-950 text-rose-300 font-black";
-                                  }
+                              if (esReembolsoPendiente) {
+                                cardStyle = "bg-sky-100/90 text-sky-950 border-sky-400 hover:bg-sky-200/90 shadow-sm animate-pulse";
+                                badgeText = "🔵 REEMBOLSO (+6H)";
+                                badgeStyle = "bg-sky-600 text-white font-black";
+                              } else if (isLiquidado) {
+                                cardStyle = "bg-emerald-100/90 text-emerald-950 border-emerald-400 hover:bg-emerald-200/90 shadow-sm";
+                                badgeText = "✅ LIQUIDADA";
+                                badgeStyle = "bg-emerald-600 text-white font-black";
+                              } else if (todoPagado) {
+                                cardStyle = "bg-slate-950 text-white border-slate-800 hover:border-emerald-400";
+                                badgeText = "✅ PAGADA";
+                                badgeStyle = "bg-emerald-500/20 text-[#00FF9D] font-black";
+                              } else if (canchaCubierta) {
+                                cardStyle = "bg-amber-400/90 text-slate-950 border-amber-500 animate-pulse hover:bg-amber-400";
+                                badgeText = "⚠️ EXTRAS PENDIENTES";
+                                badgeStyle = "bg-slate-950 text-amber-300 font-black";
+                              } else {
+                                cardStyle = "bg-rose-500/90 text-white border-rose-600 animate-pulse hover:bg-rose-500";
+                                badgeText = "🚨 PENDIENTE CONFIRMACIÓN";
+                                badgeStyle = "bg-slate-950 text-rose-300 font-black";
+                              }
 
-                                  return (
-                                    <button
-                                      onClick={() => abrirModalDetalle(reservado)}
-                                      className={`h-full w-full rounded-xl p-1.5 flex flex-col justify-between text-left transition-all shadow-xs border-2 overflow-hidden cursor-pointer ${cardStyle}`}
-                                    >
-                                      <div className="flex justify-between items-center w-full gap-1">
-                                        <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full truncate ${badgeStyle}`}>
-                                          {badgeText}
-                                        </span>
-                                        {esAbierto && (
-                                          <span className="text-[9px] font-black px-1.5 py-0.5 bg-slate-900/20 rounded shrink-0">
-                                            {reservado.players?.length || 1}/4
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="my-0.5">
-                                        <p className="text-[10px] sm:text-[11px] font-black truncate leading-tight">{obtenerNombreCliente(reservado)}</p>
-                                      </div>
-
-                                      {!isLiquidado && (
-                                        <div className="pt-1 border-t border-black/10 flex justify-between items-center text-[8px] font-black uppercase tracking-wider opacity-90">
-                                          <span>⚙️ Gestionar</span>
-                                          <span>→</span>
-                                        </div>
-                                      )}
-                                    </button>
-                                  );
-                                })() : lockOcupado ? (
-                                  <div className="h-full w-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
-                                    <span className="text-xl animate-pulse">⏳</span>
-                                    <p className="text-[10px] sm:text-[11px] font-black text-amber-600 mt-1 leading-tight">En proceso...</p>
-                                    <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">Alguien está pagando</p>
-                                  </div>
-                                ) : (
-                                  <button
-                                    onClick={() => abrirModalAgendarPOS(col.cancha, dateObjSlot, bloque.etiqueta, precioUSD)}
-                                    className="h-full w-full hover:bg-emerald-50/90 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300/80 hover:border-emerald-500 transition-all shadow-2xs relative cursor-pointer opacity-80 hover:opacity-100"
-                                  >
-                                    {esPromoAplicada && (
-                                      <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
-                                        Promo
+                              return (
+                                <button
+                                  key={col.keyCol}
+                                  onClick={() => abrirModalDetalle(partidoOcupado)}
+                                  className={`h-full w-full rounded-xl p-1.5 flex flex-col justify-between text-left transition-all shadow-xs border-2 overflow-hidden cursor-pointer ${cardStyle}`}
+                                >
+                                  <div className="flex justify-between items-center w-full gap-1">
+                                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full truncate ${badgeStyle}`}>
+                                      {badgeText}
+                                    </span>
+                                    {esAbierto && (
+                                      <span className="text-[9px] font-black px-1.5 py-0.5 bg-slate-900/20 rounded shrink-0">
+                                        {partidoOcupado.players?.length || 1}/4
                                       </span>
                                     )}
+                                  </div>
+                                  <div className="my-0.5">
+                                    <p className="text-[10px] sm:text-[11px] font-black truncate leading-tight">{obtenerNombreCliente(partidoOcupado)}</p>
+                                  </div>
 
-                                    <span className="text-[10px] font-black text-emerald-700 transition-transform mb-1">
-                                      + Agendar
-                                    </span>
+                                  {!isLiquidado && (
+                                    <div className="pt-1 border-t border-black/10 flex justify-between items-center text-[8px] font-black uppercase tracking-wider opacity-90">
+                                      <span>⚙️ Gestionar</span>
+                                      <span>→</span>
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            }
 
-                                    {esPromoAplicada ? (
-                                      <div className="flex flex-col items-center">
-                                        <div className="flex items-center gap-1">
-                                          <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
-                                          <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <span className="text-[10px] font-bold text-slate-500">${precioUSD.toFixed(2)}</span>
-                                    )}
-                                  </button>
+                            if (lockOcupado) {
+                              const esMiBloqueo = user && lockOcupado.user_id === user.id;
+                              return (
+                                <div key={col.keyCol} className="h-full w-full rounded-xl p-1.5 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
+                                  <span className="text-lg animate-pulse">⏳</span>
+                                  <p className="text-[10px] sm:text-[11px] font-black text-amber-700 mt-0.5 leading-tight">En proceso...</p>
+                                  <p className="text-[8px] font-bold text-amber-800/80 mt-0.5">
+                                    {esMiBloqueo ? "Tu reserva POS en curso" : "otro usuario esta reservando"}
+                                  </p>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <button
+                                key={col.keyCol}
+                                onClick={() => abrirModalAgendarPOS(col.cancha, fechaHoraBDSlot, bloque.etiqueta, precioUSD)}
+                                className="h-full w-full hover:bg-emerald-50/90 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300/80 hover:border-emerald-500 transition-all shadow-2xs relative cursor-pointer opacity-80 hover:opacity-100"
+                              >
+                                {esPromoAplicada && (
+                                  <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
+                                    Promo
+                                  </span>
                                 )}
-                              </div>
+
+                                <span className="text-[10px] font-black text-emerald-700 transition-transform mb-1">
+                                  + Agendar
+                                </span>
+
+                                {esPromoAplicada ? (
+                                  <div className="flex flex-col items-center">
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
+                                      <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] font-bold text-slate-500">${precioUSD.toFixed(2)}</span>
+                                )}
+                              </button>
                             );
                           })}
                         </div>
@@ -2517,7 +2545,6 @@ export default function RecepcionElite() {
 
           const historialAbonos = Array.isArray(matchSeleccionado.payments_history) ? matchSeleccionado.payments_history : [];
           
-          // SUMAR ÚNICAMENTE PAGOS EFECTIVAMENTE APROBADOS O LIQUIDADOS
           const totalAbonadoAprobado = historialAbonos
             .filter((a) => a.status === "aprobado" || a.status === "liquidado")
             .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
@@ -2529,11 +2556,6 @@ export default function RecepcionElite() {
           const canchaTotalmenteCubierta = totalAbonadoAprobado >= (totalCanchaConFee - 0.05);
           const todoPagadoConExtras = pendientePorCobrar <= 0.05;
 
-          const montoNumIngresado = parseFloat(montoAbonoManualPOS) || 0;
-          const equivalenteCalculado = monedaCobroPOS === "USD" 
-            ? montoNumIngresado * tasaBCV 
-            : montoNumIngresado / tasaBCV;
-
           const clienteNom = obtenerNombreCliente(matchSeleccionado);
           const clienteTel = obtenerTelefonoCliente(matchSeleccionado);
 
@@ -2541,7 +2563,7 @@ export default function RecepcionElite() {
             <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-3 sm:p-4" onClick={solicitarCerrarModalDetalle}>
               <div className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-5xl shadow-2xl space-y-4 sm:space-y-5 max-h-[92vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden relative" onClick={(e) => e.stopPropagation()}>
                 
-                {/* 📌 CABECERA STICKY PINNED EN LA PARTE SUPERIOR DEL MODAL */}
+                {/* CABECERA STICKY PINNED */}
                 <div className="sticky top-0 z-20 bg-white pt-1 pb-3 border-b border-slate-200 flex justify-between items-start shadow-xs">
                   <div>
                     <span className={`text-[9px] sm:text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
@@ -2576,7 +2598,6 @@ export default function RecepcionElite() {
                   </button>
                 </div>
 
-                {/* SI ESTÁ EN ESTADO DE REEMBOLSO PENDIENTE (+6H) */}
                 {esReembolsoPendiente ? (
                   <div className="bg-sky-50 border-2 border-sky-300 p-5 rounded-2xl space-y-4">
                     <div className="flex items-center gap-3 border-b border-sky-200 pb-3">
@@ -2591,7 +2612,6 @@ export default function RecepcionElite() {
                       </div>
                     </div>
 
-                    {/* DATOS DEL CLIENTE A REEMBOLSAR */}
                     <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold shadow-sm">
                       <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
                         <span className="text-slate-400 uppercase text-[10px]">Cliente:</span>
@@ -2919,7 +2939,6 @@ export default function RecepcionElite() {
                                 ))}
                               </div>
 
-                              {/* BOTÓN O INPUT SEGÚN EXCEDENTE / DEVOLUCIÓN */}
                               {cambioDevolver > 0.05 ? (
                                 <div className="space-y-2 border-2 border-cyan-400 bg-cyan-50/50 p-3 rounded-2xl text-center">
                                   <p className="text-xs font-bold text-cyan-950">
@@ -3114,18 +3133,18 @@ export default function RecepcionElite() {
                     <button
                       onClick={() => cerrarTicketYLiquidarReserva(matchSeleccionado)}
                       disabled={procesando || esLiquidadoOficial || pendientePorCobrar > 0.05}
-                      className={`w-2/3 py-3.5 text-white font-black text-xs uppercase rounded-2xl shadow-md transition-all cursor-pointer ${
+                      className={`w-2/3 py-3.5 font-black text-xs uppercase rounded-2xl shadow-md transition-all ${
                         esLiquidadoOficial 
-                          ? "bg-slate-400 cursor-not-allowed"
+                          ? "bg-slate-800 text-slate-400 cursor-not-allowed border border-slate-700"
                           : pendientePorCobrar > 0.05
-                            ? "bg-slate-300 text-slate-500 cursor-not-allowed border border-slate-300"
-                            : "bg-emerald-600 hover:bg-emerald-700 active:scale-98"
+                            ? "bg-amber-400 text-slate-950 border border-amber-500 cursor-not-allowed font-black"
+                            : "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-98"
                       }`}
                     >
                       {esLiquidadoOficial 
                         ? "🔒 Ticket Ya Liquidado" 
                         : pendientePorCobrar > 0.05
-                          ? `Falta Cobrar $${pendientePorCobrar.toFixed(2)} USD`
+                          ? `⚠️ Falta Cobrar $${pendientePorCobrar.toFixed(2)} USD`
                           : "✅ Liquidar Reserva"}
                     </button>
                   )}
@@ -3145,7 +3164,7 @@ export default function RecepcionElite() {
             <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
             <button
               onClick={() => setPopupNotif({ ...popupNotif, open: false })}
-              className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl cursor-pointer"
+              className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl hover:bg-slate-800 transition-colors cursor-pointer"
             >
               Entendido
             </button>
