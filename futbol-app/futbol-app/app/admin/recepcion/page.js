@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
+import POSReservaAlertModal from "@/components/POSReservaAlertModal";
 
 function obtenerEpoch(fechaStr) {
   if (!fechaStr) return 0;
@@ -246,7 +247,6 @@ export default function RecepcionElite() {
 
     cargarBloqueos();
 
-    // Suscripción al canal unificado Broadcast + Postgres Changes
     const channel = supabase.channel(`locks_club_${clubId}`, {
       config: { broadcast: { self: true } }
     });
@@ -274,18 +274,7 @@ export default function RecepcionElite() {
       .on("broadcast", { event: "match_event" }, () => {
         cargarPartidosPeriodo();
       })
-      .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` }, (payload) => {
-        if (payload.eventType === "INSERT") {
-          const nuevaReserva = payload.new;
-          const canchaReserva = canchasRef.current.find((c) => c.id === nuevaReserva.court_id);
-          if (canchaReserva) {
-            const esFutbol = canchaReserva.sport_type === "futbol";
-            const deporteAviso = esFutbol ? "Fútbol ⚽" : "Pádel 🎾";
-            if (canchaFiltroRef.current !== "todas" && canchaFiltroRef.current !== canchaReserva.id) {
-              setAlertaNuevaReserva({ canchaNombre: canchaReserva.name, deporte: deporteAviso });
-            }
-          }
-        }
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` }, () => {
         cargarPartidosPeriodo();
         setRefreshMatches(r => r + 1);
       })
@@ -1791,6 +1780,14 @@ export default function RecepcionElite() {
 
   return (
     <div className="flex flex-col w-full min-h-screen bg-slate-100 font-sans p-2 sm:p-4 space-y-3">
+
+      {/* COMPONENTE EXCLUSIVO DE ALERTAS DE RECEPCIÓN */}
+      {clubId && (
+        <POSReservaAlertModal
+          clubId={clubId}
+          onVerReserva={(matchData) => abrirModalDetalle(matchData)}
+        />
+      )}
 
       {/* CONTENEDOR PRINCIPAL POS */}
       <div className="w-full flex flex-col flex-1 min-w-0 bg-white rounded-2xl sm:rounded-3xl shadow-sm border border-slate-300 overflow-hidden">
