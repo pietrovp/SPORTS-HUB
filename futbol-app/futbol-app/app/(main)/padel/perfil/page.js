@@ -217,62 +217,72 @@ function formatFechaCorta(fechaStr) {
   });
 }
 
-// 📈 TRACKER GRÁFICO (CON ZOOM, SCROLL CUSTOM Y COLORES)
+function formatFechaGrafico(fechaStr) {
+  if (!fechaStr) return "";
+  const d = new Date(fechaStr);
+  return d.toLocaleDateString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  });
+}
+
+// 📈 TRACKER GRÁFICO (CORREGIDO TOOLTIP CON FOREIGN-OBJECT)
 function RatingTrackerChart({ partidosJugados, currentRating }) {
-  const [filtro, setFiltro] = useState("10"); // "5" | "10" | "todos"
-  const [pointSpacing, setPointSpacing] = useState(65); // Zoom dinámico (px entre puntos)
+  const [filtro, setFiltro] = useState("10"); 
+  const [pointSpacing, setPointSpacing] = useState(65);
+  const [activeTooltip, setActiveTooltip] = useState(null);
   const scrollRef = useRef(null);
 
-  // 1. Reconstrucción total de historial
   const historialCompleto = useMemo(() => {
     if (!partidosJugados || partidosJugados.length === 0) {
-      return [{ matchNum: 0, rating: currentRating, change: 0, label: "Inicio" }];
+      return [{ matchNum: 0, rating: currentRating, change: 0, label: "Inicio", id: "init" }];
     }
 
-    const cronologicos = [...partidosJugados].reverse();
-    const deltas = cronologicos.map((m) => {
+    const partidosCompetitivos = partidosJugados.filter((m) => {
       const val = Number(m.rating_change);
-      if (!isNaN(val) && val !== 0) return val;
-      return m.esGanador ? 0.08 : -0.05;
+      return !isNaN(val) && val !== 0; 
     });
+
+    if (partidosCompetitivos.length === 0) {
+      return [{ matchNum: 0, rating: currentRating, change: 0, label: "Inicio", id: "init" }];
+    }
+
+    const cronologicos = [...partidosCompetitivos].reverse();
+    const deltas = cronologicos.map((m) => Number(m.rating_change));
 
     const totalDeltas = deltas.reduce((sum, d) => sum + d, 0);
     let ratingInicial = Math.max(1.0, parseFloat((currentRating - totalDeltas).toFixed(2)));
 
-    const puntos = [{ matchNum: 0, rating: ratingInicial, change: 0, label: "Inicio" }];
+    const puntos = [{ matchNum: 0, rating: ratingInicial, change: 0, label: "Inicio", id: "init" }];
 
     let corriendo = ratingInicial;
     cronologicos.forEach((m, idx) => {
       const delta = deltas[idx];
       corriendo = Math.max(1.0, corriendo + delta);
       puntos.push({
+        id: m.id || `pt-${idx}`,
         matchNum: idx + 1,
         rating: parseFloat(corriendo.toFixed(2)),
         change: delta,
         label: `Partido ${idx + 1}`,
         esGanador: m.esGanador,
+        score: m.score_text || "Resultado Registrado",
+        dateStr: formatFechaGrafico(m.scheduled_at),
       });
     });
 
     return puntos;
   }, [partidosJugados, currentRating]);
 
-  // 2. Filtro visual
   const puntosFiltrados = useMemo(() => {
-    if (filtro === "5") {
-      return historialCompleto.length <= 6 ? historialCompleto : historialCompleto.slice(-6);
-    }
-    if (filtro === "10") {
-      return historialCompleto.length <= 11 ? historialCompleto : historialCompleto.slice(-11);
-    }
+    if (filtro === "5") return historialCompleto.length <= 6 ? historialCompleto : historialCompleto.slice(-6);
+    if (filtro === "10") return historialCompleto.length <= 11 ? historialCompleto : historialCompleto.slice(-11);
     return historialCompleto;
   }, [historialCompleto, filtro]);
 
-  // Auto-scroll a la derecha cuando se dibuja, cambia el filtro o el usuario hace zoom
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
-    }
+    if (scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
   }, [puntosFiltrados, filtro, pointSpacing]);
 
   if (historialCompleto.length <= 1) {
@@ -287,13 +297,11 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
     );
   }
 
-  // Dimensiones del lienzo y límites
-  const height = 150;
-  const paddingY = 35;
-  const paddingX = 35;
+  const height = 180;
+  const paddingY = 45;
+  const paddingX = 40;
   const minWidth = 500;
 
-  // Ancho dinámico basado en la cantidad de puntos y el espaciado (Zoom)
   const calculatedWidth = Math.max(minWidth, (puntosFiltrados.length - 1) * pointSpacing + paddingX * 2);
   const width = filtro === "todos" ? calculatedWidth : minWidth;
 
@@ -307,163 +315,95 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
     return { ...pt, x, y };
   });
 
-  const pathD = pointsFormatted.reduce((acc, pt, i) => {
-    return i === 0 ? `M ${pt.x},${pt.y}` : `${acc} L ${pt.x},${pt.y}`;
-  }, "");
-
+  const pathD = pointsFormatted.reduce((acc, pt, i) => i === 0 ? `M ${pt.x},${pt.y}` : `${acc} L ${pt.x},${pt.y}`, "");
   const areaD = `${pathD} L ${pointsFormatted[pointsFormatted.length - 1].x},${height - 10} L ${pointsFormatted[0].x},${height - 10} Z`;
   const ultimoDelta = historialCompleto[historialCompleto.length - 1]?.change || 0;
 
   return (
     <div className="bg-[#0B1120] text-white p-5 sm:p-6 rounded-[2rem] shadow-xl border border-slate-800 space-y-4">
-      
-      {/* HEADER + CONTROLES */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>
           <span className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] block">
-            Tracker de Rendimiento
+            Tracker de Rendimiento Oficial
           </span>
           <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2 mt-0.5">
             <span>Evolución de Rating</span>
-            <span className="text-xs font-bold text-slate-400">({historialCompleto.length - 1} partidos)</span>
+            <span className="text-xs font-bold text-slate-400">({historialCompleto.length - 1} partidos rankeados)</span>
           </h3>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-          
-          {/* BOTONES DE FILTRO */}
           <div className="bg-slate-900 border border-slate-800 p-1 rounded-xl flex items-center gap-1 text-[10px] font-bold shrink-0">
-            <button
-              onClick={() => setFiltro("5")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                filtro === "5" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              5 Últimos
-            </button>
-            <button
-              onClick={() => setFiltro("10")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                filtro === "10" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              10 Últimos
-            </button>
-            <button
-              onClick={() => setFiltro("todos")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                filtro === "todos" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Todos
-            </button>
+            <button onClick={() => setFiltro("5")} className={`px-3 py-1.5 rounded-lg transition-all ${filtro === "5" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"}`}>5 Últimos</button>
+            <button onClick={() => setFiltro("10")} className={`px-3 py-1.5 rounded-lg transition-all ${filtro === "10" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"}`}>10 Últimos</button>
+            <button onClick={() => setFiltro("todos")} className={`px-3 py-1.5 rounded-lg transition-all ${filtro === "todos" ? "bg-blue-600 text-white font-black shadow-sm" : "text-slate-400 hover:text-white"}`}>Todos</button>
           </div>
 
-          {/* CONTROLES DE ZOOM (Solo visibles en "Todos") */}
           {filtro === "todos" && (
             <div className="bg-slate-900 border border-slate-800 p-1 rounded-xl flex items-center text-[10px] font-bold shrink-0">
-              <button 
-                onClick={() => setPointSpacing(p => Math.max(p - 15, 45))} 
-                disabled={pointSpacing <= 45} 
-                className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent transition-all"
-                title="Alejar (Zoom Out)"
-              >
-                ➖
-              </button>
+              <button onClick={() => setPointSpacing(p => Math.max(p - 15, 45))} disabled={pointSpacing <= 45} className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg disabled:opacity-30 transition-all">➖</button>
               <span className="text-slate-500 font-black uppercase px-1 cursor-default">Zoom</span>
-              <button 
-                onClick={() => setPointSpacing(p => Math.min(p + 15, 120))} 
-                disabled={pointSpacing >= 120} 
-                className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent transition-all"
-                title="Acercar (Zoom In)"
-              >
-                ➕
-              </button>
+              <button onClick={() => setPointSpacing(p => Math.min(p + 15, 120))} disabled={pointSpacing >= 120} className="px-2.5 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg disabled:opacity-30 transition-all">➕</button>
             </div>
           )}
 
-          {/* PASTILLA DEL ÚLTIMO RESULTADO */}
-          <span className={`text-[10px] font-black px-3 py-1.5 rounded-full border shrink-0 ${
-            ultimoDelta >= 0 ? "bg-[#00FF9D]/20 text-[#00FF9D] border-[#00FF9D]/40" : "bg-rose-500/20 text-rose-300 border-rose-500/40"
-          }`}>
+          <span className={`text-[10px] font-black px-3 py-1.5 rounded-full border shrink-0 ${ultimoDelta >= 0 ? "bg-[#00FF9D]/20 text-[#00FF9D] border-[#00FF9D]/40" : "bg-rose-500/20 text-rose-300 border-rose-500/40"}`}>
             {ultimoDelta >= 0 ? `+${ultimoDelta.toFixed(2)} pts` : `${ultimoDelta.toFixed(2)} pts`}
           </span>
         </div>
       </div>
 
-      {/* CANVAS SVG CON SCROLL CUSTOMIZADO */}
-      <div 
-        ref={scrollRef} 
-        className="relative w-full overflow-x-auto pb-4 pt-1 
-                   [&::-webkit-scrollbar]:h-2 
-                   [&::-webkit-scrollbar-track]:bg-[#0B1120] 
-                   [&::-webkit-scrollbar-track]:rounded-full 
-                   [&::-webkit-scrollbar-thumb]:bg-slate-700 
-                   [&::-webkit-scrollbar-thumb]:rounded-full 
-                   hover:[&::-webkit-scrollbar-thumb]:bg-slate-500 transition-colors"
-      >
-        <div style={{ width: `${width}px`, minWidth: "100%" }}>
-          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto overflow-visible">
+      <div ref={scrollRef} className="relative w-full overflow-x-auto pb-4 pt-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-[#0B1120] [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-slate-500 transition-colors">
+        <div style={{ width: `${width}px`, minWidth: "100%", position: "relative" }}>
+          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto overflow-visible cursor-crosshair" onClick={() => setActiveTooltip(null)}>
             <defs>
               <linearGradient id="chartGradientGris" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#64748B" stopOpacity="0.2" />
                 <stop offset="100%" stopColor="#64748B" stopOpacity="0.0" />
               </linearGradient>
             </defs>
-
-            {/* Area de fondo en gris translúcido */}
             <path d={areaD} fill="url(#chartGradientGris)" />
-
-            {/* Línea Principal Neutra en Gris Slate */}
             <path d={pathD} fill="none" stroke="#64748B" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
 
-            {/* Nodos interactivos */}
             {pointsFormatted.map((pt, idx) => {
               const esInicio = pt.matchNum === 0;
               const esVictoria = pt.change >= 0;
-
-              // Asignación de colores: Azul (Inicio), Verde (+), Rojo (-)
               const nodeColor = esInicio ? "#38BDF8" : esVictoria ? "#00FF9D" : "#FF4655";
               const strokeColor = esInicio ? "#0284C7" : esVictoria ? "#00CC7D" : "#E11D48";
+              const isActive = activeTooltip === pt.id;
 
               return (
-                <g key={idx} className="group cursor-pointer">
-                  {/* Punto */}
-                  <circle
-                    cx={pt.x}
-                    cy={pt.y}
-                    r="5"
-                    fill={nodeColor}
-                    stroke={strokeColor}
-                    strokeWidth="2.5"
-                    className="transition-all group-hover:r-7"
-                  />
-
-                  {/* Rating principal (Arriba del punto) */}
-                  <text
-                    x={pt.x}
-                    y={pt.y - 12}
-                    textAnchor="middle"
-                    fill="#FFFFFF"
-                    fontSize="10"
-                    fontWeight="900"
-                    className="drop-shadow-sm"
-                  >
-                    {pt.rating.toFixed(2)}
-                  </text>
-
-                  {/* Delta / Cambio numérico (Debajo del punto, visible si no es inicio) */}
+                <g 
+                  key={idx} 
+                  className="group cursor-pointer"
+                  onClick={(e) => { e.stopPropagation(); setActiveTooltip(isActive ? null : pt.id); }}
+                  onMouseEnter={() => setActiveTooltip(pt.id)}
+                  onMouseLeave={() => setActiveTooltip(null)}
+                >
+                  <circle cx={pt.x} cy={pt.y} r={isActive ? "7" : "5"} fill={nodeColor} stroke={strokeColor} strokeWidth="2.5" className="transition-all duration-200 group-hover:r-7" />
+                  <text x={pt.x} y={pt.y - 14} textAnchor="middle" fill="#FFFFFF" fontSize="10" fontWeight="900" className="drop-shadow-sm">{pt.rating.toFixed(2)}</text>
                   {!esInicio && (
-                    <text
-                      x={pt.x}
-                      y={pt.y + 18}
-                      textAnchor="middle"
-                      fill={nodeColor}
-                      fontSize="8"
-                      fontWeight="900"
-                    >
+                    <text x={pt.x} y={pt.y + 18} textAnchor="middle" fill={nodeColor} fontSize="8" fontWeight="900">
                       {pt.change >= 0 ? `+${pt.change.toFixed(2)}` : pt.change.toFixed(2)}
                     </text>
+                  )}
+                  {!esInicio && (
+                    <text x={pt.x} y={pt.y + 28} textAnchor="middle" fill="#94A3B8" fontSize="7" fontWeight="600">{pt.dateStr}</text>
+                  )}
+                  
+                  {/* TOOLTIP PERFECTAMENTE CENTRADO SOBRE EL PUNTO USANDO FOREIGN-OBJECT */}
+                  {isActive && !esInicio && (
+                    <foreignObject x={pt.x - 60} y={pt.y - 70} width="120" height="60" className="overflow-visible pointer-events-none">
+                      <div className="flex flex-col items-center justify-end w-full h-full pb-2 animate-in zoom-in-95 duration-200">
+                        <div className="bg-slate-900 border border-slate-700 shadow-xl rounded-xl px-3 py-1.5 text-center flex flex-col items-center relative z-20">
+                          <span className={`text-[9px] font-black uppercase tracking-wider mb-0.5 ${esVictoria ? 'text-[#00FF9D]' : 'text-rose-400'}`}>
+                            {esVictoria ? 'Victoria' : 'Derrota'}
+                          </span>
+                          <span className="text-white text-xs font-black tracking-widest whitespace-nowrap">{pt.score}</span>
+                          <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-slate-900 border-b border-r border-slate-700 rotate-45 z-10" />
+                        </div>
+                      </div>
+                    </foreignObject>
                   )}
                 </g>
               );
@@ -471,7 +411,6 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
           </svg>
         </div>
       </div>
-
     </div>
   );
 }
@@ -542,7 +481,6 @@ export default function PadelPerfilPage() {
           .upsert({ cuenta_id: authUser.id, ...DEFAULT_PROFILE }, { onConflict: "cuenta_id" })
           .select()
           .single();
-
         finalPadel = created;
       }
 
@@ -575,10 +513,7 @@ export default function PadelPerfilPage() {
 
       const { data: todosPadel } = await supabase
         .from("padel_profiles")
-        .select(`
-          cuenta_id, rating,
-          profiles:cuenta_id ( ciudad )
-        `);
+        .select(`cuenta_id, rating, profiles:cuenta_id ( ciudad )`);
 
       if (todosPadel) {
         const rankingOrdenado = todosPadel
@@ -594,9 +529,7 @@ export default function PadelPerfilPage() {
 
         const miCiudad = profileData?.ciudad || "";
         if (miCiudad) {
-          const rankingCiudad = rankingOrdenado.filter(
-            (p) => p.ciudad?.toLowerCase() === miCiudad.toLowerCase()
-          );
+          const rankingCiudad = rankingOrdenado.filter((p) => p.ciudad?.toLowerCase() === miCiudad.toLowerCase());
           const pCiudad = rankingCiudad.findIndex((p) => p.cuenta_id === authUser.id) + 1;
           setPosicionCiudad(pCiudad > 0 ? pCiudad : null);
         }
@@ -609,10 +542,7 @@ export default function PadelPerfilPage() {
         .eq("user_id", authUser.id);
 
       if (mErr) {
-        const { data: mDataBasic } = await supabase
-          .from("match_players")
-          .select("match_id, team")
-          .eq("user_id", authUser.id);
+        const { data: mDataBasic } = await supabase.from("match_players").select("match_id, team").eq("user_id", authUser.id);
         myMatches = mDataBasic || [];
       } else {
         myMatches = mData || [];
@@ -645,23 +575,14 @@ export default function PadelPerfilPage() {
           .in("match_id", matchIds);
 
         const allUserIds = Array.from(new Set((allPlayersData || []).map((p) => p.user_id).filter(Boolean)));
-
         let profilesMap = {};
         let padelProfilesMap = {};
 
         if (allUserIds.length > 0) {
-          const { data: profs } = await supabase
-            .from("profiles")
-            .select("id, nombre, avatar_url")
-            .in("id", allUserIds);
-
+          const { data: profs } = await supabase.from("profiles").select("id, nombre, avatar_url").in("id", allUserIds);
           (profs || []).forEach((p) => { profilesMap[p.id] = p; });
 
-          const { data: padelProfs } = await supabase
-            .from("padel_profiles")
-            .select("cuenta_id, rating")
-            .in("cuenta_id", allUserIds);
-
+          const { data: padelProfs } = await supabase.from("padel_profiles").select("cuenta_id, rating").in("cuenta_id", allUserIds);
           (padelProfs || []).forEach((pp) => { padelProfilesMap[pp.cuenta_id] = pp; });
         }
 
@@ -717,10 +638,7 @@ export default function PadelPerfilPage() {
     setMostrarNotaAdmin(false);
     if (!user) return;
     try {
-      await supabase
-        .from("padel_profiles")
-        .update({ categoria_comentario_admin: null })
-        .eq("cuenta_id", user.id);
+      await supabase.from("padel_profiles").update({ categoria_comentario_admin: null }).eq("cuenta_id", user.id);
     } catch (e) { console.error(e); }
   }
 
@@ -729,7 +647,6 @@ export default function PadelPerfilPage() {
   function avanzarOnboarding() {
     const stepActual = ONBOARDING_STEPS[onboardingStep];
     if (stepActual && !onboardingResp[stepActual.campo]) return;
-
     if (onboardingStep === ONBOARDING_STEPS.length - 1) {
       const rating = calcularRatingInicial(onboardingResp);
       setRatingCalculado(rating);
@@ -737,13 +654,11 @@ export default function PadelPerfilPage() {
       setOnboardingStep(ONBOARDING_STEPS.length);
       return;
     }
-
     setOnboardingStep((s) => s + 1);
   }
 
   async function guardarOnboarding() {
     if (!user) return;
-
     try {
       setSaving(true);
       const ratingFinal = parseFloat(Math.min(Math.max(ratingCalculado + ratingAjuste, 1.0), 7.0).toFixed(2));
@@ -761,13 +676,7 @@ export default function PadelPerfilPage() {
         fiabilidad: 20,
       };
 
-      const { data, error } = await supabase
-        .from("padel_profiles")
-        .update(payload)
-        .eq("cuenta_id", user.id)
-        .select()
-        .single();
-
+      const { data, error } = await supabase.from("padel_profiles").update(payload).eq("cuenta_id", user.id).select().single();
       if (error) throw error;
 
       setPadelProfile(data);
@@ -795,13 +704,7 @@ export default function PadelPerfilPage() {
         edad: Number(formPerfil.edad) || 25,
       };
 
-      const { data, error } = await supabase
-        .from("padel_profiles")
-        .update(payload)
-        .eq("cuenta_id", user.id)
-        .select()
-        .single();
-
+      const { data, error } = await supabase.from("padel_profiles").update(payload).eq("cuenta_id", user.id).select().single();
       if (error) throw error;
 
       setPadelProfile(data);
@@ -818,39 +721,19 @@ export default function PadelPerfilPage() {
   async function enviarSolicitudCategoria(e) {
     e.preventDefault();
     if (!user) return;
-
-    if (padelProfile?.estado_categoria === "pendiente") {
-      alert("Ya tienes una solicitud de categoría en revisión.");
-      return;
-    }
-
-    if (!motivoSolicitud.trim()) {
-      alert("Por favor explica brevemente el motivo de tu solicitud.");
-      return;
-    }
+    if (padelProfile?.estado_categoria === "pendiente") return alert("Ya tienes una solicitud en revisión.");
+    if (!motivoSolicitud.trim()) return alert("Por favor explica el motivo.");
 
     try {
       setSaving(true);
       setErrorMsg("");
-
-      const payload = {
-        categoria_solicitada: catSolicitada,
-        motivo_solicitud: motivoSolicitud.trim(),
-        estado_categoria: "pendiente",
-      };
-
-      const { data, error } = await supabase
-        .from("padel_profiles")
-        .update(payload)
-        .eq("cuenta_id", user.id)
-        .select()
-        .single();
-
+      const payload = { categoria_solicitada: catSolicitada, motivo_solicitud: motivoSolicitud.trim(), estado_categoria: "pendiente" };
+      const { data, error } = await supabase.from("padel_profiles").update(payload).eq("cuenta_id", user.id).select().single();
       if (error) throw error;
 
       setPadelProfile(data);
       setModalSolicitudOpen(false);
-      setMensaje("⏳ Solicitud enviada correctamente. El administrador revisará tu caso.");
+      setMensaje("⏳ Solicitud enviada correctamente.");
     } catch (err) {
       console.error(err);
       setErrorMsg("No se pudo enviar la solicitud.");
@@ -928,18 +811,12 @@ export default function PadelPerfilPage() {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-
-          {/* COLUMNA IZQUIERDA: CARTA JUGADOR */}
           <div className="lg:col-span-5 w-full flex flex-col items-center space-y-4">
             <div className="w-full bg-gradient-to-b from-[#0B0C2A] via-[#161848] to-[#0B0C2A] rounded-[2.5rem] p-6 md:p-8 text-white text-center shadow-xl border border-blue-500/20 relative overflow-hidden flex flex-col items-center justify-between min-h-[470px]">
               
               <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-blue-500/20 rounded-full blur-3xl pointer-events-none" />
 
-              <button
-                onClick={() => setEditandoPerfil(!editandoPerfil)}
-                className="absolute top-5 right-5 z-20 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center text-white transition-all shadow-md active:scale-95"
-                title="Editar Ficha de Jugador"
-              >
+              <button onClick={() => setEditandoPerfil(!editandoPerfil)} className="absolute top-5 right-5 z-20 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center text-white transition-all shadow-md active:scale-95">
                 ⚙️
               </button>
 
@@ -957,12 +834,10 @@ export default function PadelPerfilPage() {
 
               <div className="z-10 w-full flex flex-col items-center">
                 <h2 className="text-2xl md:text-3xl font-black tracking-tight text-white">{nombreCompleto}</h2>
-                
                 <div className="mt-2 flex flex-col items-center gap-1.5">
                   <span className="bg-blue-500/25 border border-blue-400/40 text-blue-300 text-xs md:text-sm font-black uppercase px-5 py-1 rounded-full shadow-md tracking-wider">
                     🎾 {catOficialLabel}
                   </span>
-
                   {(posicionCiudad || posicionGlobal) && (
                     <div className="flex items-center gap-2 mt-1 bg-white/10 backdrop-blur-md border border-white/10 px-3.5 py-1 rounded-full text-[11px] font-black shadow-sm">
                       {posicionCiudad && <span className="text-cyan-300">📍 #{posicionCiudad} {baseProfile?.ciudad || "Local"}</span>}
@@ -982,14 +857,9 @@ export default function PadelPerfilPage() {
                     PRÓX: {infoRating.nextCat} ({infoRating.ceiling.toFixed(2)})
                   </span>
                 </div>
-
                 <div className="w-full bg-slate-800 rounded-full h-3 md:h-3.5 overflow-hidden border border-white/10 p-0.5">
-                  <div 
-                    className="bg-gradient-to-r from-blue-500 via-cyan-400 to-[#00FF9D] h-full rounded-full transition-all duration-700 shadow-[0_0_15px_rgba(0,255,157,0.5)]" 
-                    style={{ width: `${progresoPct}%` }}
-                  />
+                  <div className="bg-gradient-to-r from-blue-500 via-cyan-400 to-[#00FF9D] h-full rounded-full transition-all duration-700 shadow-[0_0_15px_rgba(0,255,157,0.5)]" style={{ width: `${progresoPct}%` }} />
                 </div>
-
                 <div className="flex justify-between items-center text-xs text-gray-300 mt-2.5 font-bold uppercase tracking-wider">
                   <span>Fiabilidad: <strong className={fiabilidadInfo.color}>{fiabilidadInfo.texto} ({fiabilidadVal}%)</strong></span>
                   <span className="text-gray-300">{progresoPct}% a ascenso</span>
@@ -1010,21 +880,15 @@ export default function PadelPerfilPage() {
                   <p className="text-sm md:text-base font-black text-emerald-300 mt-0.5">{LABELS.mano_habil[padelProfile?.mano_habil] || "Derecha"}</p>
                 </div>
               </div>
-
             </div>
 
-            <button
-              onClick={() => setModalInfoOpen(true)}
-              className="mt-2 text-xs md:text-sm font-extrabold text-slate-500 hover:text-blue-600 flex items-center gap-2 transition-colors py-2 px-3 rounded-full hover:bg-slate-100"
-            >
+            <button onClick={() => setModalInfoOpen(true)} className="mt-2 text-xs md:text-sm font-extrabold text-slate-500 hover:text-blue-600 flex items-center gap-2 transition-colors py-2 px-3 rounded-full hover:bg-slate-100">
               <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-black shrink-0">ℹ️</span>
               <span>¿Cómo funciona el nivel y los ascensos?</span>
             </button>
           </div>
 
-          {/* COLUMNA DERECHA */}
           <div className="lg:col-span-7 space-y-6">
-
             {editandoPerfil ? (
               <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
                 <div className="flex justify-between items-center border-b border-slate-100 pb-3">
@@ -1041,7 +905,6 @@ export default function PadelPerfilPage() {
                       <option value="ambidiestro">Ambidiestro</option>
                     </select>
                   </div>
-
                   <div>
                     <label className="block mb-1 text-[10px] uppercase text-slate-400">Posición en Pista</label>
                     <select value={formPerfil.posicion} onChange={(e) => setFormPerfil({ ...formPerfil, posicion: e.target.value })} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 outline-none">
@@ -1063,16 +926,9 @@ export default function PadelPerfilPage() {
               </div>
             ) : (
               <div className="space-y-6">
+                <RatingTrackerChart partidosJugados={partidosJugados} currentRating={ratingActual} />
 
-                {/* 📈 COMPONENTE REORGANIZADO: TRACKER DE GRÁFICA DE LEVEL */}
-                <RatingTrackerChart
-                  partidosJugados={partidosJugados}
-                  currentRating={ratingActual}
-                />
-
-                {/* TABLERO PRINCIPAL DE ESTADÍSTICAS */}
                 <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
-                  
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <h1 className="text-2xl font-black text-slate-900">{nombreCompleto}</h1>
@@ -1080,7 +936,6 @@ export default function PadelPerfilPage() {
                         JUGADOR DE PÁDEL • LEVEL {ratingActual.toFixed(2)} ({catOficialLabel.toUpperCase()})
                       </p>
                     </div>
-
                     <Link href="/padel/ranking" className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-sm transition-all shrink-0 flex items-center justify-center gap-1.5 self-start sm:self-auto">
                       <span>🏆</span>
                       <span>Ver Tabla de Ranking →</span>
@@ -1089,14 +944,9 @@ export default function PadelPerfilPage() {
 
                   <div className="bg-slate-50/80 border border-slate-200/80 p-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="space-y-1">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">
-                        Estado de Categoría
-                      </span>
-                      <p className="text-base font-black text-slate-900">
-                        {LABELS.estado_categoria[estadoCat] || "En revisión"}
-                      </p>
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">Estado de Categoría</span>
+                      <p className="text-base font-black text-slate-900">{LABELS.estado_categoria[estadoCat] || "En revisión"}</p>
                     </div>
-
                     {!tieneSolicitudPendiente && (
                       <button onClick={() => setModalSolicitudOpen(true)} className="px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black rounded-xl shadow-sm">
                         🎾 Solicitar cambio de categoría
@@ -1106,38 +956,25 @@ export default function PadelPerfilPage() {
 
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 truncate">
-                        PUESTO EN {baseProfile?.ciudad?.toUpperCase() || "BARQUISIMETO"}
-                      </p>
-                      <p className="text-2xl font-black text-blue-600 mt-2">
-                        {posicionCiudad ? `#${posicionCiudad}` : "—"}
-                      </p>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 truncate">PUESTO EN {baseProfile?.ciudad?.toUpperCase() || "BARQUISIMETO"}</p>
+                      <p className="text-2xl font-black text-blue-600 mt-2">{posicionCiudad ? `#${posicionCiudad}` : "—"}</p>
                     </div>
-
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PUESTO GLOBAL</p>
-                      <p className="text-2xl font-black text-emerald-600 mt-2">
-                        {posicionGlobal ? `#${posicionGlobal}` : "—"}
-                      </p>
+                      <p className="text-2xl font-black text-emerald-600 mt-2">{posicionGlobal ? `#${posicionGlobal}` : "—"}</p>
                     </div>
-
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">RATING</p>
                       <p className="text-2xl font-black text-cyan-600 mt-2">{ratingActual.toFixed(2)}</p>
                     </div>
-
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">PARTIDOS JUGADOS</p>
                       <p className="text-2xl font-black text-slate-900 mt-2">{estadisticas.partidos}</p>
                     </div>
-
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">VICTORIAS TOTALES</p>
-                      <p className="text-2xl font-black text-slate-900 mt-2 flex items-center gap-1">
-                        {estadisticas.victorias} <span className="text-lg">🏆</span>
-                      </p>
+                      <p className="text-2xl font-black text-slate-900 mt-2 flex items-center gap-1">{estadisticas.victorias} <span className="text-lg">🏆</span></p>
                     </div>
-
                     <div className="bg-slate-50/80 border border-slate-100 p-4 rounded-2xl">
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">% VICTORIAS</p>
                       <p className="text-2xl font-black text-emerald-600 mt-2">{estadisticas.porcentajeVictorias}%</p>
@@ -1158,13 +995,10 @@ export default function PadelPerfilPage() {
                       <p className="text-sm font-black text-slate-900">{LABELS.posicion[padelProfile?.posicion] || "Drive"}</p>
                     </div>
                   </div>
-
                 </div>
-
               </div>
             )}
 
-            {/* 🎾 PRÓXIMOS PARTIDOS */}
             <div className="space-y-4 pt-2">
               <div className="flex items-center justify-between px-1">
                 <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
@@ -1197,7 +1031,6 @@ export default function PadelPerfilPage() {
               )}
             </div>
 
-            {/* 🏆 ACTIVIDAD RECIENTE */}
             <div className="space-y-4 pt-4">
               <div className="flex items-center justify-between px-1">
                 <div>
@@ -1215,69 +1048,37 @@ export default function PadelPerfilPage() {
                   {jugadosVisibles.map((match) => {
                     const esVictoria = match.esGanador;
                     const change = match.rating_change || 0;
-
                     return (
-                      <div
-                        key={match.id}
-                        className={`bg-[#0B1120] text-white rounded-3xl p-4 sm:p-5 shadow-lg border border-slate-800 transition-all flex items-center justify-between gap-4 border-l-[6px] ${
-                          esVictoria ? "border-l-[#00FF9D]" : "border-l-rose-500"
-                        }`}
-                      >
+                      <div key={match.id} className={`bg-[#0B1120] text-white rounded-3xl p-4 sm:p-5 shadow-lg border border-slate-800 transition-all flex items-center justify-between gap-4 border-l-[6px] ${esVictoria ? "border-l-[#00FF9D]" : "border-l-rose-500"}`}>
                         <div className="space-y-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                              FINALIZADO
-                            </span>
-                            <span
-                              className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                                esVictoria
-                                  ? "bg-[#00FF9D]/20 text-[#00FF9D] border border-[#00FF9D]/30"
-                                  : "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                              }`}
-                            >
+                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">FINALIZADO</span>
+                            <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${esVictoria ? "bg-[#00FF9D]/20 text-[#00FF9D] border border-[#00FF9D]/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"}`}>
                               {esVictoria ? "VICTORIA 🏆" : "DERROTA"}
                             </span>
-
                             {change !== 0 && (
-                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
-                                change > 0
-                                  ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
-                                  : "bg-rose-500/20 text-rose-300 border-rose-500/30"
-                              }`}>
+                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${change > 0 ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border-rose-500/30"}`}>
                                 {change > 0 ? `+${change.toFixed(2)} pts` : `${change.toFixed(2)} pts`}
                               </span>
                             )}
                           </div>
-
-                          <h3 className="text-base sm:text-lg font-black tracking-tight text-white truncate">
-                            {match.club?.name || "Club de Pádel"}
-                          </h3>
-
+                          <h3 className="text-base sm:text-lg font-black tracking-tight text-white truncate">{match.club?.name || "Club de Pádel"}</h3>
                           <p className="text-xs font-semibold text-slate-400 flex items-center gap-1.5 truncate">
                             <span>📍 {match.court?.name || "Pista Central"}</span>
                             <span>•</span>
                             <span>{formatFechaCorta(match.scheduled_at)}</span>
                           </p>
                         </div>
-
                         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl px-4 py-2.5 text-center shrink-0 shadow-inner">
-                          <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">
-                            Marcador
-                          </span>
-                          <span className="text-base sm:text-lg font-black text-white tracking-wider block">
-                            {match.score_text || "6-4, 6-3"}
-                          </span>
+                          <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Marcador</span>
+                          <span className="text-base sm:text-lg font-black text-white tracking-wider block">{match.score_text || "6-4, 6-3"}</span>
                         </div>
                       </div>
                     );
                   })}
-
                   {hayMasHistorial && (
                     <div className="pt-2 text-center">
-                      <button
-                        onClick={() => setLimiteHistorial((prev) => prev + 3)}
-                        className="px-6 py-3 bg-white border border-slate-200 hover:bg-slate-100 text-slate-800 font-black text-xs uppercase tracking-wider rounded-2xl shadow-sm transition-all active:scale-95"
-                      >
+                      <button onClick={() => setLimiteHistorial((prev) => prev + 3)} className="px-6 py-3 bg-white border border-slate-200 hover:bg-slate-100 text-slate-800 font-black text-xs uppercase tracking-wider rounded-2xl shadow-sm transition-all active:scale-95">
                         👇 Cargar anteriores ({partidosJugados.length - limiteHistorial} restantes)
                       </button>
                     </div>
@@ -1287,9 +1088,7 @@ export default function PadelPerfilPage() {
             </div>
 
           </div>
-
         </div>
-
       </div>
 
       {onboardingOpen && (
@@ -1297,15 +1096,11 @@ export default function PadelPerfilPage() {
           <div className="w-full max-w-md rounded-[2.5rem] bg-[#EEF0F5] p-6 shadow-2xl flex flex-col overflow-hidden space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-xs font-black uppercase tracking-widest text-blue-600">Nivelación Inicial</span>
-              <span className="text-xs font-bold text-gray-400">
-                {esPantallaRes ? "Resultado" : `Pregunta ${onboardingStep + 1} de ${ONBOARDING_STEPS.length}`}
-              </span>
+              <span className="text-xs font-bold text-gray-400">{esPantallaRes ? "Resultado" : `Pregunta ${onboardingStep + 1} de ${ONBOARDING_STEPS.length}`}</span>
             </div>
-
             <div className="h-2 w-full rounded-full bg-gray-200 overflow-hidden">
               <div className="h-full rounded-full bg-blue-600 transition-all duration-300" style={{ width: `${progresoBarPct}%` }} />
             </div>
-
             {esPantallaRes ? (
               <div className="flex flex-col gap-4 pt-2">
                 <div className="rounded-3xl bg-[#0B1120] text-white p-6 text-center shadow-lg">
@@ -1315,7 +1110,6 @@ export default function PadelPerfilPage() {
                     🎾 {NIVEL_LABELS[catResult]?.label}
                   </span>
                 </div>
-
                 <button onClick={guardarOnboarding} disabled={saving} className="w-full rounded-2xl bg-blue-600 py-3.5 text-xs font-black uppercase tracking-wider text-white">
                   {saving ? "Guardando..." : "Confirmar y Comenzar 🎾"}
                 </button>
@@ -1323,7 +1117,6 @@ export default function PadelPerfilPage() {
             ) : (
               <div className="flex flex-col gap-3 pt-1">
                 <h2 className="text-sm font-black text-slate-900 leading-snug">{stepActual?.titulo}</h2>
-
                 <div className="flex flex-col gap-2">
                   {stepActual?.opciones.map((op) => (
                     <button key={op.value} onClick={() => seleccionarRespuesta(stepActual.campo, op.value)} className={`w-full text-left rounded-2xl border-2 px-4 py-3 transition-all ${respActual === op.value ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-800"}`}>
@@ -1331,7 +1124,6 @@ export default function PadelPerfilPage() {
                     </button>
                   ))}
                 </div>
-
                 <button onClick={avanzarOnboarding} className="w-full rounded-2xl py-3.5 text-xs font-black uppercase tracking-wider mt-2 bg-slate-900 text-white">
                   Siguiente →
                 </button>
@@ -1348,7 +1140,6 @@ export default function PadelPerfilPage() {
               <h3 className="text-lg font-black text-slate-900">Solicitar Cambio de Categoría</h3>
               <button onClick={() => setModalSolicitudOpen(false)} className="text-slate-400 font-bold">✕</button>
             </div>
-
             <form onSubmit={enviarSolicitudCategoria} className="space-y-4 text-xs font-bold text-slate-700">
               <div>
                 <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">Nueva Categoría Deseada</label>
@@ -1358,12 +1149,10 @@ export default function PadelPerfilPage() {
                   ))}
                 </select>
               </div>
-
               <div>
                 <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">Motivo</label>
                 <textarea rows={4} required placeholder="Explica brevemente tu motivo..." value={motivoSolicitud} onChange={(e) => setMotivoSolicitud(e.target.value)} className="w-full bg-slate-50 border p-2.5 rounded-xl font-bold" />
               </div>
-
               <button type="submit" disabled={saving} className="w-full py-3.5 bg-blue-600 text-white font-black rounded-2xl text-xs uppercase">
                 {saving ? "Enviando..." : "Enviar a Revisión"}
               </button>
@@ -1384,7 +1173,6 @@ export default function PadelPerfilPage() {
           </div>
         </div>
       )}
-
     </div>
   );
 }

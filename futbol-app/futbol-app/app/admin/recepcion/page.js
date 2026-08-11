@@ -6,8 +6,8 @@ import { supabase } from "@/lib/supabaseClient";
 
 function parsearFechaBD(fechaStr) {
   if (!fechaStr) return new Date();
-  const str = fechaStr.replace(" ", "T");
-  return new Date(str.endsWith("Z") || str.includes("+") ? str : `${str}Z`);
+  const cleanStr = fechaStr.replace(" ", "T").substring(0, 19);
+  return new Date(`${cleanStr}-04:00`); // 🔴 Fuerza el horario exacto de Venezuela
 }
 
 function formatearHora12(hora24Str) {
@@ -130,11 +130,16 @@ export default function RecepcionElite() {
   // Tasa BCV
   const [tasaBCV, setTasaBCV] = useState(36.65);
 
+   // 🔴 2. ESTADO INICIAL DEL CALENDARIO (Hora VET)
+  const [fechaBase, setFechaBase] = useState(() => {
+    return new Date(new Date().toLocaleString("en-US", { timeZone: "America/Caracas" }));
+  });
+
   // Vistas Calendario
   const [vistaCalendario, setVistaCalendario] = useState("dia");
   const [canchaFiltro, setCanchaFiltro] = useState("todas");
   const [alertaNuevaReserva, setAlertaNuevaReserva] = useState(null);
-  const [fechaBase, setFechaBase] = useState(new Date());
+  
 
   // Datos
   const [canchas, setCanchas] = useState([]);
@@ -454,16 +459,26 @@ export default function RecepcionElite() {
     setFechaBase(nueva);
   };
 
-  const irAHoy = () => setFechaBase(new Date());
+  // 🔴 3. BOTÓN HOY CON HORA VET
+  const irAHoy = () => {
+    const hoyVET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Caracas" }));
+    setFechaBase(hoyVET);
+  };
 
   const canchasFiltradas = useMemo(() => {
     if (canchaFiltro === "todas") return canchas;
     return canchas.filter((c) => c.id === canchaFiltro);
   }, [canchas, canchaFiltro]);
 
+    // 🔴 4. NOMBRE DE DÍA CON ZONA VET EN CALENDARIO
   const bloquesPorDia = useMemo(() => {
     return diasVisibles.map((diaObj, diaIdx) => {
-      const nombreDiaLargo = diaObj.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
+      const nombreDiaLargo = diaObj.toLocaleDateString("es-ES", {
+        timeZone: "America/Caracas",
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+      });
       const nombreDiaLargoMayus = nombreDiaLargo.charAt(0).toUpperCase() + nombreDiaLargo.slice(1);
 
       return {
@@ -477,6 +492,7 @@ export default function RecepcionElite() {
       };
     });
   }, [diasVisibles, canchasFiltradas]);
+  
 
   const abrirModalDetalle = (reservado) => {
     setMatchSeleccionado(reservado);

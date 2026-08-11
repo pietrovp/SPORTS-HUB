@@ -2,11 +2,10 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { createPortal } from "react-dom";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
-const CATEGORIAS_ORDEN = ["rookies", "7ma", "6ta", "5ta", "4ta", "3era", "2da", "open"];
+const CATEGORIAS_ORDEN = [,"7ma", "6ta", "5ta", "4ta", "3era", "2da", "open"];
 
 const PRESETS_DUPLA_1 = [
   { label: "6 - 0", gA: 6, gB: 0 },
@@ -28,10 +27,12 @@ const PRESETS_DUPLA_2 = [
   { label: "6 - 7 (TB)", gA: 6, gB: 7 },
 ];
 
+// 🔴 CORRECCIÓN DE ZONA HORARIA
 function formatFechaLarga(fechaStr) {
   if (!fechaStr) return "";
   const d = parsearFechaVET(fechaStr);
-  return d.toLocaleDateString("es-ES", {
+  return d.toLocaleString("es-ES", {
+    timeZone: "America/Caracas", // Fuerza SIEMPRE la hora de Venezuela
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -56,7 +57,6 @@ function calcularHorasFaltantesVET(scheduledAtStr) {
 
 function categoriaDesdeRating(r) {
   const num = Number(r) || 1.0;
-  if (num < 2.0) return "rookies";
   if (num < 3.0) return "7ma";
   if (num < 4.0) return "6ta";
   if (num < 4.8) return "5ta";
@@ -79,11 +79,16 @@ function validarCompatibilidadCategorias(jugadores) {
     })
     .filter((idx) => idx !== -1);
 
+  // Si algún jugador no tiene categoría o falta alguien, no vale.
   if (indices.length < jugadores.length) return false;
 
   const minIdx = Math.min(...indices);
   const maxIdx = Math.max(...indices);
 
+  // 🔴 LA REGLA ESTRICTA: La diferencia entre el jugador de más alto nivel 
+  // y el de más bajo nivel en la pista NO puede ser mayor a 1 categoría.
+  // Ejemplo: Si el más bajo es 7ma (índice 0) y el más alto es 6ta (índice 1), la diferencia es 1. -> Válido
+  // Si el más bajo es 7ma (0) y el más alto es 5ta (2), la diferencia es 2. -> INVÁLIDO.
   return (maxIdx - minIdx) <= 1;
 }
 
@@ -117,7 +122,7 @@ function validarSet(gA, gB, tbA = 0, tbB = 0) {
   return { valido: false, msg: "Set inválido. Ejemplos válidos: 6-4, 7-5 o 7-6" };
 }
 
-function calcularAjusteRatingSet({ ratingA1, ratingA2, ratingB1, ratingB2, juegosA, juegosB, fiabilidadJugador }) {
+function calcularAjusteRatingSet({ ratingA1, ratingA2, ratingB1, ratingB2, juegosA, juegosB, fiabilidadJugador, ganadorSet }) {
   const ratingEquipoA = (ratingA1 + ratingA2) / 2;
   const ratingEquipoB = (ratingB1 + ratingB2) / 2;
 
@@ -128,7 +133,9 @@ function calcularAjusteRatingSet({ ratingA1, ratingA2, ratingB1, ratingB2, juego
   if (fiabilidadJugador < 30) kFactor = 0.20;
   else if (fiabilidadJugador < 60) kFactor = 0.12;
 
-  const esGanadorA = juegosA > juegosB;
+  // En lugar de guiarnos solo por los juegos (que puede estar invertido si lo cargaron mal),
+  // nos guiamos explícitamente por el "ganadorSet" evaluado
+  const esGanadorA = ganadorSet === "A";
   const resultadoRealA = esGanadorA ? 1 : 0;
   const diffJuegos = Math.abs(juegosA - juegosB);
 
@@ -137,7 +144,7 @@ function calcularAjusteRatingSet({ ratingA1, ratingA2, ratingB1, ratingB2, juego
   if (diffJuegos <= 2) factorDominancia = 0.9;
 
   let deltaA = kFactor * (resultadoRealA - probGanarA) * factorDominancia;
-  let deltaB = -deltaA;
+  let deltaB = -deltaA; // Si A suma, B resta, y viceversa.
 
   return {
     deltaA: parseFloat(deltaA.toFixed(3)),
@@ -162,10 +169,10 @@ function renderPaymentStatusBadge(status) {
       </span>
     );
   }
-  if (st === "pago_en_sitio" || st === "pago_sitio") {
+  if (st === "pago_en_sitio" || st === "pago_sitio" || st === "pendiente_aprobacion") {
     return (
       <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[9px] sm:text-[10px] font-black uppercase px-2.5 py-1 rounded-lg animate-pulse">
-        💵 Pago en Sitio
+        {st === "pendiente_aprobacion" ? "⏳ En Revisión" : "💵 Pago en Sitio"}
       </span>
     );
   }
@@ -214,7 +221,11 @@ export default function PartidoDetallePage() {
   const [buscandoUsuarios, setBuscandoUsuarios] = useState(false);
   const [procesandoJugador, setProcesandoJugador] = useState(false);
 
-  // REGISTRO PAGOS EXTRAS
+  // ESTADO PARA PAGO DE INSCRIPCIÓN (Partidos Públicos)
+  const [modalPagoInscripcionOpen, setModalPagoInscripcionOpen] = useState(false);
+  const [jugadorPendiente, setJugadorPendiente] = useState(null);
+
+  // REGISTRO PAGOS EXTRAS / INSCRIPCIÓN
   const [formPagoExtra, setFormPagoExtra] = useState({
     monto: "",
     metodoPago: "pago_movil",
@@ -222,6 +233,15 @@ export default function PartidoDetallePage() {
     previewComprobante: "",
   });
   const [enviandoPagoExtra, setEnviandoPagoExtra] = useState(false);
+
+  // Funciones auxiliares genéricas (File upload)
+  const handleSeleccionarImagen = (e, callback) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => callback(reader.result);
+    reader.readAsDataURL(file);
+  };
 
   useEffect(() => {
     if (!matchId || !supabase) return;
@@ -422,25 +442,13 @@ export default function PartidoDetallePage() {
     }
   }
 
-  async function agregarJugadorAMatch(usuarioId) {
-    if (!match) return;
-    const jugadoresActuales = match.players || [];
-    const limiteTotal = 6;
-    
-    if (jugadoresActuales.some((p) => p.user_id === usuarioId)) {
-      return mostrarNotificacion("advertencia", "Ya Registrado", "Este usuario ya forma parte de esta reserva.");
-    }
-
-    if (jugadoresActuales.length >= limiteTotal) {
-      return mostrarNotificacion("advertencia", "Límite Alcanzado", `Esta reserva cuenta con el máximo de ${limiteTotal} jugadores.`);
-    }
-
+  async function ejecutarInscripcionDirecta(usuarioId, equipo) {
     try {
       setProcesandoJugador(true);
       const { error } = await supabase.from("match_players").insert({
         match_id: match.id,
         user_id: usuarioId,
-        team: equipoObjetivoAdd
+        team: equipo
       });
 
       if (error) throw error;
@@ -454,6 +462,118 @@ export default function PartidoDetallePage() {
       mostrarNotificacion("error", "Error", "No se pudo agregar al jugador.");
     } finally {
       setProcesandoJugador(false);
+    }
+  }
+
+  async function agregarJugadorAMatch(usuarioId) {
+    if (!match) return;
+    const jugadoresActuales = match.players || [];
+    const limiteTotal = 6;
+    
+    if (jugadoresActuales.some((p) => p.user_id === usuarioId)) {
+      return mostrarNotificacion("advertencia", "Ya Registrado", "Este usuario ya forma parte de esta reserva.");
+    }
+
+    if (jugadoresActuales.length >= limiteTotal) {
+      return mostrarNotificacion("advertencia", "Límite Alcanzado", `Esta reserva cuenta con el máximo de ${limiteTotal} jugadores.`);
+    }
+
+    // Validación de cobro para Partidos Públicos
+    if (!match.is_private) {
+      const totalEsperado = match.match_type === "amistoso" ? 6 : 4;
+      
+      const precioCalculado = Number(match.price_per_player) > 0 
+        ? Number(match.price_per_player) 
+        : (Number(match.total_price) / totalEsperado) || 0;
+
+      if (precioCalculado > 0) {
+        setJugadorPendiente({ usuarioId, equipo: equipoObjetivoAdd });
+        
+        setFormPagoExtra({
+          monto: precioCalculado.toFixed(2),
+          metodoPago: "pago_movil",
+          numReferencia: "",
+          previewComprobante: "",
+        });
+
+        setModalAgregarJugadorOpen(false);
+        setModalPagoInscripcionOpen(true);
+        return; 
+      }
+    }
+
+    // Privados o gratuitos pasan directo
+    await ejecutarInscripcionDirecta(usuarioId, equipoObjetivoAdd);
+  }
+
+  async function confirmarPagoEInscribir() {
+    if (!match || !jugadorPendiente) return;
+    
+    const montoValido = parseFloat(formPagoExtra.monto);
+    if (isNaN(montoValido) || montoValido <= 0) {
+      return mostrarNotificacion("error", "Monto Inválido", "Monto no válido.");
+    }
+  
+    if (formPagoExtra.metodoPago !== "efectivo" && !formPagoExtra.previewComprobante && !formPagoExtra.numReferencia.trim()) {
+      return mostrarNotificacion("error", "Falta Comprobante", "Adjunta captura del comprobante o ingresa la referencia.");
+    }
+  
+    try {
+      setEnviandoPagoExtra(true);
+  
+      const { data: userProf } = await supabase
+        .from("profiles")
+        .select("nombre, apellido, telefono, email")
+        .eq("id", jugadorPendiente.usuarioId)
+        .maybeSingle();
+  
+      const nombreUsuarioCompleto = userProf 
+        ? `${userProf.nombre || ''} ${userProf.apellido || ''}`.trim() || userProf.email
+        : "Jugador";
+  
+      const nuevoAbono = {
+        id: `pay-inscripcion-${Date.now()}`,
+        user_id: jugadorPendiente.usuarioId,
+        user_name: nombreUsuarioCompleto,
+        user_phone: userProf?.telefono || "Sin teléfono",
+        amount: montoValido,
+        method: formPagoExtra.metodoPago,
+        reference: formPagoExtra.numReferencia.trim() || "S/R",
+        receipt_url: formPagoExtra.previewComprobante || null,
+        status: formPagoExtra.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion",
+        created_at: new Date().toISOString(),
+        concepto: "Inscripción Individual"
+      };
+  
+      const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
+      const historialNuevo = [...historialActual, nuevoAbono];
+  
+      const proofUrlsActuales = Array.isArray(match.payment_proof_urls) ? match.payment_proof_urls : [];
+      const proofUrlsNuevas = formPagoExtra.previewComprobante 
+        ? [...proofUrlsActuales, formPagoExtra.previewComprobante] 
+        : proofUrlsActuales;
+  
+      const { error: updateErr } = await supabase
+        .from("matches")
+        .update({
+          payments_history: historialNuevo,
+          payment_proof_urls: proofUrlsNuevas,
+        })
+        .eq("id", match.id);
+  
+      if (updateErr) throw updateErr;
+  
+      await ejecutarInscripcionDirecta(jugadorPendiente.usuarioId, jugadorPendiente.equipo);
+  
+      setModalPagoInscripcionOpen(false);
+      setJugadorPendiente(null);
+      setFormPagoExtra({ monto: "", metodoPago: "pago_movil", numReferencia: "", previewComprobante: "" });
+      
+    } catch (err) {
+      console.error(err);
+      mostrarNotificacion("error", "Error", "Error al procesar el pago e inscripción.");
+    } finally {
+      setEnviandoPagoExtra(false);
     }
   }
 
@@ -506,7 +626,7 @@ export default function PartidoDetallePage() {
         method: formPagoExtra.metodoPago,
         reference: formPagoExtra.numReferencia.trim() || "S/R",
         receipt_url: formPagoExtra.previewComprobante || null,
-        status: formPagoExtra.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
+        status: formPagoExtra.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion",
         created_at: new Date().toISOString(),
       };
 
@@ -576,8 +696,12 @@ export default function PartidoDetallePage() {
     e.preventDefault();
     if (!match || !user) return;
 
-    if (match.created_by !== user.id) {
-      return mostrarNotificacion("error", "Sin Permisos", "Solo el organizador del partido puede proponer el marcador.");
+    // Validación permitiendo tanto al creador como a cualquier jugador inscrito
+    const esJugadorInscrito = match.players?.some((p) => p.user_id === user.id);
+    const esCreador = match.created_by === user.id;
+
+    if (!esCreador && !esJugadorInscrito) {
+      return mostrarNotificacion("error", "Sin Permisos", "Debes estar inscrito en este partido para proponer el marcador.");
     }
 
     let marcadorTexto = "";
@@ -643,7 +767,7 @@ export default function PartidoDetallePage() {
       await cargarDetallePartido();
 
       if (debeFinalizarYa) {
-        mostrarNotificacion("exito", "¡Partido Finalizado!", "El marcador se guardó correctamente y el partido se cerró oficialmente.");
+        mostrarNotificacion("exito", "¡Partido Finalizado!", "El marcador se guardó correctamente y el partido se cerró officially.");
       } else if (esAmistosoOExhibicion && !todoPagadoConExtras) {
         mostrarNotificacion("info", "Marcador Guardado (Pago Pendiente)", "El marcador se guardó con éxito. El partido se cerrará en tu historial cuando recepción apruebe el saldo pendiente.");
       } else {
@@ -700,12 +824,16 @@ export default function PartidoDetallePage() {
       if (propuesta.esRankedValido) {
         const deltasAcumulados = {};
 
-        for (const s of propuesta.sets || []) {
-          const pA1 = match.players.find((p) => p.user_id === s.pA1) || match.players[0];
-          const pA2 = match.players.find((p) => p.user_id === s.pA2) || match.players[1];
-          const pB1 = match.players.find((p) => p.user_id === s.pB1) || match.players[2];
-          const pB2 = match.players.find((p) => p.user_id === s.pB2) || match.players[3];
+        // 🔴 CORRECCIÓN CLAVE: Separar firmemente a los jugadores por el equipo en el que están guardados
+        const equipoA = match.players.filter((p) => p.team === "A");
+        const equipoB = match.players.filter((p) => p.team === "B");
 
+        const pA1 = equipoA[0] || null;
+        const pA2 = equipoA[1] || null;
+        const pB1 = equipoB[0] || null;
+        const pB2 = equipoB[1] || null;
+
+        for (const s of propuesta.sets || []) {
           if (pA1 && pA2 && pB1 && pB2) {
             const { deltaA, deltaB } = calcularAjusteRatingSet({
               ratingA1: Number(pA1.padel_profile?.rating) || 1.5,
@@ -715,6 +843,7 @@ export default function PartidoDetallePage() {
               juegosA: Number(s.gA),
               juegosB: Number(s.gB),
               fiabilidadJugador: Number(pA1.padel_profile?.fiabilidad) || 20,
+              ganadorSet: s.ganador,
             });
 
             [pA1, pA2].forEach((p) => {
@@ -817,7 +946,7 @@ export default function PartidoDetallePage() {
 
         const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
         const totalAbonado = historialActual
-          .filter((item) => item.status === "aprobado" || item.status === "pendiente")
+          .filter((item) => item.status === "aprobado" || item.status === "pendiente_aprobacion")
           .reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
 
         const { data: userProf } = await supabase
@@ -1060,8 +1189,20 @@ export default function PartidoDetallePage() {
 
             <div className="space-y-1">
               <h2 className="text-2xl sm:text-3xl font-black text-white">
-                👑 GANADORES: DUPLA {match.winner_team === "A" ? "1 (PAREJA A)" : "2 (PAREJA B)"}
-              </h2>
+  👑 GANADORES: {(() => {
+    // 1. Buscamos a los jugadores que pertenecen al equipo ganador
+    const ganadores = match.players?.filter(p => p.team === match.winner_team) || [];
+    
+    // 2. Extraemos el nombre de cada uno (o ponemos "Jugador" si por alguna razón no tienen nombre)
+    const nombres = ganadores.map(g => g.profile?.nombre || "Jugador");
+    
+    // 3. Los unimos con una "y", por ejemplo: "Carlos y Maria"
+    const textoNombres = nombres.length > 0 ? nombres.join(" y ") : "Equipo";
+    
+    // 4. Devolvemos el texto final
+    return `${textoNombres} (Dupla ${match.winner_team === "A" ? "1" : "2"})`;
+  })()}
+</h2>
               <p className="text-emerald-400 font-black text-xl tracking-wider mt-2">
                 Marcador Final: {match.score_text || "Resultado Registrado"}
               </p>
@@ -1519,7 +1660,7 @@ export default function PartidoDetallePage() {
                   </p>
                 </div>
 
-                {soyCreadorVista && (
+                {soyCreadorVista || miJugador ? (
                   <button
                     type="button"
                     onClick={() => setModalResultadoOpen(true)}
@@ -1527,7 +1668,7 @@ export default function PartidoDetallePage() {
                   >
                     🏁 Registrar / Cargar Marcador Final
                   </button>
-                )}
+                ) : null}
               </div>
             ) : (
               <div className="space-y-3">
@@ -1747,6 +1888,88 @@ export default function PartidoDetallePage() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NUEVO MODAL: PAGO DE INSCRIPCIÓN (Partidos Públicos) */}
+      {modalPagoInscripcionOpen && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" onClick={() => {
+          setModalPagoInscripcionOpen(false);
+          setJugadorPendiente(null);
+        }}>
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl border border-slate-100" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center border-b pb-2">
+              <div>
+                <h3 className="text-sm font-black text-slate-900 uppercase">Pagar Inscripción</h3>
+                <span className="text-[10px] font-bold text-slate-500">Partido Público</span>
+              </div>
+              <button type="button" onClick={() => {
+                setModalPagoInscripcionOpen(false);
+                setJugadorPendiente(null);
+              }} className="text-slate-400 font-bold hover:text-slate-700">✕</button>
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl text-center">
+              <span className="text-[10px] font-black uppercase text-blue-800 tracking-wide block mb-1">Monto de Inscripción:</span>
+              <span className="text-xl font-black text-blue-900">${formPagoExtra.monto} USD</span>
+            </div>
+
+            <div className="space-y-3 text-xs font-bold text-slate-700">
+              <label className="block text-[10px] uppercase tracking-wide text-slate-500 -mb-1">Método de Pago</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { id: "pago_movil", label: "📱 Móvil" },
+                  { id: "zelle", label: "🇺🇸 Zelle" },
+                  { id: "efectivo", label: "💵 Sitio" },
+                ].map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setFormPagoExtra({ ...formPagoExtra, metodoPago: m.id })}
+                    className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all ${
+                      formPagoExtra.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-white text-slate-600 border-slate-200"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
+              {formPagoExtra.metodoPago !== "efectivo" && (
+                <>
+                  <div className="space-y-1">
+                    <label className="block text-[10px] uppercase tracking-wide text-slate-500">Nº Referencia</label>
+                    <input
+                      type="text"
+                      placeholder="Últimos 4 o 6 dígitos"
+                      value={formPagoExtra.numReferencia}
+                      onChange={(e) => setFormPagoExtra({ ...formPagoExtra, numReferencia: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold outline-none"
+                    />
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <label className="block text-[10px] uppercase tracking-wide text-slate-500">Capture de Pago</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleSeleccionarImagen(e, (res) => setFormPagoExtra({ ...formPagoExtra, previewComprobante: res }))}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2 text-xs"
+                    />
+                  </div>
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={confirmarPagoEInscribir}
+                disabled={enviandoPagoExtra}
+                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-widest rounded-xl shadow-md transition-all mt-2"
+              >
+                {enviandoPagoExtra ? "Procesando..." : "✓ Confirmar e Inscribirse"}
+              </button>
             </div>
           </div>
         </div>
