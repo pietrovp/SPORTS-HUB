@@ -126,7 +126,6 @@ export default function PublicClubDetailPage() {
 
     cargarBloqueos();
 
-    // Canal unificado de Broadcast + Postgres Changes
     const channel = supabase.channel(`locks_club_${clubId}`, {
       config: { broadcast: { self: true } }
     });
@@ -491,13 +490,11 @@ export default function PublicClubDetailPage() {
         expires_at: expiresAt
       };
 
-      // 1. Actualización local inmediata
       setBloqueosActivos((prev) => [
         ...prev.filter(l => !(l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - slotTime) < 5000)),
         nuevoLock
       ]);
 
-      // 2. Broadcast instantáneo por WebSocket a todos los usuarios
       const channel = supabase.channel(`locks_club_${clubId}`);
       channel.send({
         type: "broadcast",
@@ -505,7 +502,6 @@ export default function PublicClubDetailPage() {
         payload: { type: "INSERT", lock: nuevoLock }
       });
 
-      // 3. Persistencia en la base de datos
       const { error: lockErr } = await supabase
         .from("padel_locks")
         .upsert(nuevoLock, { onConflict: 'court_id,scheduled_at' });
@@ -662,8 +658,13 @@ export default function PublicClubDetailPage() {
         team: "A",
       });
 
-      // Notificar eliminación del bloqueo vía broadcast
+      // 🔴 EMITIR EVENTO BROADCAST INSTANTÁNEO PARA RECEPCIÓN Y CLIENTES
       const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "match_event",
+        payload: { type: "INSERT_MATCH", match: newMatch }
+      });
       channel.send({
         type: "broadcast",
         event: "lock_event",

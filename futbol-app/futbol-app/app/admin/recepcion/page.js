@@ -271,6 +271,9 @@ export default function RecepcionElite() {
         }
         cargarBloqueos();
       })
+      .on("broadcast", { event: "match_event" }, () => {
+        cargarPartidosPeriodo();
+      })
       .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` }, (payload) => {
         if (payload.eventType === "INSERT") {
           const nuevaReserva = payload.new;
@@ -283,11 +286,15 @@ export default function RecepcionElite() {
             }
           }
         }
+        cargarPartidosPeriodo();
         setRefreshMatches(r => r + 1);
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "sales", filter: `club_id=eq.${clubId}` }, () => setRefreshMatches(r => r + 1))
       .on("postgres_changes", { event: "*", schema: "public", table: "products", filter: `club_id=eq.${clubId}` }, () => setRefreshMatches(r => r + 1))
-      .on("postgres_changes", { event: "*", schema: "public", table: "match_players" }, () => setRefreshMatches(r => r + 1))
+      .on("postgres_changes", { event: "*", schema: "public", table: "match_players" }, () => {
+        cargarPartidosPeriodo();
+        setRefreshMatches(r => r + 1);
+      })
       .subscribe();
 
     return () => {
@@ -635,7 +642,6 @@ export default function RecepcionElite() {
         nuevoLock
       ]);
 
-      // Emitir evento Broadcast instantáneo a todos los clientes
       const channel = supabase.channel(`locks_club_${clubId}`);
       channel.send({
         type: "broadcast",
@@ -808,8 +814,12 @@ export default function RecepcionElite() {
         team: "A",
       });
 
-      // Emitir evento Broadcast de liberación
       const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "match_event",
+        payload: { type: "INSERT_MATCH", match: newMatch }
+      });
       channel.send({
         type: "broadcast",
         event: "lock_event",
