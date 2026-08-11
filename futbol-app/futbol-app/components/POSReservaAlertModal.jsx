@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { createPortal } from "react-dom";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function POSReservaAlertModal({
@@ -11,6 +10,7 @@ export default function POSReservaAlertModal({
   setAudioSilenciado,
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [alerta, setAlerta] = useState(null); // { canchaNombre, cliente }
   const audioRef = useRef(null);
 
@@ -39,7 +39,7 @@ export default function POSReservaAlertModal({
       });
     };
 
-    const channelName = `pos_alert_global_${clubId}_${Math.random().toString(36).substring(2, 7)}`;
+    const channelName = `pos_sidebar_channel_${clubId}_${Math.random().toString(36).substring(2, 7)}`;
     const channel = supabase.channel(channelName, {
       config: { broadcast: { self: true } },
     });
@@ -69,61 +69,80 @@ export default function POSReservaAlertModal({
     };
   }, [clubId, audioSilenciado]);
 
-  if (!alerta) return null;
-
-  return createPortal(
-    <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-[999999] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-150">
-      <div className="bg-slate-900 border-2 border-[#00FF9D] rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 text-center text-white">
-        <div className="w-16 h-16 bg-[#00FF9D]/20 text-[#00FF9D] border-2 border-[#00FF9D] rounded-full flex items-center justify-center mx-auto text-3xl animate-bounce">
-          🔔
-        </div>
-
-        <div className="space-y-1">
-          <span className="text-[10px] font-black uppercase text-[#00FF9D] tracking-widest bg-[#00FF9D]/10 px-3 py-1 rounded-full border border-[#00FF9D]/30">
-            ¡Nueva Reserva en Tiempo Real!
-          </span>
-          <h3 className="text-2xl font-black text-white pt-2">
-            {alerta.canchaNombre}
-          </h3>
-          <p className="text-sm font-semibold text-slate-300">
-            Cliente: <strong className="text-[#00FF9D]">{alerta.cliente}</strong>
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-2 pt-2">
-          <button
-            type="button"
-            onClick={() => {
-              setAlerta(null);
-              router.push("/admin/recepcion");
-            }}
-            className="w-full py-3 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition-all cursor-pointer"
-          >
-            🎾 Ir a Recepción (POS) →
-          </button>
-
-          <div className="flex gap-2">
+  return (
+    <div className="px-4 py-2 w-full">
+      {alerta ? (
+        <div className="bg-slate-900 border-2 border-[#00FF9D] rounded-2xl p-3 shadow-2xl space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-1.5">
+              <span className="text-base animate-bounce">🔔</span>
+              <span className="text-[10px] font-black uppercase text-[#00FF9D] tracking-wider">
+                ¡Nueva Reserva!
+              </span>
+            </div>
             <button
               type="button"
               onClick={() => setAlerta(null)}
-              className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-black text-xs uppercase rounded-xl transition-colors cursor-pointer"
+              className="text-slate-400 hover:text-white font-bold text-xs p-1 cursor-pointer"
+              title="Cerrar notificación"
             >
-              Cerrar
+              ✕
             </button>
+          </div>
+
+          <div className="text-left space-y-0.5">
+            <p className="text-xs font-black text-white truncate">
+              🏟️ {alerta.canchaNombre}
+            </p>
+            <p className="text-[11px] font-bold text-slate-300 truncate">
+              👤 <span className="text-[#00FF9D]">{alerta.cliente}</span>
+            </p>
+          </div>
+
+          <div className="pt-1 flex flex-col gap-1.5">
+            {pathname !== "/admin/recepcion" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAlerta(null);
+                  router.push("/admin/recepcion");
+                }}
+                className="w-full py-1.5 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-[10px] uppercase rounded-lg transition-all cursor-pointer text-center"
+              >
+                Ver en POS →
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={() => {
-                setAudioSilenciado(true);
-                setAlerta(null);
-              }}
-              className="w-1/2 py-2.5 bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 font-black text-xs uppercase rounded-xl transition-colors cursor-pointer"
+              onClick={() => setAudioSilenciado(!audioSilenciado)}
+              className="w-full py-1 text-[9px] font-extrabold uppercase text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
             >
-              🔇 Silenciar Sonido
+              {audioSilenciado ? "🔊 Activar Sonido" : "🔇 Silenciar Sonido"}
             </button>
           </div>
         </div>
-      </div>
-    </div>,
-    document.body
+      ) : (
+        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-2.5 text-center">
+          <div className="flex items-center justify-between text-[10px] font-bold text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[#00FF9D] animate-ping" />
+              Realtime POS
+            </span>
+            <button
+              type="button"
+              onClick={() => setAudioSilenciado(!audioSilenciado)}
+              className={`text-[9px] font-black uppercase px-2 py-0.5 rounded cursor-pointer transition-colors ${
+                audioSilenciado
+                  ? "bg-rose-950/60 text-rose-300 border border-rose-800/60"
+                  : "bg-emerald-950/60 text-[#00FF9D] border border-emerald-800/60"
+              }`}
+            >
+              {audioSilenciado ? "🔇 Pausado" : "🔊 Audio ON"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

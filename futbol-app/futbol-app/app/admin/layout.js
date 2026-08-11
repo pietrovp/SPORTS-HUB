@@ -4,7 +4,7 @@ import "../globals.css";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import POSReservaAlertModal from "@/components/POSReservaAlertModal";
 
 export default function GerenciaLayout({ children }) {
@@ -18,7 +18,6 @@ export default function GerenciaLayout({ children }) {
   const [checkingRole, setCheckingRole] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
-  // Estado global para activar/silenciar las alertas de audio POS
   const [audioSilenciado, setAudioSilenciado] = useState(false);
 
   useEffect(() => {
@@ -70,7 +69,6 @@ export default function GerenciaLayout({ children }) {
     checkRoleAndClub();
   }, [pathname, router]);
 
-  // Cerrar menú móvil al cambiar de ruta
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [pathname]);
@@ -78,21 +76,6 @@ export default function GerenciaLayout({ children }) {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
-  };
-
-  const toggleSonidoAlertas = () => {
-    // Si se está activando, se desbloquea el contexto de audio del navegador mediante un beep rápido de prueba
-    if (audioSilenciado) {
-      try {
-        const testAudio = new Audio("/alerta-reserva.wav");
-        testAudio.volume = 0.5;
-        testAudio.play().then(() => {
-          testAudio.pause();
-          testAudio.currentTime = 0;
-        }).catch(() => {});
-      } catch (e) {}
-    }
-    setAudioSilenciado(!audioSilenciado);
   };
 
   if (!mounted || checkingRole) {
@@ -124,15 +107,6 @@ export default function GerenciaLayout({ children }) {
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-100 font-sans w-full overflow-hidden">
       
-      {/* ALERTA FLOTANTE GLOBAL DE RESERVA */}
-      {clubId && (
-        <POSReservaAlertModal
-          clubId={clubId}
-          audioSilenciado={audioSilenciado}
-          setAudioSilenciado={setAudioSilenciado}
-        />
-      )}
-
       {/* HEADER SUPERIOR EXCLUSIVO PARA MÓVILES */}
       <header className="md:hidden bg-slate-950 text-white p-3.5 border-b border-slate-800 flex items-center justify-between z-30 shrink-0 shadow-md">
         <div>
@@ -142,26 +116,12 @@ export default function GerenciaLayout({ children }) {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={toggleSonidoAlertas}
-            className={`px-2.5 py-1.5 rounded-xl font-black text-[10px] uppercase border transition-all ${
-              audioSilenciado 
-                ? "bg-rose-950/60 text-rose-300 border-rose-800" 
-                : "bg-emerald-950/60 text-[#00FF9D] border-emerald-800"
-            }`}
-          >
-            {audioSilenciado ? "🔇 Silenciado" : "🔊 Audio ON"}
-          </button>
-
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="px-3 py-1.5 rounded-xl bg-slate-800 text-[#00FF9D] font-black text-xs border border-slate-700 active:scale-95 transition-all"
-          >
-            {mobileMenuOpen ? "✕ Cerrar" : "☰ Menú"}
-          </button>
-        </div>
+        <button
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="px-3 py-1.5 rounded-xl bg-slate-800 text-[#00FF9D] font-black text-xs border border-slate-700 active:scale-95 transition-all"
+        >
+          {mobileMenuOpen ? "✕ Cerrar" : "☰ Menú"}
+        </button>
       </header>
 
       {/* DROPDOWN MENÚ NAVEGACIÓN MÓVIL */}
@@ -210,27 +170,6 @@ export default function GerenciaLayout({ children }) {
           </p>
         </div>
 
-        {/* BOTÓN CONTROL DE SONIDO INTEGRADO EN SIDEBAR */}
-        <div className="px-4 pt-4">
-          <button
-            type="button"
-            onClick={toggleSonidoAlertas}
-            className={`w-full py-2.5 px-3 rounded-xl font-black text-xs uppercase border flex items-center justify-between transition-all cursor-pointer ${
-              audioSilenciado
-                ? "bg-rose-950/40 text-rose-300 border-rose-800/60 hover:bg-rose-900/50"
-                : "bg-emerald-950/40 text-[#00FF9D] border-emerald-800/60 hover:bg-emerald-900/50"
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-base">{audioSilenciado ? "🔇" : "🔊"}</span>
-              <span>{audioSilenciado ? "Alertas Silenciadas" : "Alertas Activas"}</span>
-            </div>
-            <span className="text-[9px] font-black opacity-80 bg-slate-900 px-2 py-0.5 rounded-md">
-              {audioSilenciado ? "Pausado" : "ON"}
-            </span>
-          </button>
-        </div>
-
         {!hasClub && !isAdmin && (
           <div className="p-4 mx-4 mt-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-[11px] font-bold text-amber-300">
             ⚠️ <strong>Registro Pendiente:</strong> Registra la ficha de tu complejo para habilitar la Recepción y el punto de venta.
@@ -261,6 +200,15 @@ export default function GerenciaLayout({ children }) {
             );
           })}
         </nav>
+
+        {/* WIDGET DE ALERTA INTEGRADO EN EL ÁREA MARCADA DE LA BARRA LATERAL */}
+        {clubId && (
+          <POSReservaAlertModal
+            clubId={clubId}
+            audioSilenciado={audioSilenciado}
+            setAudioSilenciado={setAudioSilenciado}
+          />
+        )}
 
         <div className="p-4 border-t border-slate-800 space-y-2">
           <Link href="/" className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-black uppercase text-slate-400 hover:bg-slate-900 hover:text-white rounded-xl transition-all">
