@@ -6,12 +6,25 @@ import { supabase } from "@/lib/supabaseClient";
 
 export default function POSReservaAlertModal({
   clubId,
-  audioSilenciado,
-  setAudioSilenciado,
+  audioSilenciado: propAudioSilenciado,
+  setAudioSilenciado: propSetAudioSilenciado,
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const [alerta, setAlerta] = useState(null); // { canchaNombre, cliente }
+  
+  // Estado local de respaldo en caso de que no se pasen props desde el layout
+  const [internalAudioSilenciado, setInternalAudioSilenciado] = useState(false);
+  
+  const audioSilenciado = propAudioSilenciado !== undefined ? propAudioSilenciado : internalAudioSilenciado;
+  
+  const toggleAudio = (nuevoEstado) => {
+    if (typeof propSetAudioSilenciado === "function") {
+      propSetAudioSilenciado(nuevoEstado);
+    }
+    setInternalAudioSilenciado(nuevoEstado);
+  };
+
   const audioRef = useRef(null);
 
   useEffect(() => {
@@ -115,7 +128,7 @@ export default function POSReservaAlertModal({
 
             <button
               type="button"
-              onClick={() => setAudioSilenciado(!audioSilenciado)}
+              onClick={() => toggleAudio(!audioSilenciado)}
               className="w-full py-1 text-[9px] font-extrabold uppercase text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
             >
               {audioSilenciado ? "🔊 Activar Sonido" : "🔇 Silenciar Sonido"}
@@ -131,7 +144,7 @@ export default function POSReservaAlertModal({
             </span>
             <button
               type="button"
-              onClick={() => setAudioSilenciado(!audioSilenciado)}
+              onClick={() => toggleAudio(!audioSilenciado)}
               className={`text-[9px] font-black uppercase px-2 py-0.5 rounded cursor-pointer transition-colors ${
                 audioSilenciado
                   ? "bg-rose-950/60 text-rose-300 border border-rose-800/60"
