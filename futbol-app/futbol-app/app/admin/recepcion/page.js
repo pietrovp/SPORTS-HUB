@@ -7,7 +7,7 @@ import { supabase } from "@/lib/supabaseClient";
 function parsearFechaBD(fechaStr) {
   if (!fechaStr) return new Date();
   const cleanStr = fechaStr.replace(" ", "T").substring(0, 19);
-  return new Date(`${cleanStr}-04:00`); // 🔴 Fuerza el horario exacto de Venezuela
+  return new Date(`${cleanStr}-04:00`);
 }
 
 function formatearHora12(hora24Str) {
@@ -130,7 +130,6 @@ export default function RecepcionElite() {
   // Tasa BCV
   const [tasaBCV, setTasaBCV] = useState(36.65);
 
-   // 🔴 2. ESTADO INICIAL DEL CALENDARIO (Hora VET)
   const [fechaBase, setFechaBase] = useState(() => {
     return new Date(new Date().toLocaleString("en-US", { timeZone: "America/Caracas" }));
   });
@@ -139,7 +138,6 @@ export default function RecepcionElite() {
   const [vistaCalendario, setVistaCalendario] = useState("dia");
   const [canchaFiltro, setCanchaFiltro] = useState("todas");
   const [alertaNuevaReserva, setAlertaNuevaReserva] = useState(null);
-  
 
   // Datos
   const [canchas, setCanchas] = useState([]);
@@ -228,27 +226,25 @@ export default function RecepcionElite() {
     }
   }, [clubId, diasVisibles]);
 
+  // SUSCRIPCIÓN REALTIME TOTAL DE TRANSACCIONES Y RESERVAS
   useEffect(() => {
     if (!clubId || !supabase) return;
 
     cargarBloqueos();
 
     const channel = supabase
-      .channel("pos-realtime-matches-full-v44")
+      .channel(`pos-realtime-full-${clubId}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` },
         (payload) => {
           cargarPartidosPeriodo();
-          
-          if (payload.eventType === 'INSERT') {
+          if (payload.eventType === "INSERT") {
             const nuevaReserva = payload.new;
             const canchaReserva = canchas.find((c) => c.id === nuevaReserva.court_id);
-            
             if (canchaReserva) {
-              const esFutbol = canchaReserva.sport_type === 'futbol';
-              const deporteAviso = esFutbol ? 'Fútbol ⚽' : 'Pádel 🎾';
-
+              const esFutbol = canchaReserva.sport_type === "futbol";
+              const deporteAviso = esFutbol ? "Fútbol ⚽" : "Pádel 🎾";
               if (canchaFiltro !== "todas" && canchaFiltro !== canchaReserva.id) {
                 setAlertaNuevaReserva({
                   canchaNombre: canchaReserva.name,
@@ -261,6 +257,14 @@ export default function RecepcionElite() {
       )
       .on(
         "postgres_changes",
+        { event: "*", schema: "public", table: "sales", filter: `club_id=eq.${clubId}` },
+        () => {
+          cargarDatosGenerales();
+          cargarPartidosPeriodo();
+        }
+      )
+      .on(
+        "postgres_changes",
         { event: "*", schema: "public", table: "products", filter: `club_id=eq.${clubId}` },
         () => cargarDatosGenerales()
       )
@@ -268,6 +272,11 @@ export default function RecepcionElite() {
         "postgres_changes",
         { event: "*", schema: "public", table: "padel_locks" },
         () => cargarBloqueos()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "match_players" },
+        () => cargarPartidosPeriodo()
       )
       .subscribe();
 
@@ -459,7 +468,6 @@ export default function RecepcionElite() {
     setFechaBase(nueva);
   };
 
-  // 🔴 3. BOTÓN HOY CON HORA VET
   const irAHoy = () => {
     const hoyVET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Caracas" }));
     setFechaBase(hoyVET);
@@ -470,7 +478,6 @@ export default function RecepcionElite() {
     return canchas.filter((c) => c.id === canchaFiltro);
   }, [canchas, canchaFiltro]);
 
-    // 🔴 4. NOMBRE DE DÍA CON ZONA VET EN CALENDARIO
   const bloquesPorDia = useMemo(() => {
     return diasVisibles.map((diaObj, diaIdx) => {
       const nombreDiaLargo = diaObj.toLocaleDateString("es-ES", {
@@ -492,7 +499,6 @@ export default function RecepcionElite() {
       };
     });
   }, [diasVisibles, canchasFiltradas]);
-  
 
   const abrirModalDetalle = (reservado) => {
     setMatchSeleccionado(reservado);
@@ -1138,6 +1144,7 @@ export default function RecepcionElite() {
     }
   }
 
+  // REGISTRAR CAMBIO/ENTREGA DE EXCEDENTE EN CAJA Y FACTURA
   async function registrarDevolucionCambioPOS(match, cambioUSD) {
     if (cambioUSD <= 0.05) return;
     if (match.payment_status === "liquidado") {
@@ -1147,12 +1154,39 @@ export default function RecepcionElite() {
     try {
       setProcesando(true);
       const historialActual = Array.isArray(match.payments_history) ? match.payments_history : [];
+      const montoNegativo = -Math.abs(cambioUSD);
+
+      // 1. REGISTRAR EL EGRESO/ENTREGA DE CAMBIO EN SALES (CAJA)
+      const { data: ventaDev } = await supabase
+        .from("sales")
+        .insert({
+          club_id: clubId,
+          cashier_id: user.id,
+          total_amount: montoNegativo,
+          payment_method: "efectivo",
+          exchange_rate: tasaBCV,
+        })
+        .select("id")
+        .single();
+
+      if (ventaDev) {
+        await supabase.from("sales_items").insert({
+          sale_id: ventaDev.id,
+          item_type: "devolucion_cambio",
+          item_name: `💵 Entrega de Cambio (Excedente): ${match.court?.name || "Pista"}`,
+          item_detail: `MatchID:${match.id} | Cliente: ${obtenerNombreCliente(match)}`,
+          quantity: 1,
+          price_unit: montoNegativo,
+        });
+      }
+
+      // 2. AÑADIR LA SALIDA A LA HISTORIA DE PAGOS DEL PARTIDO
       const nuevoAbono = {
         id: `pay-pos-change-${Date.now()}`,
         user_id: user.id,
         user_name: "Devolución de Cambio (POS)",
         user_phone: "En sitio",
-        amount: -Math.abs(cambioUSD),
+        amount: montoNegativo,
         method: "efectivo",
         reference: `Entrega Cambio $${cambioUSD.toFixed(2)}`,
         receipt_url: null,
@@ -1169,9 +1203,12 @@ export default function RecepcionElite() {
         })
         .eq("id", match.id);
 
+      // ACTUALIZAR ESTADO LOCAL INMEDIATO
+      setMatchSeleccionado((prev) => prev ? { ...prev, payments_history: historialNuevo } : null);
+
       mostrarNotificacion(
         "Cambio Registrado",
-        `💵 Se registró la entrega de $${cambioUSD.toFixed(2)} USD (Bs. ${(cambioUSD * tasaBCV).toFixed(2)}) en cambio.`,
+        `💵 Se registró la entrega de $${cambioUSD.toFixed(2)} USD (Bs. ${(cambioUSD * tasaBCV).toFixed(2)}) en cambio y se actualizó la caja.`,
         "success"
       );
       await cargarPartidosPeriodo();
@@ -2502,9 +2539,10 @@ export default function RecepcionElite() {
 
           return (
             <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-3 sm:p-4" onClick={solicitarCerrarModalDetalle}>
-              <div className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-5xl shadow-2xl space-y-4 sm:space-y-5 max-h-[92vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
+              <div className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-5xl shadow-2xl space-y-4 sm:space-y-5 max-h-[92vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden relative" onClick={(e) => e.stopPropagation()}>
                 
-                <div className="flex justify-between items-start border-b pb-3">
+                {/* 📌 CABECERA STICKY PINNED EN LA PARTE SUPERIOR DEL MODAL */}
+                <div className="sticky top-0 z-20 bg-white pt-1 pb-3 border-b border-slate-200 flex justify-between items-start shadow-xs">
                   <div>
                     <span className={`text-[9px] sm:text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
                       esReembolsoPendiente 
@@ -2529,7 +2567,13 @@ export default function RecepcionElite() {
                     </span>
                     <h3 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{matchSeleccionado.court?.name || "Pista"}</h3>
                   </div>
-                  <button onClick={solicitarCerrarModalDetalle} className="text-slate-400 font-bold text-lg hover:text-slate-700 cursor-pointer">✕</button>
+                  <button 
+                    onClick={solicitarCerrarModalDetalle} 
+                    className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 font-bold rounded-full text-base transition-all cursor-pointer shadow-2xs"
+                    title="Cerrar modal"
+                  >
+                    ✕
+                  </button>
                 </div>
 
                 {/* SI ESTÁ EN ESTADO DE REEMBOLSO PENDIENTE (+6H) */}
@@ -2875,36 +2919,42 @@ export default function RecepcionElite() {
                                 ))}
                               </div>
 
-                              <div className="flex gap-2">
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder={pendientePorCobrar.toFixed(2)}
-                                  value={montoAbonoManualPOS}
-                                  onChange={(e) => setMontoAbonoManualPOS(e.target.value)}
-                                  className="flex-1 bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold outline-none"
-                                />
-                                <button
-                                  onClick={() => agregarAbonoManualPOS(matchSeleccionado)}
-                                  disabled={procesando}
-                                  className="px-4 py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shrink-0 hover:bg-slate-800 transition-colors cursor-pointer"
-                                >
-                                  Registrar
-                                </button>
-                              </div>
-
-                              {cambioDevolver > 0.05 && (
-                                <button
-                                  type="button"
-                                  onClick={() => registrarDevolucionCambioPOS(matchSeleccionado, cambioDevolver)}
-                                  disabled={procesando}
-                                  className="w-full py-2.5 bg-cyan-600 text-white font-black text-xs uppercase rounded-xl shadow-sm hover:bg-cyan-700 transition-colors cursor-pointer"
-                                >
-                                  Entregar y Registrar Cambio (${cambioDevolver.toFixed(2)} USD)
-                                </button>
+                              {/* BOTÓN O INPUT SEGÚN EXCEDENTE / DEVOLUCIÓN */}
+                              {cambioDevolver > 0.05 ? (
+                                <div className="space-y-2 border-2 border-cyan-400 bg-cyan-50/50 p-3 rounded-2xl text-center">
+                                  <p className="text-xs font-bold text-cyan-950">
+                                    Existe un excedente cobrado de <strong className="text-cyan-700">${cambioDevolver.toFixed(2)} USD</strong>. Haz clic para entregar el cambio y saldar la cuenta:
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => registrarDevolucionCambioPOS(matchSeleccionado, cambioDevolver)}
+                                    disabled={procesando}
+                                    className="w-full py-3 bg-cyan-600 hover:bg-cyan-700 text-white font-black text-xs uppercase rounded-xl shadow-md transition-colors cursor-pointer"
+                                  >
+                                    {procesando ? "Registrando..." : `💵 Entregar y Registrar Cambio ($${cambioDevolver.toFixed(2)} USD)`}
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex gap-2">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    placeholder={pendientePorCobrar.toFixed(2)}
+                                    value={montoAbonoManualPOS}
+                                    onChange={(e) => setMontoAbonoManualPOS(e.target.value)}
+                                    className="flex-1 bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold outline-none"
+                                  />
+                                  <button
+                                    onClick={() => agregarAbonoManualPOS(matchSeleccionado)}
+                                    disabled={procesando}
+                                    className="px-4 py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shrink-0 hover:bg-slate-800 transition-colors cursor-pointer"
+                                  >
+                                    Registrar
+                                  </button>
+                                </div>
                               )}
 
-                              {metodoAbonoManualPOS !== "efectivo" && (
+                              {metodoAbonoManualPOS !== "efectivo" && cambioDevolver <= 0.05 && (
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                                   <input
                                     type="text"
@@ -3050,13 +3100,14 @@ export default function RecepcionElite() {
                   </div>
                 )}
 
+                {/* BOTONES DE GUARDADO / CIERRE */}
                 <div className="flex gap-2 pt-2 border-t border-slate-200">
                   <button
-                    onClick={solicitarCerrarModalDetalle}
+                    onClick={guardarCambiosExtras}
                     disabled={procesando}
-                    className="w-1/3 py-3.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-2xl hover:bg-slate-200 transition-colors cursor-pointer"
+                    className="w-1/3 py-3.5 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black text-xs uppercase rounded-2xl transition-colors cursor-pointer shadow-md"
                   >
-                    Salir (Cerrar)
+                    💾 Guardar y Cerrar
                   </button>
 
                   {!esReembolsoPendiente && (
@@ -3142,7 +3193,7 @@ export default function RecepcionElite() {
             <span className="text-3xl block">💾</span>
             <h3 className="text-base font-black text-slate-900">¿Guardar cambios en la reserva?</h3>
             <p className="text-xs font-bold text-slate-600">
-              Has modificado los consumos extra de la reserva. ¿Deseas conservar los cambios realizados o descartarlos?
+              Has modificado la reserva o los consumos. ¿Deseas conservar los cambios realizados o descartarlos?
             </p>
             <div className="flex flex-col gap-2 pt-1">
               <button

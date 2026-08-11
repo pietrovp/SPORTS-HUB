@@ -2,10 +2,9 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
-
-const CATEGORIAS_ORDEN = [,"7ma", "6ta", "5ta", "4ta", "3era", "2da", "open"];
 
 const PRESETS_DUPLA_1 = [
   { label: "6 - 0", gA: 6, gB: 0 },
@@ -32,7 +31,7 @@ function formatFechaLarga(fechaStr) {
   if (!fechaStr) return "";
   const d = parsearFechaVET(fechaStr);
   return d.toLocaleString("es-ES", {
-    timeZone: "America/Caracas", // Fuerza SIEMPRE la hora de Venezuela
+    timeZone: "America/Caracas",
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -57,6 +56,7 @@ function calcularHorasFaltantesVET(scheduledAtStr) {
 
 function categoriaDesdeRating(r) {
   const num = Number(r) || 1.0;
+  if (num < 2.0) return "rookies";
   if (num < 3.0) return "7ma";
   if (num < 4.0) return "6ta";
   if (num < 4.8) return "5ta";
@@ -66,30 +66,33 @@ function categoriaDesdeRating(r) {
   return "open";
 }
 
+// 🎯 MAPEADOR DE TIERS PARA VALIDACIÓN RANKED
+function obtenerTierCategoria(catRaw) {
+  if (!catRaw) return 0;
+  const cat = catRaw.toString().toLowerCase().trim();
+  if (cat === "rookies" || cat === "rookie" || cat === "7ma") return 0;
+  if (cat === "6ta") return 1;
+  if (cat === "5ta") return 2;
+  if (cat === "4ta") return 3;
+  if (cat === "3era" || cat === "3ra") return 4;
+  if (cat === "2da") return 5;
+  if (cat === "open" || cat === "1ra") return 6;
+  return 0;
+}
+
 function validarCompatibilidadCategorias(jugadores) {
   if (!jugadores || jugadores.length === 0) return false;
   
-  const indices = jugadores
-    .map((j) => {
-      let catRaw = j.padel_profile?.categoria_oficial || categoriaDesdeRating(j.padel_profile?.rating);
-      if (!catRaw) return -1;
-      let cat = catRaw.toString().toLowerCase().trim();
-      if (cat === "3ra") cat = "3era";
-      return CATEGORIAS_ORDEN.indexOf(cat);
-    })
-    .filter((idx) => idx !== -1);
+  const tiers = jugadores.map((j) => {
+    const cat = j.padel_profile?.categoria_oficial || categoriaDesdeRating(j.padel_profile?.rating);
+    return obtenerTierCategoria(cat);
+  });
 
-  // Si algún jugador no tiene categoría o falta alguien, no vale.
-  if (indices.length < jugadores.length) return false;
+  const minTier = Math.min(...tiers);
+  const maxTier = Math.max(...tiers);
 
-  const minIdx = Math.min(...indices);
-  const maxIdx = Math.max(...indices);
-
-  // 🔴 LA REGLA ESTRICTA: La diferencia entre el jugador de más alto nivel 
-  // y el de más bajo nivel en la pista NO puede ser mayor a 1 categoría.
-  // Ejemplo: Si el más bajo es 7ma (índice 0) y el más alto es 6ta (índice 1), la diferencia es 1. -> Válido
-  // Si el más bajo es 7ma (0) y el más alto es 5ta (2), la diferencia es 2. -> INVÁLIDO.
-  return (maxIdx - minIdx) <= 1;
+  // La diferencia máxima entre el jugador de mayor nivel y el de menor nivel no puede superar 1 tier.
+  return (maxTier - minTier) <= 1;
 }
 
 function validarSet(gA, gB, tbA = 0, tbB = 0) {
@@ -133,8 +136,6 @@ function calcularAjusteRatingSet({ ratingA1, ratingA2, ratingB1, ratingB2, juego
   if (fiabilidadJugador < 30) kFactor = 0.20;
   else if (fiabilidadJugador < 60) kFactor = 0.12;
 
-  // En lugar de guiarnos solo por los juegos (que puede estar invertido si lo cargaron mal),
-  // nos guiamos explícitamente por el "ganadorSet" evaluado
   const esGanadorA = ganadorSet === "A";
   const resultadoRealA = esGanadorA ? 1 : 0;
   const diffJuegos = Math.abs(juegosA - juegosB);
@@ -144,7 +145,7 @@ function calcularAjusteRatingSet({ ratingA1, ratingA2, ratingB1, ratingB2, juego
   if (diffJuegos <= 2) factorDominancia = 0.9;
 
   let deltaA = kFactor * (resultadoRealA - probGanarA) * factorDominancia;
-  let deltaB = -deltaA; // Si A suma, B resta, y viceversa.
+  let deltaB = -deltaA;
 
   return {
     deltaA: parseFloat(deltaA.toFixed(3)),
@@ -221,7 +222,7 @@ export default function PartidoDetallePage() {
   const [buscandoUsuarios, setBuscandoUsuarios] = useState(false);
   const [procesandoJugador, setProcesandoJugador] = useState(false);
 
-  // ESTADO PARA PAGO DE INSCRIPCIÓN (Partidos Públicos)
+  // ESTADO PARA PAGO DE INSCRIPCIÓN
   const [modalPagoInscripcionOpen, setModalPagoInscripcionOpen] = useState(false);
   const [jugadorPendiente, setJugadorPendiente] = useState(null);
 
@@ -234,7 +235,6 @@ export default function PartidoDetallePage() {
   });
   const [enviandoPagoExtra, setEnviandoPagoExtra] = useState(false);
 
-  // Funciones auxiliares genéricas (File upload)
   const handleSeleccionarImagen = (e, callback) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -478,7 +478,6 @@ export default function PartidoDetallePage() {
       return mostrarNotificacion("advertencia", "Límite Alcanzado", `Esta reserva cuenta con el máximo de ${limiteTotal} jugadores.`);
     }
 
-    // Validación de cobro para Partidos Públicos
     if (!match.is_private) {
       const totalEsperado = match.match_type === "amistoso" ? 6 : 4;
       
@@ -502,7 +501,6 @@ export default function PartidoDetallePage() {
       }
     }
 
-    // Privados o gratuitos pasan directo
     await ejecutarInscripcionDirecta(usuarioId, equipoObjetivoAdd);
   }
 
@@ -696,7 +694,6 @@ export default function PartidoDetallePage() {
     e.preventDefault();
     if (!match || !user) return;
 
-    // Validación permitiendo tanto al creador como a cualquier jugador inscrito
     const esJugadorInscrito = match.players?.some((p) => p.user_id === user.id);
     const esCreador = match.created_by === user.id;
 
@@ -767,7 +764,7 @@ export default function PartidoDetallePage() {
       await cargarDetallePartido();
 
       if (debeFinalizarYa) {
-        mostrarNotificacion("exito", "¡Partido Finalizado!", "El marcador se guardó correctamente y el partido se cerró officially.");
+        mostrarNotificacion("exito", "¡Partido Finalizado!", "El marcador se guardó correctamente y el partido se cerró oficialmente.");
       } else if (esAmistosoOExhibicion && !todoPagadoConExtras) {
         mostrarNotificacion("info", "Marcador Guardado (Pago Pendiente)", "El marcador se guardó con éxito. El partido se cerrará en tu historial cuando recepción apruebe el saldo pendiente.");
       } else {
@@ -820,11 +817,9 @@ export default function PartidoDetallePage() {
 
       if (matchErr) throw matchErr;
 
-      // ACTUALIZAR ELO INCLUSO SI NO SE HA FINALIZADO ADMINISTRATIVAMENTE AÚN
       if (propuesta.esRankedValido) {
         const deltasAcumulados = {};
 
-        // 🔴 CORRECCIÓN CLAVE: Separar firmemente a los jugadores por el equipo en el que están guardados
         const equipoA = match.players.filter((p) => p.team === "A");
         const equipoB = match.players.filter((p) => p.team === "B");
 
@@ -1112,7 +1107,7 @@ export default function PartidoDetallePage() {
               </h1>
             </div>
 
-            {/* DYNAMIC BADGE */}
+            {/* DYNAMIC BADGE DE MODO DE JUEGO */}
             <div className="flex items-center gap-2">
               <span className="bg-blue-50 text-blue-700 font-black text-xs px-3 py-1 rounded-full border border-blue-200">
                 Cat. {match?.category_restriction || "Libre"}
@@ -1189,20 +1184,13 @@ export default function PartidoDetallePage() {
 
             <div className="space-y-1">
               <h2 className="text-2xl sm:text-3xl font-black text-white">
-  👑 GANADORES: {(() => {
-    // 1. Buscamos a los jugadores que pertenecen al equipo ganador
-    const ganadores = match.players?.filter(p => p.team === match.winner_team) || [];
-    
-    // 2. Extraemos el nombre de cada uno (o ponemos "Jugador" si por alguna razón no tienen nombre)
-    const nombres = ganadores.map(g => g.profile?.nombre || "Jugador");
-    
-    // 3. Los unimos con una "y", por ejemplo: "Carlos y Maria"
-    const textoNombres = nombres.length > 0 ? nombres.join(" y ") : "Equipo";
-    
-    // 4. Devolvemos el texto final
-    return `${textoNombres} (Dupla ${match.winner_team === "A" ? "1" : "2"})`;
-  })()}
-</h2>
+                👑 GANADORES: {(() => {
+                  const ganadores = match.players?.filter(p => p.team === match.winner_team) || [];
+                  const nombres = ganadores.map(g => g.profile?.nombre || "Jugador");
+                  const textoNombres = nombres.length > 0 ? nombres.join(" y ") : "Equipo";
+                  return `${textoNombres} (Dupla ${match.winner_team === "A" ? "1" : "2"})`;
+                })()}
+              </h2>
               <p className="text-emerald-400 font-black text-xl tracking-wider mt-2">
                 Marcador Final: {match.score_text || "Resultado Registrado"}
               </p>
@@ -1276,8 +1264,8 @@ export default function PartidoDetallePage() {
             <span className="text-3xl block">⏳</span>
             <h3 className="text-lg font-black text-emerald-950">Marcador Confirmado</h3>
             <p className="text-xs font-bold text-emerald-800 max-w-md mx-auto">
-              El resultado ({match.score_text}) ha sido guardado y validado. Sin embargo, hay un saldo de <strong className="text-rose-600">${restanteGranTotal.toFixed(2)} USD</strong> pendiente por cobrar. 
-              La recepción del club debe aprobar los pagos para dar el partido por liquidado y cerrado oficialmente.
+              El resultado ({match.score_text}) ha sido guardado y validado por los jugadores. Sin embargo, hay un saldo de <strong className="text-rose-600">${restanteGranTotal.toFixed(2)} USD</strong> pendiente por cobrar. 
+              La recepción del club debe aprobar los pagos en el POS para dar el partido por liquidado y cerrado oficialmente en el historial.
             </p>
             
             {puedeFinalizarPartido && soyCreadorVista && (
@@ -1498,7 +1486,7 @@ export default function PartidoDetallePage() {
           )}
         </div>
 
-        {/* 👥 SECCIÓN 2: DUPLAS Y JUGADORES */}
+        {/* 👥 SECCIÓN 2: DUPLAS Y JUGADORES (UI CENTRADA CON EXACTITUD) */}
         <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div>
@@ -1660,7 +1648,7 @@ export default function PartidoDetallePage() {
                   </p>
                 </div>
 
-                {soyCreadorVista || miJugador ? (
+                {(soyCreadorVista || miJugador) && (
                   <button
                     type="button"
                     onClick={() => setModalResultadoOpen(true)}
@@ -1668,7 +1656,7 @@ export default function PartidoDetallePage() {
                   >
                     🏁 Registrar / Cargar Marcador Final
                   </button>
-                ) : null}
+                )}
               </div>
             ) : (
               <div className="space-y-3">
@@ -1893,88 +1881,6 @@ export default function PartidoDetallePage() {
         </div>
       )}
 
-      {/* NUEVO MODAL: PAGO DE INSCRIPCIÓN (Partidos Públicos) */}
-      {modalPagoInscripcionOpen && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" onClick={() => {
-          setModalPagoInscripcionOpen(false);
-          setJugadorPendiente(null);
-        }}>
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl border border-slate-100" onClick={(e) => e.stopPropagation()}>
-            <div className="flex justify-between items-center border-b pb-2">
-              <div>
-                <h3 className="text-sm font-black text-slate-900 uppercase">Pagar Inscripción</h3>
-                <span className="text-[10px] font-bold text-slate-500">Partido Público</span>
-              </div>
-              <button type="button" onClick={() => {
-                setModalPagoInscripcionOpen(false);
-                setJugadorPendiente(null);
-              }} className="text-slate-400 font-bold hover:text-slate-700">✕</button>
-            </div>
-
-            <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl text-center">
-              <span className="text-[10px] font-black uppercase text-blue-800 tracking-wide block mb-1">Monto de Inscripción:</span>
-              <span className="text-xl font-black text-blue-900">${formPagoExtra.monto} USD</span>
-            </div>
-
-            <div className="space-y-3 text-xs font-bold text-slate-700">
-              <label className="block text-[10px] uppercase tracking-wide text-slate-500 -mb-1">Método de Pago</label>
-              <div className="grid grid-cols-3 gap-1.5">
-                {[
-                  { id: "pago_movil", label: "📱 Móvil" },
-                  { id: "zelle", label: "🇺🇸 Zelle" },
-                  { id: "efectivo", label: "💵 Sitio" },
-                ].map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setFormPagoExtra({ ...formPagoExtra, metodoPago: m.id })}
-                    className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all ${
-                      formPagoExtra.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-white text-slate-600 border-slate-200"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-
-              {formPagoExtra.metodoPago !== "efectivo" && (
-                <>
-                  <div className="space-y-1">
-                    <label className="block text-[10px] uppercase tracking-wide text-slate-500">Nº Referencia</label>
-                    <input
-                      type="text"
-                      placeholder="Últimos 4 o 6 dígitos"
-                      value={formPagoExtra.numReferencia}
-                      onChange={(e) => setFormPagoExtra({ ...formPagoExtra, numReferencia: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold outline-none"
-                    />
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <label className="block text-[10px] uppercase tracking-wide text-slate-500">Capture de Pago</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleSeleccionarImagen(e, (res) => setFormPagoExtra({ ...formPagoExtra, previewComprobante: res }))}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2 text-xs"
-                    />
-                  </div>
-                </>
-              )}
-
-              <button
-                type="button"
-                onClick={confirmarPagoEInscribir}
-                disabled={enviandoPagoExtra}
-                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-widest rounded-xl shadow-md transition-all mt-2"
-              >
-                {enviandoPagoExtra ? "Procesando..." : "✓ Confirmar e Inscribirse"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* MODAL CANCELAR REGLA 6H */}
       {modalCancelOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" onClick={() => setModalCancelOpen(false)}>
@@ -2040,7 +1946,7 @@ export default function PartidoDetallePage() {
   );
 }
 
-// COMPONENTE AUXILIAR CIRCULITO DE JUGADORES
+// COMPONENTE AUXILIAR CIRCULITO DE JUGADORES (CENTRADO PERFECTO)
 function PlayerCircleSlot({ player, teamLetter, onAdd, onRemove, isCreator, currentUserId, isGamePlayed }) {
   if (player && player.user_id) {
     const nombre = player.profile ? player.profile.nombre : "Jugador";
