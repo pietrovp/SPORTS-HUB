@@ -87,18 +87,11 @@ export default function FutbolClubDetailPage() {
   const [tiempoRestante, setTiempoRestante] = useState(null);
 
   const [tipoReserva, setTipoReserva] = useState("privado");
-  const [cantidadJugadores, setCantidadJugadores] = useState(10); // Inicial
   const [metodoPago, setMetodoPago] = useState("pago_movil");
   const [monedaAbono, setMonedaAbono] = useState("USD");
   const [montoAbono, setMontoAbono] = useState("");
   const [numReferencia, setNumReferencia] = useState("");
   const [previewComprobante, setPreviewComprobante] = useState("");
-
-  // Modal Mi Reserva
-  const [modalMiReservaOpen, setModalMiReservaOpen] = useState(false);
-  const [matchMiReservaSel, setMatchMiReservaSel] = useState(null);
-  const [formPagoExtra, setFormPagoExtra] = useState({ monto: "", metodoPago: "pago_movil", numReferencia: "", previewComprobante: "" });
-  const [enviandoPagoExtra, setEnviandoPagoExtra] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -302,13 +295,11 @@ export default function FutbolClubDetailPage() {
         .maybeSingle();
 
       if (cErr || !clubData) {
-        console.error("Club no encontrado en BD.");
         setClub(null);
         return;
       }
       setClub(clubData);
 
-      // Cargar Canchas Públicas filtrando EXCLUSIVAMENTE las de Fútbol y obteniendo su capacidad
       const { data: courtsData } = await supabase
         .from("courts")
         .select(`id, name, sport_type, capacity, price_normal, pricing_blocks`)
@@ -319,7 +310,6 @@ export default function FutbolClubDetailPage() {
       const canchasFutbol = (courtsData || []).filter((c) => c.sport_type === "futbol");
       setCanchas(canchasFutbol);
 
-      // Cargar Reservas / Partidos
       const { data: matchesData } = await supabase
         .from("matches")
         .select(`*, court:courts(name)`)
@@ -386,7 +376,6 @@ export default function FutbolClubDetailPage() {
       const primerPrecio = parseFloat(cancha.pricing_blocks[0].price);
       return { precio: isNaN(primerPrecio) ? 30 : primerPrecio };
     } catch (error) {
-      console.error("Error calculando precio bloque", error);
       return { precio: 30 };
     }
   };
@@ -448,13 +437,9 @@ export default function FutbolClubDetailPage() {
       return;
     }
     if (horarioYaPaso(bloque.dateObj)) {
-  mostrarNotificacion(
-    "Horario no disponible",
-    "Este bloque ya pasó y no puede ser reservado.",
-    "warning"
-  );
-  return;
-}
+      mostrarNotificacion("Horario no disponible", "Este bloque ya pasó y no puede ser reservado.", "warning");
+      return;
+    }
 
     const slotTime = bloque.dateObj.getTime();
     
@@ -507,20 +492,15 @@ export default function FutbolClubDetailPage() {
 
       setTiempoRestante(600); 
       const precioBaseTotal = precioCalculado || cancha.price_normal || 30;
-      
-      const capacidad = cancha.capacity || 10;
-      const precioBaseInd = precioBaseTotal / capacidad;
 
       setBloqueSeleccionado({
         cancha,
         dateObj: bloque.dateObj,
         horaLabel: bloque.etiqueta,
         precioBaseTotal,
-        precioBaseInd,
       });
 
       setTipoReserva("privado");
-      setCantidadJugadores(capacidad);
       setMetodoPago("pago_movil");
       setMonedaAbono("USD");
       setMontoAbono((precioBaseTotal * 1.10).toFixed(2));
@@ -544,38 +524,33 @@ export default function FutbolClubDetailPage() {
       return mostrarNotificacion("Archivo Inválido", "Por favor selecciona una imagen válida (JPG, PNG).", "error");
     }
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setPreview(reader.result);
-    };
+    reader.onloadend = () => setPreview(reader.result);
     reader.readAsDataURL(file);
   };
 
   const calculosPrecio = useMemo(() => {
-    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0 };
+    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0, capacidadOficial: 10 };
     const baseTotal = bloqueSeleccionado.precioBaseTotal;
     const feeTotal = baseTotal * 0.10;
+    const capBD = bloqueSeleccionado.cancha?.capacity || 10;
+
+    const baseCalculada = tipoReserva === "privado" ? baseTotal : (baseTotal / capBD);
+    const feeCalculado = tipoReserva === "privado" ? feeTotal : (feeTotal / capBD);
     
-    // En fútbol privado pagas el total completo de la cancha
-    // En ranking pagas la cuota de jugador (precio individual calculado dinámicamente)
-    const cantActual = cantidadJugadores || 10;
-    const baseCalculada = tipoReserva === "privado" ? baseTotal : (baseTotal / cantActual);
-    const feeCalculado = tipoReserva === "privado" ? feeTotal : (feeTotal / cantActual);
-    
-    const totalSug = baseCalculada + feeCalculado;
-    const precioIndividual = baseTotal / cantActual;
-    
-    return { base: baseCalculada, fee: feeCalculado, totalSug, precioIndividual };
-  }, [bloqueSeleccionado, tipoReserva, cantidadJugadores]);
+    return {
+      base: baseCalculada,
+      fee: feeCalculado,
+      totalSug: baseCalculada + feeCalculado,
+      precioIndividual: (baseTotal + feeTotal) / capBD,
+      capacidadOficial: capBD
+    };
+  }, [bloqueSeleccionado, tipoReserva]);
 
   const cambiarMonedaAbono = (nuevaMoneda) => {
     if (nuevaMoneda === monedaAbono) return;
     const valActual = parseFloat(montoAbono);
     if (!isNaN(valActual) && valActual > 0) {
-      if (nuevaMoneda === "VES") {
-        setMontoAbono((valActual * tasaBCV).toFixed(2));
-      } else {
-        setMontoAbono((valActual / tasaBCV).toFixed(2));
-      }
+      setMontoAbono(nuevaMoneda === "VES" ? (valActual * tasaBCV).toFixed(2) : (valActual / tasaBCV).toFixed(2));
     }
     setMonedaAbono(nuevaMoneda);
   };
@@ -593,26 +568,18 @@ export default function FutbolClubDetailPage() {
 
     const montoUSD = monedaAbono === "VES" ? (valIngresado / tasaBCV) : valIngresado;
     const esPrivado = tipoReserva === "privado";
-    const esCompetitivo = tipoReserva === "ranking"; 
 
     try {
       setProcesandoReserva(true);
 
-      const { data: userProf } = await supabase
-        .from("profiles")
-        .select("nombre, apellido, telefono")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      const nombreUsuarioCompleto = userProf ? `${userProf.nombre} ${userProf.apellido}`.trim() : user.email;
-      const telefonoUsuario = userProf?.telefono || "Sin teléfono";
-      const estadoPagoFinal = metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion";
+      const { data: userProf } = await supabase.from("profiles").select("nombre, apellido, telefono").eq("id", user.id).maybeSingle();
+      const nombreUsuario = userProf ? `${userProf.nombre} ${userProf.apellido}`.trim() : user.email;
 
       const nuevoAbono = {
         id: `pay-${Date.now()}`,
         user_id: user.id,
-        username: nombreUsuarioCompleto,
-        userphone: telefonoUsuario,
+        username: nombreUsuario,
+        userphone: userProf?.telefono || "Sin teléfono",
         amount: montoUSD,
         method: metodoPago,
         reference: numReferencia.trim() || (monedaAbono === "VES" ? `Abono Bs. ${valIngresado.toFixed(2)} S/R` : ""),
@@ -634,9 +601,9 @@ export default function FutbolClubDetailPage() {
           app_fee: calculosPrecio.fee,
           match_type: esPrivado ? "privado" : "abierto",
           is_private: esPrivado,
-          is_competitive: esCompetitivo,
+          is_competitive: !esPrivado,
           status: "programado",
-          payment_status: estadoPagoFinal,
+          payment_status: metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion",
           payment_method: metodoPago,
           payment_proof_urls: previewComprobante ? [previewComprobante] : [],
           payments_history: [nuevoAbono],
@@ -646,131 +613,18 @@ export default function FutbolClubDetailPage() {
         .select()
         .single();
 
-      if (matchErr) throw new Error(matchErr.message || "Error guardando la reserva");
+      if (matchErr) throw new Error(matchErr.message);
 
-      await supabase.from("match_players").insert({
-        match_id: newMatch.id,
-        user_id: user.id,
-        team: "A",
-      });
+      await supabase.from("match_players").insert({ match_id: newMatch.id, user_id: user.id, team: "1" });
+      await supabase.from("padel_locks").delete().eq("court_id", bloqueSeleccionado.cancha.id).eq("user_id", user.id);
 
-      // EMITIR EVENTO BROADCAST INSTANTÁNEO
-      const channel = supabase.channel(`locks_club_${clubId}`);
-      channel.send({
-        type: "broadcast",
-        event: "match_event",
-        payload: { type: "INSERT_MATCH", match: newMatch },
-      });
-      channel.send({
-        type: "broadcast",
-        event: "lock_event",
-        payload: { type: "DELETE", court_id: bloqueSeleccionado.cancha.id, scheduled_at: scheduledAtISO },
-      });
-
-      await supabase
-        .from("padel_locks")
-        .delete()
-        .eq("court_id", bloqueSeleccionado.cancha.id)
-        .eq("user_id", user.id);
-
-      await cargarBloqueos();
-      setTiempoRestante(null);
       setModalReservaOpen(false);
-
       router.push(`/futbol/partidos/${newMatch.id}`);
-
     } catch (err) {
-      console.error("Error al procesar reserva", err);
-      if (err.message && err.message.includes("unique_court_time")) {
-        mostrarNotificacion("Cancha ya no disponible", "Alguien más acaba de confirmar una reserva para esta cancha hace unos instantes.", "error");
-      } else {
-        mostrarNotificacion("Error al Reservar", err.message || "Verifica los datos e inténtalo de nuevo.", "error");
-      }
+      console.error(err);
+      mostrarNotificacion("Error al Reservar", err.message || "Verifica los datos e inténtalo de nuevo.", "error");
     } finally {
       setProcesandoReserva(false);
-    }
-  }
-
-  const abrirModalMiReserva = (match) => {
-    setMatchMiReservaSel(match);
-    const historial = Array.isArray(match.payments_history) ? match.payments_history : [];
-    const totalAbonado = historial
-      .filter((a) => a.status === "aprobado" || a.status === "pendiente")
-      .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
-    const totalCancha = (match.total_price || 30) + (match.app_fee || 3.00);
-    const restante = Math.max(0, totalCancha - totalAbonado);
-    setFormPagoExtra({
-      monto: restante > 0 ? restante.toFixed(2) : "",
-      metodoPago: "pago_movil",
-      numReferencia: "",
-      previewComprobante: "",
-    });
-    setModalMiReservaOpen(true);
-  };
-
-  async function agregarComprobanteExtraUser() {
-    if (!matchMiReservaSel || !user) return;
-    const montoValido = parseFloat(formPagoExtra.monto);
-    if (isNaN(montoValido) || montoValido <= 0) {
-      return mostrarNotificacion("Monto Inválido", "Por favor ingresa un monto válido a abonar.", "error");
-    }
-    if (formPagoExtra.metodoPago !== "efectivo" && !formPagoExtra.previewComprobante && !formPagoExtra.numReferencia.trim()) {
-      return mostrarNotificacion("Falta Comprobante", "Por favor adjunta la captura del comprobante o ingresa el número de referencia.", "error");
-    }
-
-    try {
-      setEnviandoPagoExtra(true);
-      const { data: userProf } = await supabase
-        .from("profiles")
-        .select("nombre, apellido, telefono")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      const nombreUsuarioCompleto = userProf ? `${userProf.nombre} ${userProf.apellido}`.trim() : user.email;
-      const telefonoUsuario = userProf?.telefono || "Sin teléfono";
-
-      const nuevoAbono = {
-        id: `pay-${Date.now()}`,
-        user_id: user.id,
-        username: nombreUsuarioCompleto,
-        userphone: telefonoUsuario,
-        amount: montoValido,
-        method: formPagoExtra.metodoPago,
-        reference: formPagoExtra.numReferencia.trim() || "S/R",
-        receipt_url: formPagoExtra.previewComprobante || null,
-        status: formPagoExtra.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
-        created_at: new Date().toISOString(),
-      };
-
-      const historialActual = Array.isArray(matchMiReservaSel.payments_history) ? matchMiReservaSel.payments_history : [];
-      const historialNuevo = [...historialActual, nuevoAbono];
-
-      const proofUrlsActuales = Array.isArray(matchMiReservaSel.payment_proof_urls) ? matchMiReservaSel.payment_proof_urls : [];
-      const proofUrlsNuevas = formPagoExtra.previewComprobante ? [...proofUrlsActuales, formPagoExtra.previewComprobante] : proofUrlsActuales;
-
-      const { error: updateErr } = await supabase
-        .from("matches")
-        .update({
-          payments_history: historialNuevo,
-          payment_proof_urls: proofUrlsNuevas,
-          payment_status: "pendiente_aprobacion",
-        })
-        .eq("id", matchMiReservaSel.id);
-
-      if (updateErr) throw updateErr;
-
-      setModalMiReservaOpen(false);
-      mostrarNotificacion(
-        "📄 Comprobante Enviado",
-        "¡Nuevo comprobante enviado con éxito! El gerente del club lo revisará en la recepción.",
-        "success"
-      );
-      await cargarDetalleClub();
-    } catch (err) {
-      console.error("Error al enviar pago extra", err);
-      mostrarNotificacion("Error", "Error al adjuntar el nuevo comprobante.", "error");
-    } finally {
-      setEnviandoPagoExtra(false);
     }
   }
 
@@ -805,10 +659,10 @@ export default function FutbolClubDetailPage() {
   const equivalenteCalculado = monedaAbono === "USD" ? numIngresado * tasaBCV : numIngresado / tasaBCV;
 
   return (
-    <div className="min-h-screen bg-slate-50/50 px-2 py-4 sm:px-6 md:px-8 space-y-6 sm:space-y-8">
-      <div className="mx-auto max-w-7xl space-y-6 sm:space-y-8">
+    <div className="min-h-screen bg-slate-50/50 px-2 py-4 sm:px-6 md:px-8 space-y-6">
+      <div className="mx-auto max-w-7xl space-y-6">
         {/* HERO BANNER */}
-        <div className="relative w-full h-52 sm:h-80 bg-slate-900 rounded-3xl sm:rounded-[2.5rem] overflow-hidden shadow-xl border border-slate-200">
+        <div className="relative w-full h-52 sm:h-80 bg-slate-900 rounded-3xl overflow-hidden shadow-xl border border-slate-200">
           {club.image_url ? (
             <img src={club.image_url} alt={club.name} className="w-full h-full object-cover" />
           ) : (
@@ -817,14 +671,14 @@ export default function FutbolClubDetailPage() {
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent"></div>
           <div className="absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-6 text-white flex flex-col md:flex-row md:items-end justify-between gap-3">
             <div className="space-y-1 max-w-2xl">
-              <span className="bg-emerald-500 text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-full shadow-sm">
+              <span className="bg-emerald-500 text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-3 py-1 rounded-full shadow-sm">
                 ✅ Complejo de Fútbol Verificado
               </span>
               <h1 className="text-xl sm:text-4xl font-black">{club.name}</h1>
               <p className="text-[11px] sm:text-sm text-slate-300 font-medium">📍 {club.address} — {club.city}</p>
             </div>
             <div>
-              <a href="#reserva-pistas" className="px-5 py-2.5 sm:px-6 sm:py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl sm:rounded-2xl shadow-lg transition-all text-center">
+              <a href="#reserva-pistas" className="px-5 py-2.5 sm:px-6 sm:py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition-all text-center">
                 Reservar Cancha
               </a>
             </div>
@@ -832,16 +686,15 @@ export default function FutbolClubDetailPage() {
         </div>
 
         {/* LAYOUT 2 COLUMNAS */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           <div className="lg:col-span-4 space-y-6">
-            {/* AMENIDADES */}
-            <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-3">
+            <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-3">
               <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-tight">Amenidades</h3>
-              <div className="flex flex-wrap gap-1.5 sm:gap-2">
+              <div className="flex flex-wrap gap-2">
                 {listAmenidades.map((key) => {
                   const am = AMENIDADES_MAP[key] || { label: key, icon: "✨" };
                   return (
-                    <span key={key} className="inline-flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-full bg-slate-100 text-slate-800 text-[11px] sm:text-xs font-bold">
+                    <span key={key} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-slate-800 text-xs font-bold">
                       <span>{am.icon}</span>
                       <span>{am.label}</span>
                     </span>
@@ -852,25 +705,25 @@ export default function FutbolClubDetailPage() {
           </div>
 
           <div className="lg:col-span-8 space-y-6" id="reserva-pistas">
-            <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-6 border border-slate-200 shadow-sm space-y-4 sm:space-y-5">
+            <div className="bg-white rounded-3xl p-4 sm:p-6 border border-slate-200 shadow-sm space-y-4">
               <div className="flex justify-between items-center border-b pb-3">
                 <h2 className="text-base sm:text-lg font-black text-slate-900">Reserva tu Cancha en Tiempo Real</h2>
-                <span className="text-[11px] sm:text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">{canchas.length} canchas</span>
+                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">{canchas.length} canchas</span>
               </div>
 
               {/* Selector de Días */}
-              <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-2">
+              <div className="flex gap-2 overflow-x-auto pb-1">
                 {diasSiguientes.map((dObj, i) => {
                   const isSel = formatearFechaISOVET(fechaSeleccionada) === formatearFechaISOVET(dObj);
                   return (
                     <button
                       key={i}
                       onClick={() => setFechaSeleccionada(dObj)}
-                      className={`shrink-0 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-center border transition-all ${
+                      className={`shrink-0 px-4 py-2.5 rounded-2xl border text-center transition-all ${
                         isSel ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md" : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                       }`}
                     >
-                      <span className="text-[9px] sm:text-[10px] font-black uppercase block opacity-60">
+                      <span className="text-[9px] font-black uppercase block opacity-60">
                         {i === 0 ? "Hoy" : dObj.toLocaleDateString("es-ES", { timeZone: "America/Caracas", weekday: "short" })}
                       </span>
                       <span className="text-xs sm:text-sm font-black block mt-0.5">
@@ -893,17 +746,17 @@ export default function FutbolClubDetailPage() {
               )}
 
               {/* GRILLA DE CANCHAS DE FÚTBOL */}
-              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs scrollbar-width-none -ms-overflow-style-none [&::-webkit-scrollbar]:hidden">
-                <div className="inline-block min-w-full min-w-[500px] w-full">
+              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
+                <div className="min-w-[500px] w-full">
                   {/* CABECERA PISTAS */}
                   <div className="flex bg-slate-950 text-white border-b-2 border-slate-800 sticky top-0 z-30">
-                    <div className="w-16 sm:w-24 shrink-0 p-2 sm:p-3 font-black text-[10px] sm:text-[11px] text-slate-300 text-center uppercase tracking-wider border-r border-slate-800 bg-slate-950 sticky left-0 z-40 shadow-xs">
+                    <div className="w-20 p-3 font-black text-xs text-slate-300 text-center uppercase tracking-wider border-r border-slate-800 bg-slate-950">
                       Hora
                     </div>
                     {canchas.map((c) => (
-                      <div key={c.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-2 sm:p-3 text-center border-l border-slate-800 font-black text-[11px] sm:text-xs uppercase tracking-tight flex flex-col justify-center gap-0.5">
+                      <div key={c.id} className="flex-1 min-w-[150px] p-3 text-center border-l border-slate-800 font-black text-xs uppercase">
                         <span>{c.name}</span>
-                        <span className="text-[9px] text-slate-400">({c.capacity || 10} JUGADORES)</span>
+                        <span className="text-[9px] text-slate-400 block">({c.capacity || 10} JUGADORES)</span>
                       </div>
                     ))}
                   </div>
@@ -916,26 +769,17 @@ export default function FutbolClubDetailPage() {
                     /* FILAS DE HORARIOS */
                     bloquesHorarios.map((bloque, idx) => (
                       <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
-                        <div className="w-16 sm:w-24 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center sticky left-0 z-20 shadow-xs">
-                          <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
-                          <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
+                        <div className="w-20 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center">
+                          <span className="text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
+                          <span className="text-[9px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
                         </div>
 
                         {/* CELDAS CANCHAS */}
                         {canchas.map((cancha) => {
                           const targetTime = bloque.dateObj.getTime();
                           const bloqueVencido = horarioYaPaso(bloque.dateObj);
-                          const partidoOcupado = partidosClub.find((m) => {
-                            if (m.court_id !== cancha.id) return false;
-                            const mTime = obtenerEpoch(m.scheduled_at);
-                            return Math.abs(mTime - targetTime) < 5000;
-                          });
-
-                          const lockOcupado = bloqueosActivos.find((l) => {
-                            if (l.court_id !== cancha.id) return false;
-                            const lockTime = obtenerEpoch(l.scheduled_at);
-                            return Math.abs(lockTime - targetTime) < 5000;
-                          });
+                          const partidoOcupado = partidosClub.find((m) => m.court_id === cancha.id && Math.abs(obtenerEpoch(m.scheduled_at) - targetTime) < 5000);
+                          const lockOcupado = bloqueosActivos.find((l) => l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000);
 
                           const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.horaInt, bloque.minutosInt);
                           let precioUSD = precioOriginal;
@@ -962,13 +806,6 @@ export default function FutbolClubDetailPage() {
                           }
 
                           if (partidoOcupado) {
-                            const totalAbonado = Array.isArray(partidoOcupado.payments_history)
-                              ? partidoOcupado.payments_history.filter((a) => a.status === "aprobado").reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0)
-                              : 0;
-                            const canchaBaseFee = (partidoOcupado.total_price || 30) + (partidoOcupado.app_fee || ((partidoOcupado.total_price || 30) * 0.1));
-                            const canchaTotalmentePagada = partidoOcupado.payment_status === "aprobado" && totalAbonado >= (canchaBaseFee - 0.5);
-                            const esPendiente = !canchaTotalmentePagada && (partidoOcupado.payment_status === "pendiente_aprobacion" || partidoOcupado.payment_status === "pago_en_sitio");
-
                             const esMiReserva = !!user && (
                               partidoOcupado.created_by === user.id ||
                               (Array.isArray(partidoOcupado.players) && partidoOcupado.players.some((p) => p.user_id === user.id))
@@ -976,19 +813,14 @@ export default function FutbolClubDetailPage() {
 
                             if (esMiReserva) {
                               return (
-                                <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                  {/* REDIRECCIÓN DIRECTA A LA PÁGINA DEL PARTIDO DESDE LA GRILLA */}
+                                <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
                                   <Link href={`/futbol/partidos/${partidoOcupado.id}`} className="block h-full">
-                                    <div className={`h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left transition-all ${
-                                      esPendiente ? "bg-amber-500 text-slate-950 border-amber-600 hover:bg-amber-400" : "bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900"
-                                    }`}>
-                                      <div className="flex justify-between items-center w-full">
-                                        <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
-                                          MI RESERVA
-                                        </span>
-                                      </div>
-                                      <div className="my-0.5">
-                                        <p className="text-[11px] sm:text-[12px] font-black truncate text-white">Ver Partido ⚽</p>
+                                    <div className="h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900 transition-all">
+                                      <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
+                                        MI RESERVA
+                                      </span>
+                                      <div>
+                                        <p className="text-xs font-black text-white">Ver Partido ⚽</p>
                                         <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
                                       </div>
                                     </div>
@@ -998,71 +830,50 @@ export default function FutbolClubDetailPage() {
                             }
 
                             return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                              <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
                                 <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
-                                  <div className="flex justify-between items-center w-full">
-                                    <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">RESERVADO</span>
-                                  </div>
-                                  <p className="text-[11px] sm:text-[12px] font-black text-slate-400">Cancha Reservada</p>
+                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">RESERVADO</span>
+                                  <p className="text-xs font-black text-slate-400">Cancha Reservada</p>
                                 </div>
                               </div>
                             );
                           }
 
                           if (lockOcupado) {
-                            const esMiBloqueo = user && lockOcupado.user_id === user.id;
                             return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
+                              <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
+                                <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
                                   <span className="text-xl animate-pulse">⏳</span>
-                                  <p className="text-[10px] sm:text-[11px] font-black text-amber-600 mt-1 leading-tight">En proceso...</p>
-                                  <p className="text-[8px] font-bold text-amber-700/60 mt-0.5">{esMiBloqueo ? "Tu reserva en curso" : "Alguien está pagando"}</p>
+                                  <p className="text-xs font-black text-amber-600 mt-1">En proceso...</p>
                                 </div>
                               </div>
                             );
                           }
+
                           if (bloqueVencido) {
-  return (
-    <div
-      key={cancha.id}
-      className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200"
-    >
-      <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center border-2 border-slate-200 bg-slate-100 text-center cursor-not-allowed opacity-75">
-        <span className="text-lg">⏰</span>
-        <p className="text-[10px] sm:text-[11px] font-black text-slate-500 mt-1">
-          Horario finalizado
-        </p>
-        <p className="text-[8px] font-bold text-slate-400 mt-0.5">
-          Ya no disponible
-        </p>
-      </div>
-    </div>
-  );
-}
+                            return (
+                              <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
+                                <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center border-2 border-slate-200 bg-slate-100 text-center cursor-not-allowed opacity-75">
+                                  <span className="text-lg">⏰</span>
+                                  <p className="text-xs font-black text-slate-500 mt-1">Horario finalizado</p>
+                                </div>
+                              </div>
+                            );
+                          }
+
                           return (
-                            <div key={cancha.id} className="flex-1 min-w-[150px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                            <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
                               <button
                                 onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
-                                className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative cursor-pointer"
+                                className="h-full w-full bg-slate-50 hover:bg-emerald-50 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all cursor-pointer"
                               >
                                 {esPromoAplicada && (
-                                  <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
+                                  <span className="text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1 py-0.5 rounded shadow-xs mb-0.5">
                                     Promo
                                   </span>
                                 )}
-                                <span className="text-[11px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
-                                  Agendar ➕
-                                </span>
-                                {esPromoAplicada ? (
-                                  <div className="flex flex-col items-center">
-                                    <div className="flex items-center gap-1">
-                                      <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
-                                      <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
-                                )}
+                                <span className="text-xs font-black text-emerald-700">Agendar ➕</span>
+                                <span className="text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
                               </button>
                             </div>
                           );
@@ -1077,307 +888,81 @@ export default function FutbolClubDetailPage() {
         </div>
       </div>
 
-      {/* MODAL MI RESERVA (CON ENLACE AL PARTIDO) */}
-      {mounted && modalMiReservaOpen && matchMiReservaSel && createPortal(
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={() => setModalMiReservaOpen(false)}>
-          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-lg w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto scrollbar-width-none -ms-overflow-style-none [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="border-b pb-3 space-y-2">
-              <div className="flex justify-between items-start">
-                <div>
-                  <span className="text-[10px] font-black uppercase text-emerald-600 tracking-wider block">Gestionar Mi Reserva de Fútbol</span>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <h3 className="text-lg font-black text-slate-900">{matchMiReservaSel.court?.name || "Cancha"}</h3>
-                    <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">{club?.name}</span>
-                  </div>
-                </div>
-                <button onClick={() => setModalMiReservaOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
-              </div>
-
-              <div className="bg-slate-900 text-white p-2.5 rounded-2xl flex justify-between items-center text-xs font-bold shadow-sm">
-                <div className="flex items-center gap-2 min-w-0 pr-2">
-                  <span className="text-base shrink-0">📅</span>
-                  <div className="min-w-0">
-                    <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha de Juego</span>
-                    <p className="text-xs font-black truncate capitalize mt-0.5">
-                      {new Date(parsearFechaVET(matchMiReservaSel.scheduled_at)).toLocaleDateString("es-ES", { timeZone: "America/Caracas", weekday: "long", day: "numeric", month: "long" })}
-                    </p>
-                  </div>
-                </div>
-                <div className="bg-[#00FF9D] text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1 shadow-sm">
-                  <span>⏱️</span>
-                  <span>{new Date(parsearFechaVET(matchMiReservaSel.scheduled_at)).toLocaleTimeString("es-ES", { timeZone: "America/Caracas", hour: "2-digit", minute: "2-digit", hour12: true })}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* BOTÓN DIRECTO AL CENTRO DEL PARTIDO */}
-            <Link href={`/futbol/partidos/${matchMiReservaSel.id}`} className="w-full py-3 bg-[#0B0C15] hover:bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 transition-all shadow-md">
-              <span>⚽ Ir a la página del Partido</span>
-              <span>→</span>
-            </Link>
-
-            <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold">
-              <div className="flex justify-between text-[#00FF9D]">
-                <span>Tarifa Cancha Base</span>
-                <span className="font-black">${(matchMiReservaSel.total_price || 30).toFixed(2)}</span>
-              </div>
-              {(matchMiReservaSel.app_fee > 0) && (
-                <div className="flex justify-between text-slate-400">
-                  <span>Comisión App (10%)</span>
-                  <span>${matchMiReservaSel.app_fee.toFixed(2)}</span>
-                </div>
-              )}
-              <div className="flex justify-between text-sm font-black border-t border-slate-800 pt-2 text-white">
-                <span>Total Cancha</span>
-                <span className="text-[#00FF9D]">${((matchMiReservaSel.total_price || 30) + (matchMiReservaSel.app_fee || 3)).toFixed(2)}</span>
-              </div>
-            </div>
-
-            <div className="bg-emerald-50/70 border border-emerald-200 p-3.5 sm:p-4 rounded-2xl space-y-3">
-              <h4 className="text-xs font-black text-emerald-950 uppercase tracking-wide">Adjuntar Nuevo Pago / Comprobante Extra</h4>
-              <div className="space-y-3 text-xs font-bold text-slate-700">
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Monto que Pagas ($)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={formPagoExtra.monto}
-                    onChange={(e) => setFormPagoExtra({ ...formPagoExtra, monto: e.target.value })}
-                    className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-black text-slate-900 outline-none placeholder:text-slate-300"
-                    placeholder="Ej. 10.00"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Método de Pago</label>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {[
-                      { id: "pago_movil", label: "Pago Móvil" },
-                      { id: "zelle", label: "Zelle" },
-                      { id: "efectivo", label: "En Sitio" },
-                    ].map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setFormPagoExtra({ ...formPagoExtra, metodoPago: m.id })}
-                        className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all ${
-                          formPagoExtra.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-white text-slate-600 border-slate-200"
-                        }`}
-                      >
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {formPagoExtra.metodoPago !== "efectivo" && (
-                  <>
-                    <div>
-                      <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Número de Referencia</label>
-                      <input
-                        type="text"
-                        placeholder="Ej. 123456"
-                        value={formPagoExtra.numReferencia}
-                        onChange={(e) => setFormPagoExtra({ ...formPagoExtra, numReferencia: e.target.value })}
-                        className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Foto / Captura del Comprobante</label>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleSeleccionarImagen(e, (res) => setFormPagoExtra({ ...formPagoExtra, previewComprobante: res }))}
-                        className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-slate-900 file:text-[#00FF9D]"
-                      />
-                      {formPagoExtra.previewComprobante && (
-                        <div className="mt-2 relative rounded-xl overflow-hidden border border-slate-200 max-h-28 bg-slate-950 flex items-center justify-center">
-                          <img src={formPagoExtra.previewComprobante} alt="Preview Comprobante" className="max-h-28 object-contain" />
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                <button
-                  type="button"
-                  onClick={agregarComprobanteExtraUser}
-                  disabled={enviandoPagoExtra}
-                  className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-xl shadow-md mt-1 cursor-pointer"
-                >
-                  {enviandoPagoExtra ? "Enviando Comprobante..." : "Enviar Comprobante Adicional"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
-
-      {/* MODAL PASARELA DE PAGO CLIENTE CON COMISIÓN 10% Y BCV */}
+      {/* MODAL PASARELA DE PAGO CLIENTE */}
       {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4" onClick={cerrarModalManual}>
-          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 sm:space-y-5 max-h-[90vh] overflow-y-auto scrollbar-width-none -ms-overflow-style-none [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="border-b pb-3 space-y-2.5 relative">
-              <div className="flex justify-between items-start">
-                <div>
-                  <span className="text-[10px] font-black uppercase text-emerald-600 tracking-wider block">
-                    ⚽ Reserva de Cancha de Fútbol
-                  </span>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <h3 className="text-lg font-black text-slate-900">{bloqueSeleccionado.cancha.name}</h3>
-                    <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">{club?.name}</span>
-                  </div>
-                </div>
-                <button onClick={cerrarModalManual} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4" onClick={cerrarModalManual}>
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start border-b pb-3">
+              <div>
+                <span className="text-[10px] font-black uppercase text-emerald-600 block">⚽ Reserva de Cancha de Fútbol</span>
+                <h3 className="text-lg font-black text-slate-900">{bloqueSeleccionado.cancha.name}</h3>
               </div>
-
-              {tiempoRestante !== null && (
-                <div className={`absolute top-0 right-8 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-sm ${tiempoRestante <= 60 ? "bg-rose-100 text-rose-700 border-rose-200 animate-pulse" : "bg-amber-100 text-amber-800 border-amber-200"}`}>
-                  <span>⏳</span>
-                  <span>{formatoTiempo(tiempoRestante)}</span>
-                </div>
-              )}
-
-              <div className="bg-slate-900 text-white p-2.5 rounded-2xl flex justify-between items-center text-xs font-bold shadow-sm">
-                <div className="flex items-center gap-2 min-w-0 pr-2">
-                  <span className="text-base shrink-0">📅</span>
-                  <div className="min-w-0">
-                    <span className="text-[9px] font-bold uppercase text-slate-400 block leading-none">Fecha de Juego</span>
-                    <p className="text-xs font-black truncate capitalize mt-0.5">
-                      {fechaSeleccionada.toLocaleDateString("es-ES", { timeZone: "America/Caracas", weekday: "long", day: "numeric", month: "long" })}
-                    </p>
-                  </div>
-                </div>
-                <div className="bg-[#00FF9D] text-slate-950 px-3 py-1.5 rounded-xl font-black text-xs shrink-0 flex items-center gap-1 shadow-sm">
-                  <span>⏱️</span>
-                  <span>{bloqueSeleccionado.horaLabel}</span>
-                </div>
-              </div>
+              <button onClick={cerrarModalManual} className="text-slate-400 font-bold text-lg cursor-pointer">✕</button>
             </div>
 
-            {/* PASO 1 */}
             {pasoModal === 1 && (
-              <div className="space-y-3.5">
-                <div className="bg-slate-50 border border-slate-200 p-3.5 sm:p-4 rounded-2xl space-y-3 sm:space-y-4">
+              <div className="space-y-4">
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
                   <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">¿Qué tipo de partido vas a jugar?</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Modalidad de Reserva</label>
                     <select
                       value={tipoReserva}
                       onChange={(e) => {
                         const tipo = e.target.value;
                         setTipoReserva(tipo);
-                        const cant = tipo === "ranking" ? (bloqueSeleccionado?.cancha?.capacity || 10) : cantidadJugadores;
-                        setCantidadJugadores(cant);
-                        
-                        if (bloqueSeleccionado) {
-                          const baseTotal = bloqueSeleccionado.precioBaseTotal;
-                          const feeTotal = baseTotal * 0.10;
-                          const valUSD = tipo === "privado" ? (baseTotal + feeTotal) : ((baseTotal + feeTotal) / cant);
-                          setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
-                        }
+                        const baseTotal = bloqueSeleccionado.precioBaseTotal;
+                        const feeTotal = baseTotal * 0.10;
+                        const capBD = bloqueSeleccionado.cancha?.capacity || 10;
+                        const valUSD = tipo === "privado" ? (baseTotal + feeTotal) : ((baseTotal + feeTotal) / capBD);
+                        setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
                       }}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D]"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-slate-800"
                     >
-                      <option value="privado">Privado (Pista Completa con tu grupo)</option>
-                      <option value="ranking">Ranking Público (Abierto a la comunidad)</option>
+                      <option value="privado">🔒 Reserva Privada (Cancha Completa para tu grupo)</option>
+                      <option value="ranking">🏆 Partido Público (Abrir cupos para la comunidad)</option>
                     </select>
                   </div>
 
-                  {tipoReserva === "privado" && (
-                    <>
-                      {/* AVISO DE AMISTOSO */}
-                      <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 flex items-center gap-3">
-                        <span className="text-lg">🤝</span>
-                        <div>
-                          <span className="text-xs font-black text-amber-900 block">Partido Amistoso (Privado)</span>
-                          <span className="text-[9px] text-amber-700 font-bold block leading-tight mt-0.5">
-                            Las reservas privadas de fútbol no afectan el elo/ranking. Solo las partidas públicas ("Ranking") suman puntos oficiales.
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* SELECTOR DE CANTIDAD DE JUGADORES / ROTACIÓN */}
-                      <div>
-                        <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Cantidad de Jugadores (Rotaciones)</label>
-                        <select
-                          value={cantidadJugadores}
-                          onChange={(e) => {
-                            const cant = Number(e.target.value);
-                            setCantidadJugadores(cant);
-                            if (bloqueSeleccionado && tipoReserva !== "privado") {
-                              const baseTotal = bloqueSeleccionado.precioBaseTotal;
-                              const feeTotal = baseTotal * 0.10;
-                              const valUSD = (baseTotal + feeTotal) / cant;
-                              setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
-                            }
-                          }}
-                          disabled={tipoReserva === "ranking"}
-                          className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:border-[#00FF9D] disabled:opacity-50"
-                        >
-                          {(() => {
-                            const cap = bloqueSeleccionado?.cancha?.capacity || 10;
-                            const vs = cap / 2;
-                            const tresEquipos = Math.floor(cap * 1.5);
-                            const cuatroEquipos = cap * 2;
-                            
-                            return (
-                              <>
-                                <option value={cap}>{cap} Jugadores (Oficial {vs} vs {vs})</option>
-                                <option value={tresEquipos}>{tresEquipos} Jugadores (3 Equipos - Rotación)</option>
-                                <option value={cuatroEquipos}>{cuatroEquipos} Jugadores (4 Equipos - Rotación)</option>
-                              </>
-                            );
-                          })()}
-                        </select>
-                      </div>
-                    </>
+                  {tipoReserva === "privado" ? (
+                    <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 text-xs font-bold text-amber-900">
+                      🤝 Al alquilar la cancha completa, tú y tu grupo deciden libremente cómo organizarse, rotar o armar los equipos durante el partido.
+                    </div>
+                  ) : (
+                    <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 text-xs font-bold text-blue-900">
+                      👥 Se creará una sala abierta para {calculosPrecio.capacidadOficial} jugadores. Tú solo pagas tu cupo individual.
+                    </div>
                   )}
                 </div>
 
-                <button
-                  onClick={() => setPasoModal(2)}
-                  className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md cursor-pointer"
-                >
-                  Continuar a Datos de Pago →
+                <button onClick={() => setPasoModal(2)} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl shadow-md cursor-pointer">
+                  Continuar al Pago →
                 </button>
               </div>
             )}
 
-            {/* ====== PASO 2: DATOS DE PAGO ====== */}
             {pasoModal === 2 && (
-              <div className="space-y-3.5 text-xs font-bold text-slate-700">
-                {/* DESGLOSE FACTURA */}
-                <div className="bg-slate-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs">
-                  <div className="flex justify-between items-start text-[#00FF9D]">
-                    <span>Cancha Base (Fútbol)</span>
+              <div className="space-y-4 text-xs font-bold text-slate-700">
+                <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-1">
+                  <div className="flex justify-between text-[#00FF9D]">
+                    <span>{tipoReserva === "privado" ? "Cancha Completa" : "Tu Cupo Individual"}</span>
                     <div className="text-right">
-                      <span className="text-[#00FF9D] font-black block">${calculosPrecio.base.toFixed(2)}</span>
+                      <span className="font-black block">${calculosPrecio.base.toFixed(2)}</span>
                       <span className="text-[10px] text-emerald-400/80 block">~Bs. {(calculosPrecio.base * tasaBCV).toFixed(2)}</span>
                     </div>
                   </div>
-                  
-                  {/* ====== DESGLOSE POR PERSONA (NUEVO) ====== */}
-                  <div className="flex justify-between items-start text-emerald-300 bg-emerald-950/30 p-2 rounded-lg mt-1 border border-emerald-900">
-                    <span className="font-bold flex items-center gap-1">👥 Dividido entre {cantidadJugadores} jug.</span>
-                    <div className="text-right">
-                      <span className="font-black block">${calculosPrecio.precioIndividual.toFixed(2)} c/u</span>
-                    </div>
-                  </div>
 
-                  <div className="flex justify-between items-start text-slate-400 mt-2">
-                    <span>Comisión App (10%)</span>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Comisión App (+10%)</span>
                     <div className="text-right">
-                      <span className="font-black block text-slate-300">${calculosPrecio.fee.toFixed(2)}</span>
+                      <span className="font-black block text-slate-300">+${calculosPrecio.fee.toFixed(2)}</span>
                       <span className="text-[10px] text-slate-400 block">~Bs. {(calculosPrecio.fee * tasaBCV).toFixed(2)}</span>
                     </div>
                   </div>
-                  <div className="flex justify-between items-end border-t border-slate-800 pt-2 text-white">
-                    <div>
-                      <span className="text-xs font-black block">Total Sugerido</span>
-                    </div>
+
+                  <div className="flex justify-between text-white font-black border-t border-slate-800 pt-2 text-sm">
+                    <span>Total a Pagar</span>
                     <div className="text-right">
-                      <span className="text-lg font-black text-[#00FF9D] block">${calculosPrecio.totalSug.toFixed(2)}</span>
+                      <span className="text-[#00FF9D] font-black block">${calculosPrecio.totalSug.toFixed(2)} USD</span>
                       <span className="text-[10px] text-slate-400 font-semibold block">
                         ~Bs. {(calculosPrecio.totalSug * tasaBCV).toFixed(2)} VES
                       </span>
@@ -1385,127 +970,63 @@ export default function FutbolClubDetailPage() {
                   </div>
                 </div>
 
-                {/* INPUT MONTO CON SWITCH Y CONVERSIÓN BCV */}
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
                   <div className="flex justify-between items-center">
-                    <label className="text-[10px] font-black uppercase text-slate-500">
-                      Monto a Abonar Hoy ({monedaAbono === "USD" ? "$" : "Bs."})
-                    </label>
-                    <div className="flex items-center bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
-                      <button
-                        type="button"
-                        onClick={() => cambiarMonedaAbono("USD")}
-                        className={`px-2.5 py-1 rounded-lg transition-all ${monedaAbono === "USD" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"}`}
-                      >
-                        USD ($)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => cambiarMonedaAbono("VES")}
-                        className={`px-2.5 py-1 rounded-lg transition-all ${monedaAbono === "VES" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"}`}
-                      >
-                        Bs. (VES)
-                      </button>
+                    <label className="text-[10px] font-black uppercase text-slate-500">Monto Aportado ({monedaAbono === "USD" ? "$" : "Bs."})</label>
+                    <div className="flex bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
+                      <button type="button" onClick={() => cambiarMonedaAbono("USD")} className={`px-2 py-0.5 rounded-lg ${monedaAbono === "USD" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}>$ USD</button>
+                      <button type="button" onClick={() => cambiarMonedaAbono("VES")} className={`px-2 py-0.5 rounded-lg ${monedaAbono === "VES" ? "bg-slate-900 text-[#00FF9D]" : "text-slate-600"}`}>Bs. VES</button>
                     </div>
                   </div>
                   <input
                     type="number"
                     step="0.01"
-                    required
                     value={montoAbono}
                     onChange={(e) => setMontoAbono(e.target.value)}
-                    className="w-full bg-white border border-slate-300 rounded-xl p-3 text-lg font-black text-slate-900 outline-none focus:border-blue-500 placeholder:text-slate-300"
-                    placeholder={monedaAbono === "USD" ? "Ej. 33.00" : "Ej. 1200.00"}
+                    disabled={tipoReserva === "ranking"}
+                    readOnly={tipoReserva === "ranking"}
+                    className="w-full bg-white border border-slate-300 rounded-xl p-3 text-base font-black text-slate-900 outline-none disabled:bg-slate-100 disabled:text-slate-500"
                   />
+
+                  {/* VISTA PREVIA Y CÁLCULO DE CONVERSIÓN CON TASA BCV */}
                   {numIngresado > 0 && (
                     <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900 mt-2">
                       <span>Conversión (Tasa BCV: Bs. {tasaBCV.toFixed(2)})</span>
                       <span>
-                        {monedaAbono === "USD" ? `~Bs. ${equivalenteCalculado.toFixed(2)} VES` : `~$${equivalenteCalculado.toFixed(2)} USD`}
+                        {monedaAbono === "USD"
+                          ? `~Bs. ${equivalenteCalculado.toFixed(2)} VES`
+                          : `~$${equivalenteCalculado.toFixed(2)} USD`}
                       </span>
                     </div>
                   )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">Método de Pago</label>
+                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Método de Pago</label>
                   <div className="grid grid-cols-3 gap-2">
                     {[
-                      { id: "pago_movil", label: "Pago Móvil" },
-                      { id: "zelle", label: "Zelle" },
-                      { id: "efectivo", label: "En Sitio" },
+                      { id: "pago_movil", label: "📱 Pago Móvil" },
+                      { id: "zelle", label: "🇺🇸 Zelle" },
+                      { id: "efectivo", label: "💵 En Sitio" },
                     ].map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setMetodoPago(m.id)}
-                        className={`py-3 px-2 rounded-xl text-[10px] font-black uppercase border transition-all ${
-                          metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-slate-50 text-slate-600 border-slate-200"
-                        }`}
-                      >
+                      <button key={m.id} type="button" onClick={() => setMetodoPago(m.id)} className={`py-2.5 rounded-xl font-black text-[10px] uppercase border ${metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-slate-50 text-slate-600 border-slate-200"}`}>
                         {m.label}
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {metodoPago === "pago_movil" && (
-                  <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl text-[11px] text-blue-900 space-y-1">
-                    <p className="font-black">Datos Pago Móvil:</p>
-                    <p>Banco Banesco (0134) | C.I: V-12345678 | Tel: 0414-1234567</p>
-                  </div>
-                )}
-                {metodoPago === "zelle" && (
-                  <div className="bg-purple-50 border border-purple-200 p-3 rounded-2xl text-[11px] text-purple-900 space-y-1">
-                    <p className="font-black">Datos Zelle:</p>
-                    <p>Correo: pagos@sportshub.com | Titular: Sports Hub LLC</p>
+                {metodoPago !== "efectivo" && (
+                  <div className="space-y-2">
+                    <input type="text" placeholder="N° Referencia Transacción *" value={numReferencia} onChange={(e) => setNumReferencia(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none" />
+                    <input type="file" accept="image/*" onChange={(e) => handleSeleccionarImagen(e, setPreviewComprobante)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:bg-slate-900 file:text-[#00FF9D]" />
                   </div>
                 )}
 
-                {metodoPago !== "efectivo" && (
-                  <>
-                    <div>
-                      <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                        Número de Referencia de Transacción
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Ej. 123456"
-                        value={numReferencia}
-                        onChange={(e) => setNumReferencia(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                        Adjuntar Captura / Foto del Comprobante (Imagen)
-                      </label>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleSeleccionarImagen(e, setPreviewComprobante)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold outline-none file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-slate-900 file:text-[#00FF9D]"
-                      />
-                      {previewComprobante && (
-                        <div className="mt-2 relative rounded-2xl overflow-hidden border border-slate-200 max-h-36 bg-slate-950 flex items-center justify-center">
-                          <img src={previewComprobante} alt="Preview Comprobante" className="max-h-36 object-contain" />
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-                
-                <div className="flex gap-2 pt-1">
-                  <button type="button" onClick={() => setPasoModal(1)} className="w-1/3 py-3 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl cursor-pointer">
-                    Volver
-                  </button>
-                  <button
-                    type="button"
-                    onClick={confirmarReservaYPago}
-                    disabled={procesandoReserva}
-                    className="w-2/3 py-3 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md cursor-pointer disabled:opacity-50"
-                  >
-                    {procesandoReserva ? "Enviando..." : "Confirmar Abono"}
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setPasoModal(1)} className="w-1/3 py-3 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl cursor-pointer">Volver</button>
+                  <button type="button" onClick={confirmarReservaYPago} disabled={procesandoReserva} className="w-2/3 py-3 bg-slate-900 text-[#00FF9D] font-black uppercase rounded-2xl shadow-md cursor-pointer">
+                    {procesandoReserva ? "Enviando..." : "Confirmar Reserva"}
                   </button>
                 </div>
               </div>

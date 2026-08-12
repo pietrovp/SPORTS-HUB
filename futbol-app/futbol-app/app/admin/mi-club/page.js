@@ -58,7 +58,7 @@ export default function MiClubConfigPage() {
     name: "Pista 1",
     court_number: 1,
     sport_type: "padel",
-    capacity: 4, // <-- NUEVO: Capacidad por defecto (4 para Pádel)
+    capacity: 4,
     surface_type: "Cristal",
     court_type: "indoor",
     has_lighting: true,
@@ -288,8 +288,8 @@ export default function MiClubConfigPage() {
       name: cancha.name,
       court_number: cancha.court_number,
       sport_type: cancha.sport_type || "padel",
-      capacity: cancha.capacity || (cancha.sport_type === "futbol" ? 10 : 4), // <-- NUEVO: Recuperar capacidad
-      surface_type: cancha.surface_type || "Sintético",
+      capacity: cancha.capacity || (cancha.sport_type === "futbol" ? 10 : 4),
+      surface_type: cancha.surface_type || "Cristal",
       court_type: cancha.court_type || "outdoor",
       has_lighting: cancha.has_lighting ?? true,
       pricing_blocks: bloquesPorDefecto
@@ -329,12 +329,16 @@ export default function MiClubConfigPage() {
 
     try {
       setSaving(true);
+      const capFinal = formCancha.sport_type === "futbol" 
+        ? Number(formCancha.capacity) || 10 
+        : 4;
+
       const payload = {
         club_id: club.id,
         name: formCancha.name.trim(),
         court_number: Number(formCancha.court_number) || canchas.length + 1,
         sport_type: formCancha.sport_type,
-        capacity: Number(formCancha.capacity), // <-- NUEVO: Guardar la capacidad
+        capacity: capFinal,
         surface_type: formCancha.surface_type,
         court_type: formCancha.court_type,
         has_lighting: formCancha.has_lighting,
@@ -455,8 +459,7 @@ export default function MiClubConfigPage() {
                 <option value="Otra">Otra</option>
               </select>
             </div>
-            
-            {/* NUEVO CAMPO: DURACIÓN DE LOS BLOQUES */}
+
             <div>
               <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
                 Duración de los Turnos (Bloques)
@@ -575,56 +578,62 @@ export default function MiClubConfigPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                {canchas.map((c) => (
-                  <div key={c.id} className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex flex-col justify-between space-y-3 relative overflow-hidden">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span className="text-sm">{c.sport_type === "futbol" ? "⚽" : "🎾"}</span>
-                          <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-slate-900 text-white">
-                            {c.sport_type === "futbol" ? "Fútbol" : "Pádel"}
+                {canchas.map((c) => {
+                  const cap = c.capacity || (c.sport_type === "futbol" ? 10 : 4);
+                  const vs = Math.floor(cap / 2);
+                  return (
+                    <div key={c.id} className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex flex-col justify-between space-y-3 relative overflow-hidden">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="text-sm">{c.sport_type === "futbol" ? "⚽" : "🎾"}</span>
+                            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-slate-900 text-white">
+                              {c.sport_type === "futbol" ? "Fútbol" : "Pádel"}
+                            </span>
+                          </div>
+                          <h4 className="font-black text-slate-900 text-sm">{c.name}</h4>
+                          <span className="text-[10px] font-bold text-emerald-600 uppercase">
+                            {c.sport_type === "futbol" 
+                              ? `⚽ Fútbol (${vs} vs ${vs} — ${cap} Jugadores)` 
+                              : `${c.court_type} • ${c.surface_type}`}
                           </span>
                         </div>
-                        <h4 className="font-black text-slate-900 text-sm">{c.name}</h4>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase">
-                          {c.sport_type === "futbol" ? `Capacidad: ${c.capacity} JUGADORES` : `${c.court_type} • ${c.surface_type}`}
-                        </span>
+                        
+                        <button 
+                          onClick={() => abrirModalEditarCancha(c)} 
+                          className="w-8 h-8 rounded-full bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center shadow-xs transition-colors"
+                          title="Editar cancha"
+                        >
+                          ✏️
+                        </button>
                       </div>
                       
-                      <button 
-                        onClick={() => abrirModalEditarCancha(c)} 
-                        className="w-8 h-8 rounded-full bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center shadow-xs transition-colors"
-                        title="Editar cancha"
-                      >
-                        ✏️
-                      </button>
-                    </div>
-                    
-                    <div className="mt-2 bg-white p-2 rounded-xl border border-slate-100 shadow-xs flex flex-col gap-1 max-h-32 overflow-y-auto">
-                      <p className="text-[8px] font-black text-slate-400 uppercase border-b border-slate-50 pb-1">Precios por Bloques</p>
-                      {(c.pricing_blocks && c.pricing_blocks.length > 0) ? (
-                        c.pricing_blocks.map((b, i) => (
-                          <div key={i} className="flex justify-between items-center text-[10px] font-bold py-0.5">
-                            <span className="text-slate-500">{b.start_time} - {b.end_time}</span>
-                            <span className="text-emerald-600 font-black">${b.price}</span>
+                      <div className="mt-2 bg-white p-2 rounded-xl border border-slate-100 shadow-xs flex flex-col gap-1 max-h-32 overflow-y-auto">
+                        <p className="text-[8px] font-black text-slate-400 uppercase border-b border-slate-50 pb-1">Precios por Bloques</p>
+                        {(c.pricing_blocks && c.pricing_blocks.length > 0) ? (
+                          c.pricing_blocks.map((b, i) => (
+                            <div key={i} className="flex justify-between items-center text-[10px] font-bold py-0.5">
+                              <span className="text-slate-500">{b.start_time} - {b.end_time}</span>
+                              <span className="text-emerald-600 font-black">${b.price}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="flex justify-between items-center text-[10px] font-bold py-0.5">
+                            <span className="text-slate-500">Precio Fijo</span>
+                            <span className="text-emerald-600 font-black">${c.price_normal}</span>
                           </div>
-                        ))
-                      ) : (
-                        <div className="flex justify-between items-center text-[10px] font-bold py-0.5">
-                          <span className="text-slate-500">Precio Fijo</span>
-                          <span className="text-emerald-600 font-black">${c.price_normal}</span>
-                        </div>
-                      )}
-                    </div>
+                        )}
+                      </div>
 
-                    <div className="flex justify-between items-center text-[10px] text-slate-500 border-t border-slate-200 pt-2 font-bold">
-                      <span>Iluminación: {c.has_lighting ? "Sí 💡" : "No"}</span>
-                      <button onClick={() => eliminarCancha(c.id)} className="text-rose-500 hover:underline">
-                        Eliminar
-                      </button>
+                      <div className="flex justify-between items-center text-[10px] text-slate-500 border-t border-slate-200 pt-2 font-bold">
+                        <span>Iluminación: {c.has_lighting ? "Sí 💡" : "No"}</span>
+                        <button onClick={() => eliminarCancha(c.id)} className="text-rose-500 hover:underline">
+                          Eliminar
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -643,7 +652,6 @@ export default function MiClubConfigPage() {
             </div>
 
             <form onSubmit={guardarCancha} className="space-y-3 text-xs font-bold text-slate-700">
-              {/* SELECTOR DE DEPORTE PARA LA CANCHA */}
               <div>
                 <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Deporte Asignado</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -654,7 +662,11 @@ export default function MiClubConfigPage() {
                     <button
                       key={dep.id}
                       type="button"
-                      onClick={() => setFormCancha({ ...formCancha, sport_type: dep.id, capacity: dep.id === "futbol" ? 10 : 4 })}
+                      onClick={() => setFormCancha({ 
+                        ...formCancha, 
+                        sport_type: dep.id, 
+                        capacity: dep.id === "futbol" ? (formCancha.capacity >= 6 ? formCancha.capacity : 10) : 4 
+                      })}
                       className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase border transition-all ${
                         formCancha.sport_type === dep.id
                           ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm"
@@ -679,20 +691,22 @@ export default function MiClubConfigPage() {
                 />
               </div>
 
-              {/* OPCIONES ESPECÍFICAS SEGÚN EL DEPORTE */}
+              {/* SELECCIÓN DE CAPACIDAD DE FÚTBOL */}
               {formCancha.sport_type === "futbol" ? (
                 <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                    Capacidad Oficial (Tamaño de la Cancha)
+                  <label className="block text-[10px] font-black uppercase text-emerald-600 mb-1">
+                    ⚽ Capacidad Oficial (Formato de Cancha)
                   </label>
                   <select
                     value={formCancha.capacity}
                     onChange={(e) => setFormCancha({ ...formCancha, capacity: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none text-slate-900"
+                    className="w-full bg-white border-2 border-emerald-300 rounded-xl p-3 font-black outline-none text-slate-900 focus:border-emerald-500"
                   >
+                    <option value={8}>8 Jugadores (4 vs 4)</option>
                     <option value={10}>10 Jugadores (5 vs 5)</option>
                     <option value={12}>12 Jugadores (6 vs 6)</option>
                     <option value={14}>14 Jugadores (7 vs 7)</option>
+                    <option value={16}>16 Jugadores (8 vs 8)</option>
                     <option value={18}>18 Jugadores (9 vs 9)</option>
                     <option value={22}>22 Jugadores (11 vs 11)</option>
                   </select>

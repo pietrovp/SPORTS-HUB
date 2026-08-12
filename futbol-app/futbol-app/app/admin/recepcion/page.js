@@ -141,9 +141,7 @@ function CustomDarkDatePicker({ value, onChange }) {
     </div>
   );
 }
-function horarioYaPaso(dateObj) {
-  return dateObj.getTime() <= Date.now();
-}
+
 export default function RecepcionElite() {
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
@@ -1308,7 +1306,7 @@ export default function RecepcionElite() {
       };
 
       setMatchSeleccionado(matchActualizado);
-      mostrarNotificacion("Pago Aprobado", "✅ El pago ha sido verificado y aprobado correctamente.", "success");
+      mostrarNotificacion("Pago Aprobado", "✅ El pago ha sido verificado y approved correctamente.", "success");
       await cargarPartidosPeriodo();
 
     } catch (err) {
@@ -2071,76 +2069,101 @@ export default function RecepcionElite() {
                               }
 
                               return (
-                                <button
-                                  key={col.keyCol}
-                                  onClick={() => abrirModalDetalle(partidoOcupado)}
-                                  className={`h-full w-full rounded-xl p-1.5 flex flex-col justify-between text-left transition-all shadow-xs border-2 overflow-hidden cursor-pointer ${cardStyle}`}
-                                >
-                                  <div className="flex justify-between items-center w-full gap-1">
-                                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full truncate ${badgeStyle}`}>
-                                      {badgeText}
-                                    </span>
-                                    {esAbierto && (
-                                      <span className="text-[9px] font-black px-1.5 py-0.5 bg-slate-900/20 rounded shrink-0">
-                                        {partidoOcupado.players?.length || 1}/4
+                                <div key={col.keyCol} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                  <button
+                                    onClick={() => abrirModalDetalle(partidoOcupado)}
+                                    className={`h-full w-full rounded-xl p-1.5 flex flex-col justify-between text-left transition-all shadow-xs border-2 overflow-hidden cursor-pointer ${cardStyle}`}
+                                  >
+                                    <div className="flex justify-between items-center w-full gap-1">
+                                      <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full truncate ${badgeStyle}`}>
+                                        {badgeText}
                                       </span>
-                                    )}
-                                  </div>
-                                  <div className="my-0.5">
-                                    <p className="text-[10px] sm:text-[11px] font-black truncate leading-tight">{obtenerNombreCliente(partidoOcupado)}</p>
-                                  </div>
-
-                                  {!isLiquidado && (
-                                    <div className="pt-1 border-t border-black/10 flex justify-between items-center text-[8px] font-black uppercase tracking-wider opacity-90">
-                                      <span>⚙️ Gestionar</span>
-                                      <span>→</span>
+                                      {esAbierto && (
+                                        <span className="text-[9px] font-black px-1 py-0.5 bg-slate-900/20 rounded shrink-0">
+                                          {partidoOcupado.players?.length || 1}/4
+                                        </span>
+                                      )}
                                     </div>
-                                  )}
-                                </button>
+                                    <div className="my-0.5">
+                                      <p className="text-[10px] sm:text-[11px] font-black truncate leading-tight">{obtenerNombreCliente(partidoOcupado)}</p>
+                                    </div>
+
+                                    {!isLiquidado && (
+                                      <div className="pt-1 border-t border-black/10 flex justify-between items-center text-[8px] font-black uppercase tracking-wider opacity-90">
+                                        <span>⚙️ Gestionar</span>
+                                        <span>→</span>
+                                      </div>
+                                    )}
+                                  </button>
+                                </div>
                               );
                             }
 
                             if (lockOcupado) {
-  const esMiBloqueo = user && lockOcupado.user_id === user.id;
+                              const esMiBloqueo = user && lockOcupado.user_id === user.id;
 
-  return (
-    <div key={col.keyCol}>
-      {/* Tu celda amarilla existente */}
-    </div>
-  );
-}
+                              return (
+                                <div key={col.keyCol} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                  <div className="h-full w-full rounded-xl p-1.5 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
+                                    <span className="text-lg animate-pulse">⏳</span>
+                                    <p className="text-[10px] sm:text-[11px] font-black text-amber-700 mt-0.5 leading-tight">En proceso...</p>
+                                    <p className="text-[8px] font-bold text-amber-800/80 mt-0.5">
+                                      {esMiBloqueo ? "Tu reserva POS" : "Usuario reservando"}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            }
 
-if (bloqueVencido) {
-  return (
-    <div
-      key={col.keyCol}
-      className="h-[88px] w-[calc(100%-8px)] m-1 rounded-xl p-1.5 flex flex-col items-center justify-center border-2 border-slate-200 bg-slate-100 text-center cursor-not-allowed opacity-80"
-    >
-      <span className="text-lg">⏰</span>
-      <p className="text-[10px] sm:text-[11px] font-black text-slate-500 mt-0.5 leading-tight">
-        Horario finalizado
-      </p>
-      <p className="text-[8px] font-bold text-slate-400 mt-0.5">
-        Ya no disponible
-      </p>
-    </div>
-  );
-}
+                            if (bloqueVencido) {
+                              return (
+                                <div key={col.keyCol} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                  <div className="h-full w-full rounded-xl p-1.5 flex flex-col items-center justify-center border-2 border-slate-200 bg-slate-100 text-center cursor-not-allowed opacity-80">
+                                    <span className="text-lg">⏰</span>
+                                    <p className="text-[10px] sm:text-[11px] font-black text-slate-500 mt-0.5 leading-tight">
+                                      Horario finalizado
+                                    </p>
+                                    <p className="text-[8px] font-bold text-slate-400 mt-0.5">
+                                      Ya no disponible
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            }
 
-return (
-  <button
-    key={col.keyCol}
-    onClick={() => abrirModalAgendarPOS(
-      col.cancha,
-      fechaHoraBDSlot,
-      bloque.etiqueta,
-      precioUSD
-    )}
-  >
-    + Agendar
-  </button>
-);
+                            return (
+                              <div key={col.keyCol} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
+                                <button
+                                  type="button"
+                                  onClick={() => abrirModalAgendarPOS(
+                                    col.cancha,
+                                    fechaHoraBDSlot,
+                                    bloque.etiqueta,
+                                    precioUSD
+                                  )}
+                                  className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative cursor-pointer"
+                                >
+                                  {esPromoAplicada && (
+                                    <span className="absolute top-1 left-1 text-[7px] sm:text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1 py-0.2 rounded">
+                                      Promo
+                                    </span>
+                                  )}
 
+                                  <span className="text-[10px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
+                                    + Agendar
+                                  </span>
+
+                                  {esPromoAplicada ? (
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
+                                      <span className="text-[9px] sm:text-[10px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[8px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
+                                  )}
+                                </button>
+                              </div>
+                            );
                           })}
                         </div>
                       );

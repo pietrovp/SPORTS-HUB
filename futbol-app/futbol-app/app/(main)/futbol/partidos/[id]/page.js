@@ -121,15 +121,74 @@ function JugadorDraggable({ jugador, modo, onCambiarEquipo, valorGol, onGolChang
   );
 }
 
-function EquipoColumna({ id, titulo, jugadores, children }) {
+function EquipoColumna({ id, titulo, jugadores, onEliminar, victorias, onModificarWin, modo, esMultiEquipo, children }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  const partidoEnCurso = modo === "jugando";
+  const partidoNoIniciado = modo === "armar";
 
   return (
     <div ref={setNodeRef} className={`bg-white rounded-2xl p-5 shadow-sm border transition-colors ${isOver ? "border-emerald-500 bg-emerald-50/50" : "border-gray-100"}`}>
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="font-bold text-gray-800">{titulo}</h2>
-        {jugadores.length > 0 && <span className="text-xs font-semibold text-gray-400">Media: <span className="text-gray-700 font-bold">{promedioMedia(jugadores)}</span></span>}
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <h2 className="font-bold text-gray-800 truncate">{titulo}</h2>
+          {onEliminar && modo === "armar" && (
+            <button
+              type="button"
+              onClick={onEliminar}
+              className="bg-rose-500 hover:bg-rose-600 text-white font-black text-[9px] uppercase px-2.5 py-1 rounded-xl transition-colors cursor-pointer shrink-0 shadow-xs"
+            >
+              Borrar Equipo
+            </button>
+          )}
+        </div>
+        {jugadores.length > 0 && <span className="text-xs font-semibold text-gray-400 shrink-0">Media: <span className="text-gray-700 font-bold">{promedioMedia(jugadores)}</span></span>}
       </div>
+
+      {/* CONTADOR DE VICTORIAS / WINS PARA MODALIDAD RETAS / MULTIEQUIPO */}
+      {esMultiEquipo && modo !== "resultado" && (
+        <div className={`p-2.5 rounded-xl mb-3 flex items-center justify-between text-xs font-bold transition-all ${
+          partidoEnCurso 
+            ? "bg-slate-900 text-white shadow-xs border border-emerald-500/50" 
+            : "bg-slate-100 text-slate-400 border border-slate-200 opacity-60"
+        }`}>
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm">{partidoEnCurso ? "🏆" : "🔒"}</span>
+            <span className={`font-black uppercase text-[10px] tracking-wider ${partidoEnCurso ? "text-[#00FF9D]" : "text-slate-500"}`}>
+              {partidoEnCurso ? "Victorias / Retas" : "Victorias (Partido no iniciado)"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onModificarWin(-1)}
+              disabled={partidoNoIniciado}
+              className={`w-6 h-6 rounded-md flex items-center justify-center font-black transition-all ${
+                partidoNoIniciado
+                  ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                  : "bg-slate-800 hover:bg-slate-700 text-white cursor-pointer"
+              }`}
+            >
+              -
+            </button>
+            <span className={`text-base font-black px-1 ${partidoEnCurso ? "text-white" : "text-slate-500"}`}>
+              {victorias || 0}
+            </span>
+            <button
+              type="button"
+              onClick={() => onModificarWin(1)}
+              disabled={partidoNoIniciado}
+              className={`w-6 h-6 rounded-md flex items-center justify-center font-black transition-all ${
+                partidoNoIniciado
+                  ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                  : "bg-[#00FF9D] text-slate-950 hover:bg-emerald-400 cursor-pointer"
+              }`}
+            >
+              +
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-2 min-h-[70px]">
         {jugadores.length === 0 ? <p className="text-xs text-gray-300 text-center py-4 font-medium">Sin jugadores</p> : children}
       </div>
@@ -147,7 +206,9 @@ export default function FutbolPartidoDetallePage() {
   const [jugadores, setJugadores] = useState([]);
   const [goles, setGoles] = useState({});
   const [usuarioActual, setUsuarioActual] = useState(null);
-  
+  const [equiposList, setEquiposList] = useState([1, 2]);
+  const [wins, setWins] = useState({ 1: 0, 2: 0 });
+
   const [inscrito, setInscrito] = useState(false);
   const [inscripcionId, setInscripcionId] = useState(null);
 
@@ -170,8 +231,8 @@ export default function FutbolPartidoDetallePage() {
   const esPrivado = partido?.is_private || partido?.match_type === "privado";
   const costoInscripcion = (esPrivado || esCreador) ? 0 : (partido?.price_per_player ?? 0);
 
-  const cuposTotales = 14; 
-  const cuposMinimos = 10;
+  const cuposTotales = partido?.court?.capacity || 14; 
+  const cuposMinimos = 6;
   const cuposOcupados = jugadores.length;
   const lleno = cuposOcupados >= cuposTotales;
   
@@ -180,21 +241,19 @@ export default function FutbolPartidoDetallePage() {
 
   const equipo1 = useMemo(() => jugadores.filter((j) => j.equipo === 1), [jugadores]);
   const equipo2 = useMemo(() => jugadores.filter((j) => j.equipo === 2), [jugadores]);
-  const sinAsignar = useMemo(() => jugadores.filter((j) => j.equipo !== 1 && j.equipo !== 2), [jugadores]);
+  const sinAsignar = useMemo(() => jugadores.filter((j) => !equiposList.includes(j.equipo)), [jugadores, equiposList]);
 
   const partidoIniciado = partido?.status === "en_curso" || partido?.status === "jugado";
   const modoDnd = partido?.status === "jugado" ? "resultado" : partido?.status === "en_curso" ? "jugando" : "armar";
 
-  // HORAS RESTANTES PARA EL PARTIDO (POLÍTICA DE CANCELACIÓN DE 6 HORAS)
   const horasHastaPartido = useMemo(() => {
     if (!partido?.scheduled_at) return 999;
     const diffMs = new Date(partido.scheduled_at).getTime() - new Date().getTime();
     return diffMs / (1000 * 60 * 60);
   }, [partido]);
 
-  // CÁLCULOS DE PAGOS Y ABONOS
   const calculosPagoReserva = useMemo(() => {
-    const base = Number(partido?.total_price) || 10;
+    const base = Number(partido?.total_price) || 30;
     const fee = Number(partido?.app_fee) || (base * 0.10);
     const totalCancha = base + fee;
 
@@ -204,47 +263,48 @@ export default function FutbolPartidoDetallePage() {
       .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
 
     const restante = Math.max(0, totalCancha - totalAbonado);
-    const estadoPago = partido?.payment_status || (totalAbonado > 0 ? "pendiente_aprobacion" : "pendiente");
-
-    return { totalCancha, totalAbonado, restante, historial, estadoPago };
+    return { totalCancha, totalAbonado, restante, historial };
   }, [partido]);
 
-  // RESULTADO Y MVP
+  // TABLA DE POSICIONES / TOP 3 PODIO (RETAS Y TRIANGULARES)
+  const tablaPosiciones = useMemo(() => {
+    return equiposList.map((eqNum) => {
+      const integrantes = jugadores.filter(j => j.equipo === eqNum);
+      const victorias = wins[eqNum] || 0;
+      const golesTotales = integrantes.reduce((acc, j) => acc + (Number(goles[j.id]) || Number(j.goles) || 0), 0);
+      const mediaPromedio = promedioMedia(integrantes);
+
+      return {
+        eqNum,
+        victorias,
+        golesTotales,
+        mediaPromedio,
+        integrantes,
+      };
+    }).sort((a, b) => {
+      if (b.victorias !== a.victorias) return b.victorias - a.victorias;
+      if (b.golesTotales !== a.golesTotales) return b.golesTotales - a.golesTotales;
+      return b.mediaPromedio - a.mediaPromedio;
+    });
+  }, [equiposList, jugadores, wins, goles]);
+
+  // RESULTADO PARA 2 EQUIPOS CLÁSICOS O MULTIEQUIPOS
   const resultadoInfo = useMemo(() => {
     if (partido?.status !== "jugado") return null;
 
-    let g1 = 0;
-    let g2 = 0;
-
-    if (partido?.score_text && partido.score_text.includes("-")) {
-      const partes = partido.score_text.split("-");
-      g1 = Number(partes[0].trim()) || 0;
-      g2 = Number(partes[1].trim()) || 0;
-    } else {
-      g1 = equipo1.reduce((acc, j) => acc + (Number(goles[j.id]) || Number(j.goles) || 0), 0);
-      g2 = equipo2.reduce((acc, j) => acc + (Number(goles[j.id]) || Number(j.goles) || 0), 0);
-    }
+    let g1 = equipo1.reduce((acc, j) => acc + (Number(goles[j.id]) || Number(j.goles) || 0), 0);
+    let g2 = equipo2.reduce((acc, j) => acc + (Number(goles[j.id]) || Number(j.goles) || 0), 0);
 
     let equipoGanador = 0;
     if (g1 > g2) equipoGanador = 1;
     else if (g2 > g1) equipoGanador = 2;
 
-    const candidatosMvp = equipoGanador === 1 ? equipo1 : equipoGanador === 2 ? equipo2 : jugadores;
-
     let mvp = null;
-    if (candidatosMvp.length > 0) {
-      const ordenadosPorGoles = [...candidatosMvp].sort((a, b) => {
-        const golesA = Number(goles[a.id]) ?? Number(a.goles) ?? 0;
-        const golesB = Number(goles[b.id]) ?? Number(b.goles) ?? 0;
-        return golesB - golesA;
-      });
-
-      const maxGoles = Number(goles[ordenadosPorGoles[0]?.id]) ?? Number(ordenadosPorGoles[0]?.goles) ?? 0;
+    if (jugadores.length > 0) {
+      const ordenadosPorGoles = [...jugadores].sort((a, b) => (Number(goles[b.id]) || Number(b.goles) || 0) - (Number(goles[a.id]) || Number(a.goles) || 0));
+      const maxGoles = Number(goles[ordenadosPorGoles[0]?.id]) || Number(ordenadosPorGoles[0]?.goles) || 0;
       if (maxGoles > 0) {
-        mvp = {
-          ...ordenadosPorGoles[0],
-          golesMvp: maxGoles,
-        };
+        mvp = { ...ordenadosPorGoles[0], golesMvp: maxGoles };
       }
     }
 
@@ -253,23 +313,14 @@ export default function FutbolPartidoDetallePage() {
 
   useEffect(() => {
     if (!matchId || !supabase) return;
-
     cargarDatos();
 
     const channel = supabase
       .channel(`realtime-match-players-${matchId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "match_players", filter: `match_id=eq.${matchId}` },
-        () => {
-          cargarDatos();
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "match_players", filter: `match_id=eq.${matchId}` }, () => cargarDatos())
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [matchId]);
 
   async function cargarDatos() {
@@ -279,21 +330,27 @@ export default function FutbolPartidoDetallePage() {
       const { data: { user } } = await supabase.auth.getUser();
       setUsuarioActual(user);
 
-      const { data: partidoData, error: partidoError } = await supabase
+      const { data: partidoData } = await supabase
         .from("matches")
         .select(`
           id, created_by, scheduled_at, status, is_private, price_per_player, total_price, app_fee, match_type, score_text, winner_team, payment_status, payments_history, payment_proof_urls,
           club:clubs(name, city, address, image_url),
-          court:courts(name, sport_type)
+          court:courts(name, sport_type, capacity)
         `)
         .eq("id", matchId)
         .maybeSingle();
 
-      if (partidoError || !partidoData) {
-        setCargando(false);
-        return;
-      }
+      if (!partidoData) return setCargando(false);
       setPartido(partidoData);
+
+      if (partidoData.score_text) {
+        try {
+          const parsed = JSON.parse(partidoData.score_text);
+          if (parsed && typeof parsed === "object" && parsed.wins) {
+            setWins(parsed.wins);
+          }
+        } catch (e) {}
+      }
 
       const { data: inscripciones } = await supabase
         .from("match_players")
@@ -302,61 +359,40 @@ export default function FutbolPartidoDetallePage() {
 
       let listaInscripciones = [...(inscripciones || [])];
 
-      if (partidoData.created_by) {
-        const estaCreador = listaInscripciones.some(i => i.user_id === partidoData.created_by);
-        if (!estaCreador) {
-          listaInscripciones.push({
-            id: `creador-${partidoData.created_by}`,
-            user_id: partidoData.created_by,
-            team: "A",
-            goals: 0,
-          });
-        }
+      if (partidoData.created_by && !listaInscripciones.some(i => i.user_id === partidoData.created_by)) {
+        listaInscripciones.push({
+          id: `creador-${partidoData.created_by}`,
+          user_id: partidoData.created_by,
+          team: "1",
+          goals: 0,
+        });
       }
 
       if (listaInscripciones.length > 0) {
         const idsUsuarios = Array.from(new Set(listaInscripciones.map((i) => i.user_id).filter(Boolean)));
-        
         let perfilesGlobales = {};
         let perfilesFutbol = {};
 
         if (idsUsuarios.length > 0) {
-          const { data: pGlobales } = await supabase
-            .from("profiles")
-            .select("id, nombre, apellido, avatar_url")
-            .in("id", idsUsuarios);
-
+          const { data: pGlobales } = await supabase.from("profiles").select("id, nombre, apellido, avatar_url").in("id", idsUsuarios);
           (pGlobales || []).forEach(p => { perfilesGlobales[p.id] = p; });
 
-          const { data: pFutbol } = await supabase
-            .from("futbol_profiles")
-            .select("id, rating, partidos_jugados")
-            .in("id", idsUsuarios);
-
+          const { data: pFutbol } = await supabase.from("futbol_profiles").select("id, rating, partidos_jugados").in("id", idsUsuarios);
           (pFutbol || []).forEach(p => { perfilesFutbol[p.id] = p; });
         }
 
         const listaEnriquecida = listaInscripciones.map(i => {
           const pGlob = perfilesGlobales[i.user_id];
           const fPerfil = perfilesFutbol[i.user_id];
-
-          let nombreJugador = "Jugador";
-          if (pGlob?.nombre || pGlob?.apellido) {
-            nombreJugador = `${pGlob.nombre || ""} ${pGlob.apellido || ""}`.trim();
-          } else if (i.user_id === user?.id) {
-            nombreJugador = user.email ? user.email.split("@")[0] : "Mi Usuario";
-          } else if (i.user_id === partidoData.created_by) {
-            nombreJugador = "Organizador";
-          } else if (i.user_id) {
-            nombreJugador = `Jugador (${i.user_id.slice(0, 5)})`;
-          }
+          let numEq = parseInt(i.team, 10);
+          if (isNaN(numEq)) numEq = i.team === "B" ? 2 : 1;
 
           return {
             id: i.id,
             user_id: i.user_id,
-            equipo: i.team === "B" ? 2 : 1,
+            equipo: numEq,
             goles: Number(i.goals) || 0,
-            nombre: nombreJugador,
+            nombre: pGlob?.nombre ? `${pGlob.nombre} ${pGlob.apellido || ""}`.trim() : (i.user_id === partidoData.created_by ? "Organizador" : "Jugador"),
             avatarUrl: pGlob?.avatar_url || null,
             media: fPerfil?.rating != null ? Math.round(Number(fPerfil.rating)) : 64,
             partidosJugados: fPerfil?.partidos_jugados ?? 0,
@@ -364,6 +400,9 @@ export default function FutbolPartidoDetallePage() {
         });
 
         setJugadores(listaEnriquecida);
+
+        const maxEqActual = Math.max(...listaEnriquecida.map(j => j.equipo), 2);
+        setEquiposList(Array.from({ length: maxEqActual }, (_, idx) => idx + 1));
 
         const golesIniciales = {};
         listaEnriquecida.forEach((j) => { golesIniciales[j.id] = j.goles; });
@@ -379,53 +418,148 @@ export default function FutbolPartidoDetallePage() {
         setInscrito(false);
         setInscripcionId(null);
       }
-
     } catch (err) {
-      console.error("Error al cargar detalle del partido:", err);
+      console.error(err);
     } finally {
       setCargando(false);
     }
   }
 
-  async function procesarInscripcion() {
-    if (!usuarioActual) { router.push("/login"); return; }
-    
-    const yaEnLista = jugadores.some(j => j.user_id === usuarioActual.id);
-    if (yaEnLista) {
-      setMensaje("Ya estás registrado en este partido.");
-      setInscrito(true);
-      return;
-    }
+  const agregarEquipoExtra = () => {
+    const nuevoNum = equiposList.length + 1;
+    setEquiposList((prev) => [...prev, nuevoNum]);
+    setWins((prev) => ({ ...prev, [nuevoNum]: 0 }));
+  };
 
+  async function eliminarEquipoExtra(eqNum) {
+    if (equiposList.length <= 2 || eqNum <= 2) return;
     setProcesando(true);
-    setMensaje("");
 
     try {
-      const { data: insData, error: insErr } = await supabase
-        .from("match_players")
-        .insert({
-          match_id: partido.id,
-          user_id: usuarioActual.id,
-          team: "A",
-          goals: 0
-        })
-        .select("id")
-        .single();
-
-      if (insErr) {
-        console.error("Error BD Supabase al unirse:", insErr);
-        setMensaje(`Error al unirte: ${insErr.message}`);
-        setProcesando(false);
-        return;
+      const afectados = jugadores.filter(j => j.equipo === eqNum);
+      if (afectados.length > 0) {
+        await Promise.all(
+          afectados.map(j =>
+            supabase.from("match_players").update({ team: "1" }).match({ match_id: matchId, user_id: j.user_id })
+          )
+        );
       }
 
-      setInscripcionId(insData.id);
+      setJugadores(prev => prev.map(j => (j.equipo === eqNum ? { ...j, equipo: 1 } : j)));
+      setEquiposList(prev => prev.filter(num => num !== eqNum));
+      setWins(prev => {
+        const copy = { ...prev };
+        delete copy[eqNum];
+        return copy;
+      });
+      setMensaje(`Equipo ${eqNum} eliminado. Los jugadores fueron movidos al Equipo 1.`);
+    } catch (err) {
+      console.error("Error al eliminar equipo extra:", err);
+      setMensaje("Error eliminando el equipo.");
+    } finally {
+      setProcesando(false);
+    }
+  }
+
+  const modificarWin = (eqNum, delta) => {
+    setWins(prev => ({
+      ...prev,
+      [eqNum]: Math.max(0, (prev[eqNum] || 0) + delta)
+    }));
+  };
+
+  async function cambiarEquipo(inscripcionIdTarget, nuevoEquipo) {
+    setProcesando(true);
+    const targetJugador = jugadores.find(j => j.id === inscripcionIdTarget);
+    if (!targetJugador) return setProcesando(false);
+
+    const teamLetter = String(nuevoEquipo);
+    await supabase.from("match_players").update({ team: teamLetter }).match({ match_id: matchId, user_id: targetJugador.user_id });
+    setJugadores((prev) => prev.map((j) => (j.id === inscripcionIdTarget ? { ...j, equipo: nuevoEquipo } : j)));
+    setProcesando(false);
+  }
+
+  function handleDragEnd(event) {
+    const { active, over } = event;
+    if (!over) return;
+    
+    let targetEquipo = null;
+    if (over.id.startsWith("equipo-")) {
+      const parts = over.id.split("-");
+      if (parts[1] !== "null") targetEquipo = parseInt(parts[1], 10);
+    }
+
+    const jugador = jugadores.find((j) => j.id === active.id);
+    if (!jugador || jugador.equipo === targetEquipo) return;
+    cambiarEquipo(jugador.id, targetEquipo);
+  }
+
+  async function sortearEquipos() {
+    if (jugadores.length < cuposMinimos) return setMensaje(`Necesitas al menos ${cuposMinimos} jugadores.`);
+    setProcesando(true);
+    const { equipo1: eq1Ids, equipo2: eq2Ids } = balancearEquipos(jugadores);
+
+    const updates = [
+      ...eq1Ids.map((id) => supabase.from("match_players").update({ team: "1" }).match({ match_id: matchId, user_id: jugadores.find(x => x.id === id)?.user_id })),
+      ...eq2Ids.map((id) => supabase.from("match_players").update({ team: "2" }).match({ match_id: matchId, user_id: jugadores.find(x => x.id === id)?.user_id })),
+    ];
+    await Promise.all(updates);
+
+    setJugadores((prev) => prev.map((j) => ({ ...j, equipo: eq1Ids.includes(j.id) ? 1 : 2 })));
+    setMensaje("Equipos sorteados de forma equilibrada.");
+    setProcesando(false);
+  }
+
+  async function comenzarPartido() {
+    setProcesando(true);
+    await supabase.from("matches").update({ status: "en_curso" }).eq("id", matchId);
+    setPartido((prev) => ({ ...prev, status: "en_curso" }));
+    setMensaje("¡El partido ha comenzado!");
+    setProcesando(false);
+  }
+
+  async function finalizarPartido() {
+    setProcesando(true);
+
+    await Promise.all(jugadores.map((j) => supabase.from("match_players").update({ goals: Number(goles[j.id]) || 0 }).match({ match_id: matchId, user_id: j.user_id })));
+
+    let scorePayload = "";
+    let ganadorFinal = "EMPATE";
+
+    if (equiposList.length > 2) {
+      const topTeam = tablaPosiciones[0];
+      ganadorFinal = `EQUIPO ${topTeam.eqNum}`;
+      scorePayload = JSON.stringify({
+        mode: "triangular",
+        wins,
+        topTeam: topTeam.eqNum,
+      });
+    } else {
+      const g1 = equipo1.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
+      const g2 = equipo2.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
+      ganadorFinal = g1 > g2 ? "A" : g2 > g1 ? "B" : "EMPATE";
+      scorePayload = `${g1} - ${g2}`;
+    }
+
+    await supabase.from("matches").update({ status: "jugado", winner_team: ganadorFinal, score_text: scorePayload }).eq("id", matchId);
+
+    setPartido((prev) => ({ ...prev, status: "jugado", score_text: scorePayload }));
+    setMensaje("¡Reserva y partido finalizados con éxito!");
+    setProcesando(false);
+    await cargarDatos();
+  }
+
+  async function procesarInscripcion() {
+    if (!usuarioActual) return router.push("/login");
+    setProcesando(true);
+
+    try {
+      await supabase.from("match_players").insert({ match_id: partido.id, user_id: usuarioActual.id, team: "1", goals: 0 });
       setInscrito(true);
       setMensaje("¡Te has unido al partido con éxito!");
       await cargarDatos();
     } catch (err) {
-      console.error("Excepción al unirse:", err);
-      setMensaje(`Error: ${err.message || "No se pudo completar la inscripción"}`);
+      setMensaje("Error al unirte.");
     } finally {
       setProcesando(false);
     }
@@ -434,32 +568,14 @@ export default function FutbolPartidoDetallePage() {
   async function cancelarInscripcion() {
     if (!confirm("¿Seguro que deseas cancelar tu inscripción?")) return;
     setProcesando(true);
-
-    try {
-      const { error } = await supabase
-        .from("match_players")
-        .delete()
-        .match({ match_id: partido.id, user_id: usuarioActual.id });
-
-      if (error) throw error;
-
-      setInscrito(false);
-      setInscripcionId(null);
-      setJugadores(jugadores.filter(j => j.user_id !== usuarioActual.id));
-      setMensaje("Inscripción cancelada con éxito.");
-      await cargarDatos();
-    } catch (err) {
-      console.error("Error al cancelar:", err);
-      setMensaje("Error al cancelar la inscripción.");
-    } finally {
-      setProcesando(false);
-    }
+    await supabase.from("match_players").delete().match({ match_id: partido.id, user_id: usuarioActual.id });
+    setInscrito(false);
+    await cargarDatos();
+    setProcesando(false);
   }
 
-  // CANCELACIÓN DE RESERVA POR EL ORGANIZADOR (CON ALERTA DE 6 HORAS)
   async function cancelarReservaOrganizador() {
     if (!partido || !usuarioActual) return;
-
     const esMenorA6Horas = horasHastaPartido < 6;
     let mensajeConfirmacion = "¿Estás seguro de que deseas cancelar y anular esta reserva de cancha?";
 
@@ -471,204 +587,28 @@ export default function FutbolPartidoDetallePage() {
 
     setProcesando(true);
     try {
-      const { error } = await supabase
-        .from("matches")
-        .update({ status: "cancelado" })
-        .eq("id", matchId);
-
-      if (error) throw error;
-
+      await supabase.from("matches").update({ status: "cancelado" }).eq("id", matchId);
       alert("Reserva cancelada con éxito.");
       router.push("/futbol");
     } catch (err) {
-      console.error("Error al cancelar reserva:", err);
       setMensaje("Error al cancelar la reserva.");
       setProcesando(false);
     }
   }
 
-  async function asegurarEquiposAsignados(listaActual) {
-    const sinEquipo = listaActual.filter((j) => j.equipo !== 1 && j.equipo !== 2);
-    if (sinEquipo.length === 0) return listaActual;
-
-    const conEquipo1 = listaActual.filter((j) => j.equipo === 1);
-    const conEquipo2 = listaActual.filter((j) => j.equipo === 2);
-    let suma1 = conEquipo1.reduce((acc, j) => acc + (j.media || 64), 0);
-    let suma2 = conEquipo2.reduce((acc, j) => acc + (j.media || 64), 0);
-
-    const ordenadosSin = [...sinEquipo].sort((a, b) => (b.media || 64) - (a.media || 64));
-    const listaActualizada = [...listaActual];
-
-    for (const j of ordenadosSin) {
-      const equipoAsignado = suma1 <= suma2 ? 1 : 2;
-      if (equipoAsignado === 1) suma1 += (j.media || 64);
-      else suma2 += (j.media || 64);
-      
-      const idx = listaActualizada.findIndex((item) => item.id === j.id);
-      if (idx !== -1) listaActualizada[idx].equipo = equipoAsignado;
-      
-      const teamLetter = equipoAsignado === 1 ? "A" : "B";
-      await supabase.from("match_players").update({ team: teamLetter }).match({ match_id: matchId, user_id: j.user_id });
-    }
-    return listaActualizada;
-  }
-
-  async function cambiarEquipo(inscripcionIdTarget, nuevoEquipo) {
-    setProcesando(true);
-    const targetJugador = jugadores.find(j => j.id === inscripcionIdTarget);
-    if (!targetJugador) { setProcesando(false); return; }
-
-    const teamLetter = nuevoEquipo === 1 ? "A" : "B";
-    await supabase.from("match_players").update({ team: teamLetter }).match({ match_id: matchId, user_id: targetJugador.user_id });
-    setJugadores((prev) => prev.map((j) => (j.id === inscripcionIdTarget ? { ...j, equipo: nuevoEquipo } : j)));
-    setProcesando(false);
-  }
-
-  function handleDragEnd(event) {
-    const { active, over } = event;
-    if (!over) return;
-    let targetEquipo;
-    if (over.id === "equipo-1") targetEquipo = 1;
-    else if (over.id === "equipo-2") targetEquipo = 2;
-    else if (over.id === "equipo-null") targetEquipo = null;
-    else return;
-
-    const jugador = jugadores.find((j) => j.id === active.id);
-    if (!jugador || jugador.equipo === targetEquipo) return;
-    cambiarEquipo(jugador.id, targetEquipo);
-  }
-
-  async function sortearEquipos() {
-    if (jugadores.length < cuposMinimos) { setMensaje(`Necesitas al menos ${cuposMinimos} jugadores.`); return; }
-    setProcesando(true);
-    setMensaje("");
-
-    const { equipo1: eq1Ids, equipo2: eq2Ids } = balancearEquipos(jugadores);
-
-    const updates = [
-      ...eq1Ids.map((id) => {
-        const j = jugadores.find(x => x.id === id);
-        return supabase.from("match_players").update({ team: "A" }).match({ match_id: matchId, user_id: j?.user_id });
-      }),
-      ...eq2Ids.map((id) => {
-        const j = jugadores.find(x => x.id === id);
-        return supabase.from("match_players").update({ team: "B" }).match({ match_id: matchId, user_id: j?.user_id });
-      }),
-    ];
-    await Promise.all(updates);
-    
-    const { data, error } = await supabase
-      .from("matches")
-      .update({ status: "programado" })
-      .eq("id", matchId)
-      .select();
-
-    if (error) {
-      console.error("Error BD al sortear:", error);
-      setMensaje(`Error BD: ${error.message}`);
-      setProcesando(false);
-      return;
-    }
-
-    setJugadores((prev) => prev.map((j) => ({ ...j, equipo: eq1Ids.includes(j.id) ? 1 : 2 })));
-    setMensaje("Equipos sorteados de forma equilibrada.");
-    setProcesando(false);
-  }
-
-  async function comenzarPartido() {
-    if (jugadores.length < cuposMinimos) { setMensaje(`Faltan jugadores para el mínimo (${cuposMinimos}).`); return; }
-    setProcesando(true);
-    setMensaje("");
-    
-    const listaConEquipos = await asegurarEquiposAsignados(jugadores);
-    setJugadores(listaConEquipos);
-
-    const { data, error } = await supabase
-      .from("matches")
-      .update({ status: "en_curso" })
-      .eq("id", matchId)
-      .select();
-
-    if (error) {
-      console.error("Error al comenzar partido:", error);
-      setMensaje(`Error BD: ${error.message}`);
-      setProcesando(false);
-      return;
-    }
-
-    setPartido((prev) => ({ ...prev, status: "en_curso" }));
-    setMensaje("¡El partido ha comenzado!");
-    setProcesando(false);
-  }
-
-  async function finalizarPartido() {
-    setProcesando(true);
-    setMensaje("");
-
-    const g1 = equipo1.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
-    const g2 = equipo2.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
-
-    const updatesGoles = jugadores.map((j) => {
-      const cantGoles = Number(goles[j.id]) || 0;
-      return supabase
-        .from("match_players")
-        .update({ goals: cantGoles })
-        .match({ match_id: matchId, user_id: j.user_id });
-    });
-    await Promise.all(updatesGoles);
-
-    const ganador = g1 > g2 ? "A" : g2 > g1 ? "B" : "EMPATE";
-
-    const { data: partidoActualizado, error: errorPartido } = await supabase
-      .from("matches")
-      .update({ status: "jugado", winner_team: ganador, score_text: `${g1} - ${g2}` })
-      .eq("id", matchId)
-      .select();
-
-    if (errorPartido || !partidoActualizado || partidoActualizado.length === 0) { 
-      setMensaje("Error BD: No tienes permisos para finalizar."); 
-      setProcesando(false); 
-      return; 
-    }
-
-    setPartido((prev) => ({ ...prev, status: "jugado", score_text: `${g1} - ${g2}` }));
-    setJugadores((prev) => prev.map((j) => ({ ...j, goles: Number(goles[j.id]) || 0 })));
-    setMensaje(`Partido finalizado: ${g1} - ${g2}`);
-    setProcesando(false);
-    await cargarDatos();
-  }
-
   async function enviarAbonoExtra() {
     if (!usuarioActual || !partido) return;
-
     const montoValido = parseFloat(formPago.monto);
-    if (isNaN(montoValido) || montoValido <= 0) {
-      setMensaje("Ingresa un monto válido.");
-      return;
-    }
-
-    if (formPago.metodoPago !== "efectivo" && !formPago.previewComprobante && !formPago.numReferencia.trim()) {
-      setMensaje("Adjunta la imagen del comprobante o el número de referencia.");
-      return;
-    }
+    if (isNaN(montoValido) || montoValido <= 0) return setMensaje("Ingresa un monto válido.");
 
     try {
       setEnviandoPago(true);
-
-      const { data: userProf } = await supabase
-        .from("profiles")
-        .select("nombre, apellido, telefono")
-        .eq("id", usuarioActual.id)
-        .maybeSingle();
-
-      const nombreUsuario = userProf ? `${userProf.nombre || ""} ${userProf.apellido || ""}`.trim() : usuarioActual.email;
-      const telefonoUsuario = userProf?.telefono || "Sin teléfono";
+      const { data: userProf } = await supabase.from("profiles").select("nombre, apellido, telefono").eq("id", usuarioActual.id).maybeSingle();
 
       const nuevoAbono = {
         id: `pay-${Date.now()}`,
         user_id: usuarioActual.id,
-        user_name: nombreUsuario,
-        user_phone: telefonoUsuario,
+        user_name: userProf ? `${userProf.nombre} ${userProf.apellido}`.trim() : usuarioActual.email,
         amount: montoValido,
         method: formPago.metodoPago,
         reference: formPago.numReferencia.trim() || "S/R",
@@ -677,31 +617,14 @@ export default function FutbolPartidoDetallePage() {
         created_at: new Date().toISOString(),
       };
 
-      const historialActual = Array.isArray(partido.payments_history) ? partido.payments_history : [];
-      const historialNuevo = [...historialActual, nuevoAbono];
-
-      const proofUrlsActuales = Array.isArray(partido.payment_proof_urls) ? partido.payment_proof_urls : [];
-      const proofUrlsNuevas = formPago.previewComprobante
-        ? [...proofUrlsActuales, formPago.previewComprobante]
-        : proofUrlsActuales;
-
-      const { error: updateErr } = await supabase
-        .from("matches")
-        .update({
-          payments_history: historialNuevo,
-          payment_proof_urls: proofUrlsNuevas,
-          payment_status: "pendiente_aprobacion",
-        })
-        .eq("id", partido.id);
-
-      if (updateErr) throw updateErr;
+      const historialNuevo = [...(partido.payments_history || []), nuevoAbono];
+      await supabase.from("matches").update({ payments_history: historialNuevo, payment_status: "pendiente_aprobacion" }).eq("id", partido.id);
 
       setModalPagoOpen(false);
-      setMensaje("¡Comprobante enviado con éxito!");
+      setMensaje("Comprobante enviado.");
       await cargarDatos();
     } catch (err) {
-      console.error("Error enviando comprobante extra:", err);
-      setMensaje("Error al adjuntar el comprobante.");
+      setMensaje("Error enviando comprobante.");
     } finally {
       setEnviandoPago(false);
     }
@@ -723,15 +646,8 @@ export default function FutbolPartidoDetallePage() {
     reader.readAsDataURL(file);
   };
 
-  if (cargando) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin" /></div>;
-  }
-
-  if (!partido) {
-    return <div className="min-h-screen flex items-center justify-center"><h1 className="text-xl font-bold">Partido no encontrado</h1></div>;
-  }
-
-  const imagenCancha = partido.club?.image_url || "https://images.unsplash.com/photo-1518605368461-1ee7e53f090b?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80";
+  if (cargando) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin" /></div>;
+  if (!partido) return <div className="p-8 text-center"><h1 className="text-xl font-bold">Partido no encontrado</h1></div>;
 
   return (
     <div className="min-h-screen bg-gray-50/50 pb-32 pt-4 md:pt-8">
@@ -739,7 +655,7 @@ export default function FutbolPartidoDetallePage() {
         
         {/* HERO BANNER */}
         <div className="relative h-64 md:h-80 w-full bg-gray-900 rounded-3xl overflow-hidden shadow-md border border-gray-100">
-          <img src={imagenCancha} alt="Cancha" className="absolute inset-0 w-full h-full object-cover opacity-60" />
+          <img src={partido.club?.image_url || "https://images.unsplash.com/photo-1518605368461-1ee7e53f090b"} alt="Cancha" className="absolute inset-0 w-full h-full object-cover opacity-60" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0B0C15] via-[#0B0C15]/40 to-transparent"></div>
           
           <div className="absolute top-4 left-4 z-10">
@@ -751,151 +667,77 @@ export default function FutbolPartidoDetallePage() {
           <div className="absolute top-4 right-4 z-10 flex gap-2">
             {esPrivado && (
               <span className="bg-white/95 text-indigo-800 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-md flex items-center gap-1.5">
-                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>
                 Privado
               </span>
             )}
             <span className={`bg-white/95 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-md ${
-              partido?.status === "jugado" ? "text-gray-500" :
-              partido?.status === "en_curso" ? "text-blue-600" : 
-              "text-emerald-800"
+              partido?.status === "jugado" ? "text-gray-500" : partido?.status === "en_curso" ? "text-blue-600" : "text-emerald-800"
             }`}>
-              {partido?.status === "jugado" ? "Finalizado" : 
-               partido?.status === "en_curso" ? "En Curso" : 
-               costoInscripcion === 0 ? "Gratis" : `$${costoInscripcion} USD`}
+              {partido?.status === "jugado" ? "Finalizado" : partido?.status === "en_curso" ? "En Curso" : costoInscripcion === 0 ? "Gratis" : `$${costoInscripcion} USD`}
             </span>
           </div>
 
           <div className="absolute bottom-6 left-4 right-4 md:left-8 z-10">
             <h1 className="text-3xl md:text-5xl font-black text-white tracking-tight leading-none drop-shadow-md">{partido.court?.name}</h1>
-            <div className="flex items-center gap-1.5 mt-2 opacity-90">
-              <svg className="w-4 h-4 text-[#00FF9D]" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" /></svg>
-              <p className="text-white text-sm font-medium">{partido.club?.city} • {partido.club?.name}</p>
-            </div>
+            <p className="text-white text-sm font-medium mt-2">📍 {partido.club?.city} • {partido.club?.name}</p>
           </div>
         </div>
 
-        {/* ORGANIZADOR: BANNER DE PAGO + ALERTA DE CANCELACIÓN DE 6 HORAS */}
+        {/* ORGANIZADOR BANNER DE PAGO & CANCELACIÓN */}
         {esCreador && partido?.status !== "cancelado" && (
           <div className="space-y-4">
-            
-            {/* CARD DE ESTADO DE PAGO DE RESERVA */}
             <div className={`p-5 sm:p-6 rounded-3xl border flex flex-col space-y-4 shadow-sm transition-all ${
-              calculosPagoReserva.restante === 0
-                ? "bg-emerald-50 border-emerald-200 text-emerald-950"
-                : "bg-amber-50/80 border-amber-200 text-amber-950"
+              calculosPagoReserva.restante === 0 ? "bg-emerald-50 border-emerald-200 text-emerald-950" : "bg-amber-50/80 border-amber-200 text-amber-950"
             }`}>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-md border ${
-                      calculosPagoReserva.restante === 0
-                        ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-                        : "bg-amber-100 text-amber-900 border-amber-300"
-                    }`}>
-                      {calculosPagoReserva.restante === 0
-                        ? "✅ PAGO COMPLETO"
-                        : calculosPagoReserva.totalAbonado > 0
-                        ? "⏳ PAGO PARCIAL / EN REVISIÓN"
-                        : "⚠️ RESERVA PENDIENTE DE PAGO"}
-                    </span>
-                  </div>
-
-                  <h4 className="font-black text-base sm:text-lg">
-                    Total Reserva: <span className="text-slate-900">${calculosPagoReserva.totalCancha.toFixed(2)} USD</span>
-                  </h4>
-
-                  <p className="text-xs font-semibold opacity-90">
-                    Abonado: <span className="font-black text-emerald-700">${calculosPagoReserva.totalAbonado.toFixed(2)} USD</span> • 
-                    Falta por Pagar: <span className="font-black text-rose-600">${calculosPagoReserva.restante.toFixed(2)} USD</span>
-                  </p>
+                  <span className="text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-md border bg-amber-100 text-amber-900 border-amber-300">
+                    {calculosPagoReserva.restante === 0 ? "✅ PAGO COMPLETO" : "⚠️ RESERVA PENDIENTE DE PAGO"}
+                  </span>
+                  <h4 className="font-black text-base sm:text-lg">Total Reserva: <span className="text-slate-900">${calculosPagoReserva.totalCancha.toFixed(2)} USD</span></h4>
+                  <p className="text-xs font-semibold opacity-90">Abonado: <span className="font-black text-emerald-700">${calculosPagoReserva.totalAbonado.toFixed(2)} USD</span> • Falta: <span className="font-black text-rose-600">${calculosPagoReserva.restante.toFixed(2)} USD</span></p>
                 </div>
 
                 <div className="flex flex-wrap gap-2 shrink-0">
-                  <button
-                    onClick={() => {
-                      setFormPago((prev) => ({
-                        ...prev,
-                        monto: calculosPagoReserva.restante > 0 ? calculosPagoReserva.restante.toFixed(2) : "",
-                      }));
-                      setModalPagoOpen(true);
-                    }}
-                    className="bg-slate-900 hover:bg-black text-[#00FF9D] font-black text-xs uppercase px-4 py-3 rounded-2xl transition-all cursor-pointer shadow-md"
-                  >
-                    💳 Registrar Pago / Comprobante
+                  <button onClick={() => setModalPagoOpen(true)} className="bg-slate-900 text-[#00FF9D] font-black text-xs uppercase px-4 py-3 rounded-2xl cursor-pointer">
+                    💳 Registrar Pago
                   </button>
-
-                  <button
-                    onClick={cancelarReservaOrganizador}
-                    disabled={procesando}
-                    className="bg-rose-500/10 hover:bg-rose-500 text-rose-700 hover:text-white border border-rose-200 font-black text-xs uppercase px-4 py-3 rounded-2xl transition-all cursor-pointer shadow-xs"
-                  >
+                  <button onClick={cancelarReservaOrganizador} disabled={procesando} className="bg-rose-500/10 text-rose-700 hover:bg-rose-500 hover:text-white border border-rose-200 font-black text-xs uppercase px-4 py-3 rounded-2xl transition-all cursor-pointer">
                     🚫 Cancelar Reserva
                   </button>
                 </div>
               </div>
 
-              {/* ALERTA DE POLÍTICA DE CANCELACIÓN (6 HORAS) */}
-              <div className={`p-3 rounded-2xl text-xs font-bold flex items-center gap-2 border ${
-                horasHastaPartido < 6 
-                  ? "bg-rose-100/90 text-rose-900 border-rose-200" 
-                  : "bg-amber-100/70 text-amber-900 border-amber-200"
-              }`}>
-                <span className="text-base">⚠️</span>
-                <span>
-                  {horasHastaPartido < 6
-                    ? "Quedan menos de 6 horas para el partido. Si cancelas ahora, tu abono/dinero no será reembolsado."
-                    : "Política de Cancelación: Si cancelas con menos de 6 horas de anticipación, tu abono/pago no será reembolsado."}
-                </span>
+              <div className={`p-3 rounded-2xl text-xs font-bold border ${horasHastaPartido < 6 ? "bg-rose-100 text-rose-900 border-rose-200" : "bg-amber-100 text-amber-900 border-amber-200"}`}>
+                ⚠️ {horasHastaPartido < 6 ? "Faltan menos de 6h. Si cancelas ahora, tu dinero no será reembolsado." : "Política: Cancelaciones con menos de 6h de anticipación no se reembolsan."}
               </div>
-
             </div>
 
-            {/* COMPARTIR ENLACE */}
             {!partidoIniciado && (
-              <div className="bg-indigo-50 border-2 border-indigo-100 rounded-3xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="bg-indigo-50 border-2 border-indigo-100 rounded-3xl p-5 flex justify-between items-center">
                 <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xl">👑</span>
-                    <h3 className="font-black text-indigo-900 text-base">Eres el organizador</h3>
-                  </div>
-                  <p className="text-indigo-700/80 text-xs font-medium">Copia y envía la URL a tus amigos para armar los equipos.</p>
+                  <h3 className="font-black text-indigo-900 text-base">👑 Eres el organizador</h3>
+                  <p className="text-indigo-700/80 text-xs font-medium">Comparte el enlace a tus amigos para armar los equipos.</p>
                 </div>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(window.location.href);
-                    setMensaje("Enlace copiado al portapapeles.");
-                  }}
-                  className="bg-indigo-600 text-white font-black text-xs uppercase px-4 py-2.5 rounded-xl hover:bg-indigo-700 transition-colors shadow-sm cursor-pointer shrink-0"
-                >
+                <button onClick={() => { navigator.clipboard.writeText(window.location.href); setMensaje("Enlace copiado."); }} className="bg-indigo-600 text-white font-black text-xs uppercase px-4 py-2.5 rounded-xl cursor-pointer">
                   Copiar Enlace
                 </button>
               </div>
             )}
-
           </div>
         )}
 
-        {mensaje && (
-          <div className={`p-4 rounded-2xl text-sm font-bold text-center border ${mensaje.toLowerCase().includes("error") || mensaje.toLowerCase().includes("no se pudo") || mensaje.toLowerCase().includes("necesitas") || mensaje.toLowerCase().includes("faltan") ? "bg-red-50 text-red-700 border-red-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"}`}>
-            {mensaje}
-          </div>
-        )}
+        {mensaje && <div className="p-4 rounded-2xl text-sm font-bold text-center border bg-emerald-50 text-emerald-800 border-emerald-200">{mensaje}</div>}
 
+        {/* DETALLES DE FECHA Y HORA */}
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center shrink-0">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-            </div>
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Fecha</p>
               <p className="text-sm font-black text-gray-900 capitalize">{formatFechaCompleta(partido.scheduled_at)}</p>
             </div>
           </div>
           <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-orange-50 text-orange-500 flex items-center justify-center shrink-0">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            </div>
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Hora</p>
               <p className="text-sm font-black text-gray-900">{formatHora12(partido.scheduled_at)}</p>
@@ -903,218 +745,167 @@ export default function FutbolPartidoDetallePage() {
           </div>
         </div>
 
-        {/* RESULTADO FINAL Y MVP */}
-        {modoDnd === "resultado" && resultadoInfo && (
+        {/* TABLA DE POSICIONES Y RESULTADOS AL FINALIZAR */}
+        {modoDnd === "resultado" && (
           <div className="space-y-4">
-            
-            <div className={`rounded-3xl p-6 text-center text-white shadow-xl border overflow-hidden relative ${
-              resultadoInfo.equipoGanador === 1 ? "bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 border-emerald-400/30" :
-              resultadoInfo.equipoGanador === 2 ? "bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 border-indigo-500/30" :
-              "bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 border-amber-300/30"
-            }`}>
-              <span className="text-3xl block mb-1">
-                {resultadoInfo.equipoGanador === 0 ? "🤝" : "🏆"}
-              </span>
-              <p className="text-xs font-black uppercase tracking-[0.2em] text-white/80">
-                {resultadoInfo.equipoGanador === 0 ? "Resultado Final" : "¡Equipo Ganador!"}
-              </p>
-              <h2 className="text-2xl md:text-3xl font-black uppercase tracking-tight mt-0.5">
-                {resultadoInfo.equipoGanador === 1 ? "¡VICTORIA PARA EQUIPO 1!" :
-                 resultadoInfo.equipoGanador === 2 ? "¡VICTORIA PARA EQUIPO 2!" :
-                 "¡EMPATE ÉPICO!"}
-              </h2>
-
-              <div className="flex items-center justify-center gap-6 mt-5 bg-black/20 backdrop-blur-md rounded-2xl py-3 px-6 w-fit mx-auto border border-white/10">
-                <div className="text-center">
-                  <span className="text-[10px] font-bold uppercase tracking-wider block text-white/70">Equipo 1</span>
-                  <span className="text-4xl font-black text-white">{resultadoInfo.g1}</span>
+            {equiposList.length > 2 ? (
+              /* PODIO Y TABLA DE POSICIONES PARA RETAS / MULTIEQUIPO */
+              <div className="bg-slate-900 text-white rounded-3xl p-6 shadow-xl border border-slate-800 space-y-6">
+                <div className="text-center space-y-1">
+                  <span className="text-xs font-black uppercase text-[#00FF9D] tracking-widest bg-[#00FF9D]/10 px-3 py-1 rounded-full border border-[#00FF9D]/20">
+                    🏆 Torneo de Retas Finalizado
+                  </span>
+                  <h2 className="text-2xl font-black text-white">Tabla Final de Posiciones</h2>
                 </div>
-                <span className="text-2xl font-black text-white/40">-</span>
-                <div className="text-center">
-                  <span className="text-[10px] font-bold uppercase tracking-wider block text-white/70">Equipo 2</span>
-                  <span className="text-4xl font-black text-white">{resultadoInfo.g2}</span>
+
+                <div className="space-y-3">
+                  {tablaPosiciones.map((item, index) => {
+                    const medallas = ["🥇 1° LUGAR - CAMPEÓN", "🥈 2° LUGAR", "🥉 3° LUGAR"];
+                    const medalText = medallas[index] || `${index + 1}° LUGAR`;
+                    const borderStyle = index === 0 ? "border-[#00FF9D] bg-emerald-950/40" : index === 1 ? "border-slate-400 bg-slate-800/40" : "border-amber-700 bg-amber-950/20";
+
+                    return (
+                      <div key={item.eqNum} className={`p-4 rounded-2xl border-2 ${borderStyle} space-y-2`}>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-black text-[#00FF9D] uppercase tracking-wider">{medalText}</span>
+                          <span className="text-xs font-bold text-slate-400">Media Equipo: {item.mediaPromedio}</span>
+                        </div>
+
+                        <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                          <h3 className="text-lg font-black text-white">Equipo {item.eqNum}</h3>
+                          <div className="flex items-center gap-4 text-xs font-black">
+                            <span className="text-[#00FF9D]">{item.victorias} Wins 🏆</span>
+                            <span className="text-slate-300">{item.golesTotales} Goles ⚽</span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {item.integrantes.map(j => (
+                            <span key={j.id} className="text-[10px] font-bold bg-slate-800 text-slate-200 px-2 py-1 rounded-lg border border-slate-700">
+                              {j.nombre} ({j.goles} ⚽)
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            </div>
-
-            {resultadoInfo.mvp && (
-              <div className="bg-gradient-to-br from-amber-500/10 via-amber-100/50 to-orange-500/10 border-2 border-amber-400/40 rounded-3xl p-5 shadow-sm relative overflow-hidden flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-4 text-center sm:text-left">
-                  <div className="relative shrink-0">
-                    <div className="w-16 h-16 rounded-full bg-amber-400 p-1 shadow-md">
-                      <div className="w-full h-full rounded-full bg-slate-900 overflow-hidden flex items-center justify-center text-amber-300 font-black text-xl">
-                        {resultadoInfo.mvp.avatarUrl ? (
-                          <img src={resultadoInfo.mvp.avatarUrl} alt={resultadoInfo.mvp.nombre} className="w-full h-full object-cover" />
-                        ) : (
-                          iniciales(resultadoInfo.mvp.nombre)
-                        )}
-                      </div>
-                    </div>
-                    <span className="absolute -bottom-1 -right-1 text-lg">⭐</span>
-                  </div>
-
-                  <div>
-                    <div className="inline-flex items-center gap-1.5 bg-amber-400/20 text-amber-900 border border-amber-400/40 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest mb-1">
-                      <span>👑 MVP del Partido</span>
-                    </div>
-                    <h3 className="text-xl font-black text-gray-900">{resultadoInfo.mvp.nombre}</h3>
-                    <p className="text-xs font-semibold text-gray-600">
-                      Máximo anotador del equipo ganador
-                    </p>
-                  </div>
+            ) : (
+              /* RESULTADO CLÁSICO 2 EQUIPOS */
+              resultadoInfo && (
+                <div className="rounded-3xl p-6 text-center text-white shadow-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700">
+                  <span className="text-3xl block mb-1">🏆</span>
+                  <h2 className="text-3xl font-black">{resultadoInfo.g1} - {resultadoInfo.g2}</h2>
                 </div>
+              )
+            )}
 
-                <div className="bg-amber-400 text-slate-950 px-5 py-2.5 rounded-2xl shadow-sm text-center shrink-0">
-                  <span className="text-2xl font-black block leading-none">{resultadoInfo.mvp.golesMvp} ⚽</span>
-                  <span className="text-[9px] font-black uppercase tracking-wider block mt-0.5">Goles</span>
+            {/* RECONOCIMIENTO MVP INDIVIDUAL */}
+            {resultadoInfo?.mvp && (
+              <div className="bg-amber-100 border-2 border-amber-400 rounded-3xl p-5 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-black uppercase text-amber-900 block">👑 MVP del Partido</span>
+                  <h3 className="text-xl font-black text-gray-900">{resultadoInfo.mvp.nombre}</h3>
                 </div>
+                <span className="text-2xl font-black text-slate-900">{resultadoInfo.mvp.golesMvp} ⚽</span>
               </div>
             )}
           </div>
         )}
 
-        <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
-          {!partidoIniciado ? (
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h3 className="text-lg font-black text-gray-900">Jugadores</h3>
-                <p className={`text-xs font-bold uppercase tracking-widest mt-1 ${cuposOcupados >= cuposMinimos ? "text-emerald-500" : "text-gray-400"}`}>
-                  {cuposOcupados} / {cuposTotales} Inscritos {cuposOcupados < cuposMinimos && `(Mínimo ${cuposMinimos})`}
-                </p>
-              </div>
-              <div className="w-12 h-12 relative">
-                <svg viewBox="0 0 36 36" className="w-full h-full text-gray-100 transform -rotate-90">
-                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="4" />
-                  <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke={lleno ? "#f43f5e" : "#00FF9D"} strokeWidth="4" strokeDasharray={`${(cuposOcupados/cuposTotales)*100}, 100`} />
-                </svg>
-              </div>
+        {/* CONTENEDOR DE JUGADORES Y EQUIPOS */}
+        <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm space-y-6">
+          <div className="flex justify-between items-center border-b pb-4">
+            <div>
+              <h3 className="text-lg font-black text-gray-900">Alineaciones y Equipos</h3>
+              <p className="text-xs font-bold text-gray-400">{cuposOcupados} / {cuposTotales} Jugadores Inscritos</p>
             </div>
-          ) : (
-            <div className="text-center mb-8">
-              <span className="inline-block px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-black uppercase tracking-widest rounded-full mb-2 border border-blue-100">
-                {modoDnd === "resultado" ? "Alineaciones Finales" : "Equipos Sorteados"}
-              </span>
-              <h3 className="text-2xl font-black text-gray-900 uppercase">Alineaciones</h3>
-            </div>
-          )}
+            {esCreador && esPrivado && modoDnd !== "resultado" && (
+              <button onClick={agregarEquipoExtra} className="px-3.5 py-2 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl cursor-pointer">
+                + Agregar Equipo {equiposList.length + 1}
+              </button>
+            )}
+          </div>
 
           {esCreador && partido?.status !== "jugado" ? (
             <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 relative">
-                {partidoIniciado && (
-                  <div className="hidden sm:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-[#0B0C15] text-[#00FF9D] rounded-full items-center justify-center font-black text-xs uppercase tracking-widest z-10 shadow-xl border-4 border-white">
-                    VS
-                  </div>
-                )}
-
-                <EquipoColumna id="equipo-1" titulo="Equipo 1 (A)" jugadores={equipo1}>
-                  {equipo1.map((j) => (
-                    <JugadorDraggable key={j.id} jugador={j} modo={modoDnd} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 2)} />
-                  ))}
-                </EquipoColumna>
-
-                <EquipoColumna id="equipo-2" titulo="Equipo 2 (B)" jugadores={equipo2}>
-                  {equipo2.map((j) => (
-                    <JugadorDraggable key={j.id} jugador={j} modo={modoDnd} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} onCambiarEquipo={() => cambiarEquipo(j.id, 1)} />
-                  ))}
-                </EquipoColumna>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {equiposList.map((eqNum) => (
+                  <EquipoColumna
+                    key={eqNum}
+                    id={`equipo-${eqNum}`}
+                    titulo={`Equipo ${eqNum}`}
+                    jugadores={jugadores.filter(j => j.equipo === eqNum)}
+                    onEliminar={(equiposList.length > 2 && eqNum > 2) ? () => eliminarEquipoExtra(eqNum) : null}
+                    victorias={wins[eqNum] || 0}
+                    onModificarWin={(delta) => modificarWin(eqNum, delta)}
+                    modo={modoDnd}
+                    esMultiEquipo={equiposList.length > 2}
+                  >
+                    {jugadores.filter(j => j.equipo === eqNum).map((j) => (
+                      <JugadorDraggable
+                        key={j.id}
+                        jugador={j}
+                        modo={modoDnd}
+                        valorGol={goles[j.id]}
+                        onGolChange={(e) => setGoles({ ...goles, [j.id]: e.target.value })}
+                        onCambiarEquipo={() => cambiarEquipo(j.id, eqNum === 1 ? 2 : 1)}
+                      />
+                    ))}
+                  </EquipoColumna>
+                ))}
               </div>
 
-              {sinAsignar.length > 0 && modoDnd !== "resultado" && (
+              {sinAsignar.length > 0 && (
                 <div className="mt-4">
-                  <EquipoColumna id="equipo-null" titulo={`Sin asignar (${sinAsignar.length})`} jugadores={sinAsignar}>
+                  <EquipoColumna id="equipo-null" titulo={`Sin Asignar (${sinAsignar.length})`} jugadores={sinAsignar} modo={modoDnd}>
                     {sinAsignar.map((j) => (
-                      <JugadorDraggable key={j.id} jugador={j} modo={modoDnd} valorGol={goles[j.id]} onGolChange={(e) => setGoles((prev) => ({ ...prev, [j.id]: e.target.value }))} />
+                      <JugadorDraggable key={j.id} jugador={j} modo={modoDnd} valorGol={goles[j.id]} onGolChange={(e) => setGoles({ ...goles, [j.id]: e.target.value })} />
                     ))}
                   </EquipoColumna>
                 </div>
               )}
 
-              {modoDnd !== "resultado" && (
-                <div className="space-y-3 pt-6 border-t border-gray-100 mt-6">
-                  {modoDnd === "armar" && (
-                    <>
-                      <button onClick={sortearEquipos} disabled={procesando || jugadores.length < cuposMinimos} className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
-                        🎲 Sortear equipos equilibrados
-                      </button>
-                      <button onClick={comenzarPartido} disabled={procesando || jugadores.length < cuposMinimos} className="w-full bg-[#00FF9D] text-[#0B0C15] font-black uppercase tracking-widest hover:bg-[#00e58d] py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:bg-gray-200 disabled:text-gray-400 cursor-pointer">
-                        {procesando ? "Procesando…" : "▶ Comenzar partido"}
-                      </button>
-                    </>
-                  )}
-                  {modoDnd === "jugando" && (
-                    <button onClick={finalizarPartido} disabled={procesando} className="w-full bg-gray-900 hover:bg-black active:bg-gray-800 text-white font-bold py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
-                      {procesando ? "Guardando resultados…" : "🏁 Finalizar partido"}
+              <div className="space-y-3 pt-6 border-t mt-6">
+                {modoDnd === "armar" && (
+                  <>
+                    <button onClick={sortearEquipos} disabled={procesando || jugadores.length < cuposMinimos} className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+                      🎲 Sortear equipos equilibrados
                     </button>
-                  )}
-                </div>
-              )}
+                    <button onClick={comenzarPartido} disabled={procesando || jugadores.length < cuposMinimos} className="w-full bg-[#00FF9D] text-slate-950 font-black uppercase tracking-widest hover:bg-[#00e58d] py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:bg-gray-200 disabled:text-gray-400 cursor-pointer">
+                      {procesando ? "Procesando…" : "▶ Comenzar partido"}
+                    </button>
+                  </>
+                )}
+                {modoDnd === "jugando" && (
+                  <button onClick={finalizarPartido} disabled={procesando} className="w-full bg-slate-900 hover:bg-black active:bg-gray-800 text-white font-bold py-3.5 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+                    {procesando ? "Guardando resultados…" : "🏁 Finalizar partido"}
+                  </button>
+                )}
+              </div>
             </DndContext>
-
           ) : (
-            <>
-              {!partidoIniciado ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {jugadores.map((jugador) => (
-                    <div key={jugador.id} className="flex items-center gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100">
-                      <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden shrink-0">
-                        {jugador.avatarUrl ? <img src={jugador.avatarUrl} alt="Avatar" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-emerald-100 text-emerald-600 font-bold text-lg">{jugador.nombre?.[0]?.toUpperCase()}</div>}
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-gray-900 leading-tight truncate">{jugador.nombre}</p>
-                        {jugador.user_id === partido.created_by && <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest">Organizador</span>}
-                      </div>
-                    </div>
-                  ))}
-                  {Array.from({ length: Math.max(0, cuposTotales - cuposOcupados) }).map((_, i) => (
-                    <div key={`empty-${i}`} className="flex items-center gap-3 p-3 rounded-2xl border-2 border-dashed border-gray-100 opacity-50">
-                      <div className="w-10 h-10 rounded-full bg-gray-100 shrink-0 flex items-center justify-center text-gray-300"><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" /></svg></div>
-                      <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Libre</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {equiposList.map((eqNum) => (
+                <div key={eqNum} className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-2">
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <h4 className="font-black text-xs uppercase text-slate-900">Equipo {eqNum}</h4>
+                    {equiposList.length > 2 && (
+                      <span className="text-xs font-black text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-md">
+                        {wins[eqNum] || 0} Wins 🏆
+                      </span>
+                    )}
+                  </div>
+                  {jugadores.filter(j => j.equipo === eqNum).map(j => (
+                    <div key={j.id} className="bg-white p-2.5 rounded-xl border border-slate-100 flex justify-between items-center text-xs font-bold shadow-2xs">
+                      <span>{j.nombre}</span>
+                      {modoDnd === "resultado" && <span>{j.goles} ⚽</span>}
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 relative">
-                  <div className="hidden sm:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-[#0B0C15] text-[#00FF9D] rounded-full items-center justify-center font-black text-xs uppercase tracking-widest z-10 shadow-xl border-4 border-white">VS</div>
-                  
-                  <div className={`rounded-3xl p-5 border transition-all ${
-                    resultadoInfo?.equipoGanador === 1 ? "bg-emerald-50/60 border-emerald-300 ring-2 ring-emerald-400/20" : "bg-gray-50 border-gray-100"
-                  }`}>
-                    <div className="flex items-center justify-between border-b-2 border-gray-200 pb-3 mb-4">
-                      <h4 className="font-black text-gray-900 uppercase tracking-widest">Equipo 1</h4>
-                      {resultadoInfo?.equipoGanador === 1 && <span className="text-xs font-black text-emerald-600 bg-emerald-100 px-2.5 py-0.5 rounded-full">👑 GANADOR</span>}
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {equipo1.length > 0 ? equipo1.map((j) => (
-                        <div key={j.id} className="flex justify-between items-center p-2 bg-white rounded-xl shadow-sm border border-gray-100">
-                          <div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-gray-200 overflow-hidden">{j.avatarUrl ? <img src={j.avatarUrl} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-gray-300 text-gray-600 font-bold text-xs">{j.nombre?.[0]}</div>}</div><p className="text-sm font-bold text-gray-800">{j.nombre}</p></div>
-                          {modoDnd === "resultado" && <span className="text-sm font-black text-emerald-800">{j.goles} ⚽</span>}
-                        </div>
-                      )) : <p className="text-xs text-center text-gray-400 font-bold py-2">Sin jugadores</p>}
-                    </div>
-                  </div>
-
-                  <div className="flex sm:hidden justify-center my-[-1.5rem] relative z-10"><div className="w-10 h-10 bg-[#0B0C15] text-[#00FF9D] rounded-full flex items-center justify-center font-black text-xs uppercase tracking-widest shadow-xl border-4 border-white">VS</div></div>
-                  
-                  <div className={`rounded-3xl p-5 border transition-all ${
-                    resultadoInfo?.equipoGanador === 2 ? "bg-indigo-950 text-white border-indigo-500/40 ring-2 ring-indigo-500/20" : "bg-gray-900 border-gray-800 text-white"
-                  }`}>
-                    <div className="flex items-center justify-between border-b-2 border-gray-700 pb-3 mb-4">
-                      <h4 className="font-black uppercase tracking-widest">Equipo 2</h4>
-                      {resultadoInfo?.equipoGanador === 2 && <span className="text-xs font-black text-amber-300 bg-amber-400/20 border border-amber-400/40 px-2.5 py-0.5 rounded-full">👑 GANADOR</span>}
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {equipo2.length > 0 ? equipo2.map((j) => (
-                        <div key={j.id} className="flex justify-between items-center p-2 bg-gray-800 rounded-xl shadow-sm border border-gray-700">
-                          <div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-gray-700 overflow-hidden">{j.avatarUrl ? <img src={j.avatarUrl} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-gray-600 text-white font-bold text-xs">{j.nombre?.[0]}</div>}</div><p className="text-sm font-bold text-gray-100">{j.nombre}</p></div>
-                          {modoDnd === "resultado" && <span className="text-sm font-black text-emerald-400">{j.goles} ⚽</span>}
-                        </div>
-                      )) : <p className="text-xs text-center text-gray-500 font-bold py-2">Sin jugadores</p>}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
+              ))}
+            </div>
           )}
         </div>
       </main>
@@ -1130,11 +921,7 @@ export default function FutbolPartidoDetallePage() {
                 </span>
               </div>
               {!esCreador && (
-                <button
-                  onClick={cancelarInscripcion}
-                  disabled={procesando}
-                  className="px-4 py-2 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white font-black uppercase text-[11px] rounded-xl border border-rose-500/30 transition-all cursor-pointer"
-                >
+                <button onClick={cancelarInscripcion} disabled={procesando} className="px-4 py-2 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white font-black uppercase text-[11px] rounded-xl border border-rose-500/30 transition-all cursor-pointer">
                   {procesando ? "Procesando..." : "Cancelar mi cupo"}
                 </button>
               )}
@@ -1142,22 +929,10 @@ export default function FutbolPartidoDetallePage() {
           ) : (
             <>
               <div className="pl-2">
-                <span className="text-[10px] font-bold text-slate-400 block uppercase">
-                  {esPrivado ? "Reserva Privada" : "Reserva tu cupo"}
-                </span>
-                <span className="text-xs font-black text-white">
-                  {costoInscripcion === 0 ? "Gratis" : `$${costoInscripcion.toFixed(2)} USD`}
-                </span>
+                <span className="text-[10px] font-bold text-slate-400 block uppercase">{esPrivado ? "Reserva Privada" : "Reserva tu cupo"}</span>
+                <span className="text-xs font-black text-white">{costoInscripcion === 0 ? "Gratis" : `$${costoInscripcion.toFixed(2)} USD`}</span>
               </div>
-              <button
-                onClick={procesarInscripcion}
-                disabled={lleno || procesando}
-                className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
-                  lleno
-                    ? "bg-slate-800 text-slate-500 cursor-not-allowed"
-                    : "bg-[#00FF9D] text-slate-950 hover:bg-emerald-400 shadow-sm"
-                }`}
-              >
+              <button onClick={procesarInscripcion} disabled={lleno || procesando} className="px-5 py-2.5 bg-[#00FF9D] text-slate-950 font-black text-xs uppercase rounded-xl hover:bg-emerald-400 transition-colors cursor-pointer">
                 {procesando ? "Procesando..." : lleno ? "Partido Lleno" : "Unirme al Partido"}
               </button>
             </>
@@ -1165,7 +940,7 @@ export default function FutbolPartidoDetallePage() {
         </div>
       )}
 
-      {/* MODAL GESTIÓN DE PAGO Y SUBIDA DE COMPROBANTES */}
+      {/* MODAL PAGO ORGANIZADOR */}
       {modalPagoOpen && (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" onClick={() => setModalPagoOpen(false)}>
           <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
@@ -1174,7 +949,7 @@ export default function FutbolPartidoDetallePage() {
                 <h3 className="text-lg font-black text-slate-900">Gestión de Pago de Reserva</h3>
                 <p className="text-xs font-semibold text-slate-500">Cancha: {partido.court?.name}</p>
               </div>
-              <button onClick={() => setModalPagoOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1">✕</button>
+              <button onClick={() => setModalPagoOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1 cursor-pointer">✕</button>
             </div>
 
             <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold">
@@ -1192,38 +967,11 @@ export default function FutbolPartidoDetallePage() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <h4 className="text-xs font-black uppercase text-slate-900">Comprobantes Registrados ({calculosPagoReserva.historial.length}):</h4>
-              <div className="space-y-2 max-h-32 overflow-y-auto">
-                {calculosPagoReserva.historial.length === 0 ? (
-                  <p className="text-xs text-slate-400 font-medium text-center py-2 bg-slate-50 rounded-xl">Aún no hay comprobantes registrados.</p>
-                ) : (
-                  calculosPagoReserva.historial.map((ab, idx) => (
-                    <div key={ab.id || idx} className="bg-slate-50 border p-2.5 rounded-xl flex justify-between items-center text-xs">
-                      <div>
-                        <p className="font-black text-slate-900">{ab.user_name || "Comprobante"}</p>
-                        <p className="text-[10px] text-slate-500 font-bold uppercase">{ab.method} • Ref: {ab.reference}</p>
-                      </div>
-                      <span className="font-black text-slate-900">${parseFloat(ab.amount || 0).toFixed(2)}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="bg-emerald-50/70 border border-emerald-200 p-4 rounded-2xl space-y-3 text-xs font-bold">
+            <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl space-y-3 text-xs font-bold">
               <h4 className="font-black text-emerald-950 uppercase">+ Adjuntar Nuevo Comprobante / Abono</h4>
-
               <div>
                 <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Monto que Pagas ($)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={formPago.monto}
-                  onChange={(e) => setFormPago({ ...formPago, monto: e.target.value })}
-                  className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-black text-slate-900 outline-none"
-                  placeholder="Ej. 11.00"
-                />
+                <input type="number" step="0.01" value={formPago.monto} onChange={(e) => setFormPago({ ...formPago, monto: e.target.value })} className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-black text-slate-900 outline-none" placeholder="Ej. 11.00" />
               </div>
 
               <div>
@@ -1234,14 +982,7 @@ export default function FutbolPartidoDetallePage() {
                     { id: "zelle", label: "🇺🇸 Zelle" },
                     { id: "efectivo", label: "💵 En Sitio" },
                   ].map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => setFormPago({ ...formPago, metodoPago: m.id })}
-                      className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border transition-all ${
-                        formPago.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-white text-slate-600 border-slate-200"
-                      }`}
-                    >
+                    <button key={m.id} type="button" onClick={() => setFormPago({ ...formPago, metodoPago: m.id })} className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase border cursor-pointer ${formPago.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-white text-slate-600 border-slate-200"}`}>
                       {m.label}
                     </button>
                   ))}
@@ -1250,49 +991,18 @@ export default function FutbolPartidoDetallePage() {
 
               {formPago.metodoPago !== "efectivo" && (
                 <>
-                  <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Número de Referencia</label>
-                    <input
-                      type="text"
-                      placeholder="Ej. #123456"
-                      value={formPago.numReferencia}
-                      onChange={(e) => setFormPago({ ...formPago, numReferencia: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">Foto / Captura del Comprobante</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleSeleccionarImagen}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-slate-900 file:text-[#00FF9D]"
-                    />
-
-                    {formPago.previewComprobante && (
-                      <div className="mt-2 relative rounded-xl overflow-hidden border border-slate-200 max-h-28 bg-slate-950 flex items-center justify-center">
-                        <img src={formPago.previewComprobante} alt="Preview Comprobante" className="max-h-28 object-contain" />
-                      </div>
-                    )}
-                  </div>
+                  <input type="text" placeholder="Número de Referencia" value={formPago.numReferencia} onChange={(e) => setFormPago({ ...formPago, numReferencia: e.target.value })} className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none" />
+                  <input type="file" accept="image/*" onChange={handleSeleccionarImagen} className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:bg-slate-900 file:text-[#00FF9D]" />
                 </>
               )}
 
-              <button
-                type="button"
-                onClick={enviarAbonoExtra}
-                disabled={enviandoPago}
-                className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-xl shadow-md mt-1 cursor-pointer"
-              >
-                {enviandoPago ? "Enviando Comprobante..." : "+ Enviar Comprobante Adicional"}
+              <button type="button" onClick={enviarAbonoExtra} disabled={enviandoPago} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shadow-md cursor-pointer">
+                {enviandoPago ? "Enviando..." : "+ Enviar Comprobante Adicional"}
               </button>
             </div>
-
           </div>
         </div>
       )}
-
     </div>
   );
 }
