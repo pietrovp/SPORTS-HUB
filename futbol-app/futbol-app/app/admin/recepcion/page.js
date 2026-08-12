@@ -141,7 +141,9 @@ function CustomDarkDatePicker({ value, onChange }) {
     </div>
   );
 }
-
+function horarioYaPaso(dateObj) {
+  return dateObj.getTime() <= Date.now();
+}
 export default function RecepcionElite() {
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
@@ -1991,6 +1993,7 @@ export default function RecepcionElite() {
                             const fechaHoraBDSlot = `${slotFechaStr}T${hStr}:${mStr}:00-04:00`;
                             
                             const targetTime = obtenerEpoch(fechaHoraBDSlot);
+                            const bloqueVencido = targetTime <= Date.now();
 
                             const partidoOcupado = partidosPeriodo.find((m) => {
                               if (m.court_id !== col.cancha.id) return false;
@@ -2098,46 +2101,46 @@ export default function RecepcionElite() {
                             }
 
                             if (lockOcupado) {
-                              const esMiBloqueo = user && lockOcupado.user_id === user.id;
-                              return (
-                                <div key={col.keyCol} className="h-full w-full rounded-xl p-1.5 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
-                                  <span className="text-lg animate-pulse">⏳</span>
-                                  <p className="text-[10px] sm:text-[11px] font-black text-amber-700 mt-0.5 leading-tight">En proceso...</p>
-                                  <p className="text-[8px] font-bold text-amber-800/80 mt-0.5">
-                                    {esMiBloqueo ? "Tu reserva POS en curso" : "otro usuario esta reservando"}
-                                  </p>
-                                </div>
-                              );
-                            }
+  const esMiBloqueo = user && lockOcupado.user_id === user.id;
 
-                            return (
-                              <button
-                                key={col.keyCol}
-                                onClick={() => abrirModalAgendarPOS(col.cancha, fechaHoraBDSlot, bloque.etiqueta, precioUSD)}
-                                className="h-full w-full hover:bg-emerald-50/90 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300/80 hover:border-emerald-500 transition-all shadow-2xs relative cursor-pointer opacity-80 hover:opacity-100"
-                              >
-                                {esPromoAplicada && (
-                                  <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded shadow-sm">
-                                    Promo
-                                  </span>
-                                )}
+  return (
+    <div key={col.keyCol}>
+      {/* Tu celda amarilla existente */}
+    </div>
+  );
+}
 
-                                <span className="text-[10px] font-black text-emerald-700 transition-transform mb-1">
-                                  + Agendar
-                                </span>
+if (bloqueVencido) {
+  return (
+    <div
+      key={col.keyCol}
+      className="h-[88px] w-[calc(100%-8px)] m-1 rounded-xl p-1.5 flex flex-col items-center justify-center border-2 border-slate-200 bg-slate-100 text-center cursor-not-allowed opacity-80"
+    >
+      <span className="text-lg">⏰</span>
+      <p className="text-[10px] sm:text-[11px] font-black text-slate-500 mt-0.5 leading-tight">
+        Horario finalizado
+      </p>
+      <p className="text-[8px] font-bold text-slate-400 mt-0.5">
+        Ya no disponible
+      </p>
+    </div>
+  );
+}
 
-                                {esPromoAplicada ? (
-                                  <div className="flex flex-col items-center">
-                                    <div className="flex items-center gap-1">
-                                      <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
-                                      <span className="text-[10px] sm:text-[11px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <span className="text-[10px] font-bold text-slate-500">${precioUSD.toFixed(2)}</span>
-                                )}
-                              </button>
-                            );
+return (
+  <button
+    key={col.keyCol}
+    onClick={() => abrirModalAgendarPOS(
+      col.cancha,
+      fechaHoraBDSlot,
+      bloque.etiqueta,
+      precioUSD
+    )}
+  >
+    + Agendar
+  </button>
+);
+
                           })}
                         </div>
                       );

@@ -57,7 +57,8 @@ export default function MiClubConfigPage() {
   const defaultCanchaForm = {
     name: "Pista 1",
     court_number: 1,
-    sport_type: "padel", // NUEVO: Clasificación por Deporte
+    sport_type: "padel",
+    capacity: 4, // <-- NUEVO: Capacidad por defecto (4 para Pádel)
     surface_type: "Cristal",
     court_type: "indoor",
     has_lighting: true,
@@ -287,6 +288,7 @@ export default function MiClubConfigPage() {
       name: cancha.name,
       court_number: cancha.court_number,
       sport_type: cancha.sport_type || "padel",
+      capacity: cancha.capacity || (cancha.sport_type === "futbol" ? 10 : 4), // <-- NUEVO: Recuperar capacidad
       surface_type: cancha.surface_type || "Sintético",
       court_type: cancha.court_type || "outdoor",
       has_lighting: cancha.has_lighting ?? true,
@@ -331,7 +333,8 @@ export default function MiClubConfigPage() {
         club_id: club.id,
         name: formCancha.name.trim(),
         court_number: Number(formCancha.court_number) || canchas.length + 1,
-        sport_type: formCancha.sport_type, // NUEVO
+        sport_type: formCancha.sport_type,
+        capacity: Number(formCancha.capacity), // <-- NUEVO: Guardar la capacidad
         surface_type: formCancha.surface_type,
         court_type: formCancha.court_type,
         has_lighting: formCancha.has_lighting,
@@ -584,7 +587,7 @@ export default function MiClubConfigPage() {
                         </div>
                         <h4 className="font-black text-slate-900 text-sm">{c.name}</h4>
                         <span className="text-[10px] font-bold text-slate-400 uppercase">
-                          {c.court_type} • {c.surface_type}
+                          {c.sport_type === "futbol" ? `Capacidad: ${c.capacity} JUGADORES` : `${c.court_type} • ${c.surface_type}`}
                         </span>
                       </div>
                       
@@ -651,7 +654,7 @@ export default function MiClubConfigPage() {
                     <button
                       key={dep.id}
                       type="button"
-                      onClick={() => setFormCancha({ ...formCancha, sport_type: dep.id })}
+                      onClick={() => setFormCancha({ ...formCancha, sport_type: dep.id, capacity: dep.id === "futbol" ? 10 : 4 })}
                       className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase border transition-all ${
                         formCancha.sport_type === dep.id
                           ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm"
@@ -676,34 +679,54 @@ export default function MiClubConfigPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* OPCIONES ESPECÍFICAS SEGÚN EL DEPORTE */}
+              {formCancha.sport_type === "futbol" ? (
                 <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Tipo</label>
+                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
+                    Capacidad Oficial (Tamaño de la Cancha)
+                  </label>
                   <select
-                    value={formCancha.court_type}
-                    onChange={(e) => setFormCancha({ ...formCancha, court_type: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
+                    value={formCancha.capacity}
+                    onChange={(e) => setFormCancha({ ...formCancha, capacity: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none text-slate-900"
                   >
-                    <option value="indoor">Indoor (Cubierta)</option>
-                    <option value="outdoor">Outdoor (Descubierta)</option>
-                    <option value="covered">Semi-cubierta</option>
+                    <option value={10}>10 Jugadores (5 vs 5)</option>
+                    <option value={12}>12 Jugadores (6 vs 6)</option>
+                    <option value={14}>14 Jugadores (7 vs 7)</option>
+                    <option value={18}>18 Jugadores (9 vs 9)</option>
+                    <option value={22}>22 Jugadores (11 vs 11)</option>
                   </select>
                 </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Tipo</label>
+                    <select
+                      value={formCancha.court_type}
+                      onChange={(e) => setFormCancha({ ...formCancha, court_type: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
+                    >
+                      <option value="indoor">Indoor (Cubierta)</option>
+                      <option value="outdoor">Outdoor (Descubierta)</option>
+                      <option value="covered">Semi-cubierta</option>
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Superficie</label>
-                  <select
-                    value={formCancha.surface_type}
-                    onChange={(e) => setFormCancha({ ...formCancha, surface_type: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
-                  >
-                    <option value="Cristal">Cristal (Pádel)</option>
-                    <option value="cesped_sintetico">Césped Sintético</option>
-                    <option value="grama_natural">Grama Natural</option>
-                    <option value="cemento">Cemento / Parquet</option>
-                  </select>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Superficie</label>
+                    <select
+                      value={formCancha.surface_type}
+                      onChange={(e) => setFormCancha({ ...formCancha, surface_type: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
+                    >
+                      <option value="Cristal">Cristal (Pádel)</option>
+                      <option value="cesped_sintetico">Césped Sintético</option>
+                      <option value="grama_natural">Grama Natural</option>
+                      <option value="cemento">Cemento / Parquet</option>
+                    </select>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* BLOQUES DE PRECIO */}
               <div className="space-y-2 pt-2 border-t border-slate-100">

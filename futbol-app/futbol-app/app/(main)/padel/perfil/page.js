@@ -5,6 +5,29 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import PartidoPadelCard from "@/components/padel/PartidoPadelCard";
 
+// Función para invertir el marcador si el jugador perdió
+function formatearMarcador(scoreStr, esVictoria) {
+  if (!scoreStr) return "Resultado Registrado";
+  if (esVictoria) return scoreStr;
+
+  return scoreStr
+    .split(",")
+    .map((set) => {
+      return set
+        .trim()
+        .split(" ")
+        .map((parte) => {
+          const numeros = parte.split("-");
+          if (numeros.length === 2) {
+            return `${numeros[1]}-${numeros[0]}`;
+          }
+          return parte;
+        })
+        .join(" ");
+    })
+    .join(", ");
+}
+
 const TODAS_CATEGORIAS = [
   { value: "7ma", label: "7ma Categoría" },
   { value: "6ta", label: "6ta Categoría" },
@@ -63,7 +86,7 @@ const LABELS = {
 };
 
 const NIVEL_LABELS = {
-  "7ma": { label: "7ma Categoría", desc: "Nivel de iniciación o jugador de club con conocimientos básicos y peloteos en desarrollo." },
+  "7ma": { label: "7ma Categoría", desc: "Conoces reglas básicas, mantienes peloteos lentos sin mucha consistencia." },
   "6ta": { label: "6ta Categoría", desc: "Juegas con regularidad, dominas saques y voleas básicas." },
   "5ta": { label: "5ta Categoría", desc: "Nivel intermedio-avanzado, controlas pared de fondo y dirección." },
   "4ta": { label: "4ta Categoría", desc: "Alto nivel técnico y táctico, participas en torneos locales." },
@@ -177,7 +200,7 @@ function categoriaDesdeRating(r) {
 
 function getInfoRating(ratingVal) {
   const r = Number(ratingVal) || 1.0;
-  if (r < 3.0) return { catActual: "7ma", nextCat: "6ta", floor: 1.0, ceiling: 3.0 };
+  if (r < 3.0) return { catActual: "7ma", nextCat: "6ta", floor: 2.0, ceiling: 3.0 };
   if (r < 4.0) return { catActual: "6ta", nextCat: "5ta", floor: 3.0, ceiling: 4.0 };
   if (r < 4.8) return { catActual: "5ta", nextCat: "4ta", floor: 4.0, ceiling: 4.8 };
   if (r < 5.5) return { catActual: "4ta", nextCat: "3era", floor: 4.8, ceiling: 5.5 };
@@ -222,6 +245,7 @@ function formatFechaGrafico(fechaStr) {
   });
 }
 
+// 📈 TRACKER GRÁFICO (CORREGIDO TOOLTIP CON FOREIGN-OBJECT Y MARCADOR INVERTIDO)
 function RatingTrackerChart({ partidosJugados, currentRating }) {
   const [filtro, setFiltro] = useState("10"); 
   const [pointSpacing, setPointSpacing] = useState(65);
@@ -261,7 +285,7 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
         change: delta,
         label: `Partido ${idx + 1}`,
         esGanador: m.esGanador,
-        score: m.score_text || "Resultado Registrado",
+        score: formatearMarcador(m.score_text, m.esGanador),
         dateStr: formatFechaGrafico(m.scheduled_at),
       });
     });
@@ -322,7 +346,7 @@ function RatingTrackerChart({ partidosJugados, currentRating }) {
           </span>
           <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2 mt-0.5">
             <span>Evolución de Rating</span>
-            <span className="text-xs font-bold text-slate-400">({historialCompleto.length - 1} partidos rankeados)</span>
+            <span className="text-xs font-bold text-slate-400\">({historialCompleto.length - 1} partidos rankeados)</span>
           </h3>
         </div>
 
@@ -768,7 +792,7 @@ export default function PadelPerfilPage() {
 
   const estadoCat = padelProfile?.estado_categoria || "pendiente";
   const catOficialKey = padelProfile?.categoria_oficial || categoriaDesdeRating(ratingActual);
-  const catOficialLabel = LABELS.categoria[catOficialKey] || "7ma";
+  const catOficialLabel = LABELS.categoria[catOficialKey] || LABELS.categoria["7ma"];
   const tieneSolicitudPendiente = estadoCat === "pendiente";
 
   const TOTAL_STEPS = ONBOARDING_STEPS.length + 1;
@@ -1064,7 +1088,7 @@ export default function PadelPerfilPage() {
                         </div>
                         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl px-4 py-2.5 text-center shrink-0 shadow-inner">
                           <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Marcador</span>
-                          <span className="text-base sm:text-lg font-black text-white tracking-wider block">{match.score_text || "6-4, 6-3"}</span>
+                          <span className="text-base sm:text-lg font-black text-white tracking-wider block">{formatearMarcador(match.score_text, esVictoria) || "6-4, 6-3"}</span>
                         </div>
                       </div>
                     );
