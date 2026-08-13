@@ -16,7 +16,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 // ==========================================
-// FUNCIONES DE FECHA FORZADAS A ZONA VENEZUELA
+// FUNCIONES AUXILIARES Y DE FECHA (ZONA CARACAS)
 // ==========================================
 function formatFechaCompleta(fechaStr) {
   if (!fechaStr) return "";
@@ -40,7 +40,18 @@ function formatHora12(fechaStr) {
   }).toUpperCase();
 }
 
-// CÁLCULO BLINDADO DE PRECIO POR CUPO (PREVIENE DOBLE DIVISIÓN)
+function obtenerFormatoFutbol(capacity) {
+  const cap = parseInt(capacity, 10);
+  if (cap === 10) return "Fútbol 5";
+  if (cap === 12) return "Fútbol 6";
+  if (cap === 14) return "Fútbol 7";
+  if (cap === 16) return "Fútbol 8";
+  if (cap === 18) return "Fútbol 9";
+  if (cap === 22) return "Fútbol 11";
+  if (cap > 0) return `Fútbol ${Math.floor(cap / 2)}`;
+  return "Fútbol";
+}
+
 function obtenerPrecioCupoReal(partido) {
   if (!partido) return 0;
   
@@ -49,18 +60,15 @@ function obtenerPrecioCupoReal(partido) {
   const feeDB = Number(partido.app_fee) || (basePriceDB * 0.10);
   const pricePerPlayerDB = Number(partido.price_per_player) || 0;
 
-  // Si el precio base en la BD es el correcto de la cancha completa (>= $5)
   if (basePriceDB >= 5) {
     const totalConFee = basePriceDB + feeDB;
     return totalConFee / capBD;
   }
 
-  // Si en la BD ya viene el precio por jugador correcto (>= $0.50)
   if (pricePerPlayerDB >= 0.50) {
     return pricePerPlayerDB;
   }
 
-  // Si la fila en la BD es antigua/corrupta (< $2), forzamos cálculo con el precio normal
   const precioNormalCancha = Number(partido.court?.price_normal) || 10;
   const totalEstimado = precioNormalCancha * 1.10;
   return totalEstimado / capBD;
@@ -274,21 +282,66 @@ export default function FutbolPartidoDetallePage() {
 
   const cuposTotales = partido?.court?.capacity || 12; 
   const cuposMinimos = 6;
-  const cuposOcupados = jugadores.length;
-  const lleno = cuposOcupados >= cuposTotales;
 
-  // CÁLCULO DE PRECIO DEL CUPO INDIVIDUAL CORREGIDO
+  // CÁLCULO DE PRECIO DEL CUPO INDIVIDUAL
   const costoCupoIndividual = useMemo(() => {
     if (esPrivado || esCreador) return 0;
     return obtenerPrecioCupoReal(partido);
   }, [partido, esPrivado, esCreador]);
-  
-  const miJugador = useMemo(() => jugadores.find((j) => j.user_id === usuarioActual?.id), [jugadores, usuarioActual]);
-  const estaInscrito = !!miJugador || inscrito;
 
-  const equipo1 = useMemo(() => jugadores.filter((j) => j.equipo === 1), [jugadores]);
-  const equipo2 = useMemo(() => jugadores.filter((j) => j.equipo === 2), [jugadores]);
-  const sinAsignar = useMemo(() => jugadores.filter((j) => !equiposList.includes(j.equipo)), [jugadores, equiposList]);
+  // FILTRAR JUGADORES CONFIRMADOS Y PENDIENTES DE PAGO
+  const { jugadoresConfirmados, jugadoresPendientes } = useMemo(() => {
+    const historial = Array.isArray(partido?.payments_history) ? partido.payments_history : [];
+
+    const confirmados = [];
+    const pendientes = [];
+
+    jugadores.forEach((j) => {
+      if (j.user_id === partido?.created_by || esPrivado) {
+        confirmados.push({ ...j, pagoStatus: "aprobado" });
+        return;
+      }
+
+      const abonoUser = historial.find((a) => a.user_id === j.user_id);
+      
+      if (abonoUser) {
+        if (abonoUser.status === "aprobado" || abonoUser.status === "liquidado" || abonoUser.status === "pago_en_sitio") {
+          confirmados.push({ ...j, pagoStatus: "aprobado" });
+        } else if (abonoUser.status === "pendiente" || abonoUser.status === "pendiente_aprobacion") {
+          pendientes.push({ ...j, pagoStatus: "pendiente", abono: abonoUser });
+        } else {
+          pendientes.push({ ...j, pagoStatus: "rechazado", abono: abonoUser });
+        }
+      } else {
+        confirmados.push({ ...j, pagoStatus: "aprobado" });
+      }
+    });
+
+    return { jugadoresConfirmados: confirmados, jugadoresPendientes: pendientes };
+  }, [jugadores, partido, esPrivado]);
+
+  const miJugadorInfo = useMemo(() => {
+    return jugadores.find((j) => j.user_id === usuarioActual?.id);
+  }, [jugadores, usuarioActual]);
+
+  const miEstadoPago = useMemo(() => {
+    if (!usuarioActual || !partido) return null;
+    if (esCreador || esPrivado) return "aprobado";
+
+    const historial = Array.isArray(partido.payments_history) ? partido.payments_history : [];
+    const miAbono = historial.find((a) => a.user_id === usuarioActual.id);
+    
+    if (!miAbono) return miJugadorInfo ? "aprobado" : null;
+    return miAbono.status;
+  }, [usuarioActual, partido, esCreador, esPrivado, miJugadorInfo]);
+
+  const estaInscrito = !!miJugadorInfo || inscrito;
+  const cuposOcupados = jugadoresConfirmados.length;
+  const lleno = cuposOcupados >= cuposTotales;
+
+  const equipo1 = useMemo(() => jugadoresConfirmados.filter((j) => j.equipo === 1), [jugadoresConfirmados]);
+  const equipo2 = useMemo(() => jugadoresConfirmados.filter((j) => j.equipo === 2), [jugadoresConfirmados]);
+  const sinAsignar = useMemo(() => jugadoresConfirmados.filter((j) => !equiposList.includes(j.equipo)), [jugadoresConfirmados, equiposList]);
 
   const partidoIniciado = partido?.status === "en_curso" || partido?.status === "jugado";
   const modoDnd = partido?.status === "jugado" ? "resultado" : partido?.status === "en_curso" ? "jugando" : "armar";
@@ -315,7 +368,7 @@ export default function FutbolPartidoDetallePage() {
 
   const tablaPosiciones = useMemo(() => {
     return equiposList.map((eqNum) => {
-      const integrantes = jugadores.filter(j => j.equipo === eqNum);
+      const integrantes = jugadoresConfirmados.filter(j => j.equipo === eqNum);
       const victorias = wins[eqNum] || 0;
       const golesTotales = integrantes.reduce((acc, j) => acc + (Number(goles[j.id]) || Number(j.goles) || 0), 0);
       const mediaPromedio = promedioMedia(integrantes);
@@ -332,7 +385,7 @@ export default function FutbolPartidoDetallePage() {
       if (b.golesTotales !== a.golesTotales) return b.golesTotales - a.golesTotales;
       return b.mediaPromedio - a.mediaPromedio;
     });
-  }, [equiposList, jugadores, wins, goles]);
+  }, [equiposList, jugadoresConfirmados, wins, goles]);
 
   const resultadoInfo = useMemo(() => {
     if (partido?.status !== "jugado") return null;
@@ -345,8 +398,8 @@ export default function FutbolPartidoDetallePage() {
     else if (g2 > g1) equipoGanador = 2;
 
     let mvp = null;
-    if (jugadores.length > 0) {
-      const ordenadosPorGoles = [...jugadores].sort((a, b) => (Number(goles[b.id]) || Number(b.goles) || 0) - (Number(goles[a.id]) || Number(a.goles) || 0));
+    if (jugadoresConfirmados.length > 0) {
+      const ordenadosPorGoles = [...jugadoresConfirmados].sort((a, b) => (Number(goles[b.id]) || Number(b.goles) || 0) - (Number(goles[a.id]) || Number(a.goles) || 0));
       const maxGoles = Number(goles[ordenadosPorGoles[0]?.id]) || Number(ordenadosPorGoles[0]?.goles) || 0;
       if (maxGoles > 0) {
         mvp = { ...ordenadosPorGoles[0], golesMvp: maxGoles };
@@ -354,7 +407,7 @@ export default function FutbolPartidoDetallePage() {
     }
 
     return { g1, g2, equipoGanador, mvp };
-  }, [partido, equipo1, equipo2, jugadores, goles]);
+  }, [partido, equipo1, equipo2, jugadoresConfirmados, goles]);
 
   useEffect(() => {
     obtenerTasaBCV();
@@ -364,6 +417,7 @@ export default function FutbolPartidoDetallePage() {
     const channel = supabase
       .channel(`realtime-match-players-${matchId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "match_players", filter: `match_id=eq.${matchId}` }, () => cargarDatos())
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `id=eq.${matchId}` }, () => cargarDatos())
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -397,7 +451,7 @@ export default function FutbolPartidoDetallePage() {
         .from("matches")
         .select(`
           id, created_by, scheduled_at, status, is_private, price_per_player, total_price, app_fee, match_type, score_text, winner_team, payment_status, payments_history, payment_proof_urls,
-          club:clubs(name, city, address, image_url),
+          club:clubs(name, city, address, phone, amenities),
           court:courts(name, sport_type, capacity, price_normal)
         `)
         .eq("id", matchId)
@@ -549,19 +603,19 @@ export default function FutbolPartidoDetallePage() {
       if (parts[1] !== "null") targetEquipo = parseInt(parts[1], 10);
     }
 
-    const jugador = jugadores.find((j) => j.id === active.id);
+    const jugador = jugadoresConfirmados.find((j) => j.id === active.id);
     if (!jugador || jugador.equipo === targetEquipo) return;
     cambiarEquipo(jugador.id, targetEquipo);
   }
 
   async function sortearEquipos() {
-    if (jugadores.length < cuposMinimos) return setMensaje(`Necesitas al menos ${cuposMinimos} jugadores.`);
+    if (jugadoresConfirmados.length < cuposMinimos) return setMensaje(`Necesitas al menos ${cuposMinimos} jugadores confirmados.`);
     setProcesando(true);
-    const { equipo1: eq1Ids, equipo2: eq2Ids } = balancearEquipos(jugadores);
+    const { equipo1: eq1Ids, equipo2: eq2Ids } = balancearEquipos(jugadoresConfirmados);
 
     const updates = [
-      ...eq1Ids.map((id) => supabase.from("match_players").update({ team: "A" }).match({ match_id: matchId, user_id: jugadores.find(x => x.id === id)?.user_id })),
-      ...eq2Ids.map((id) => supabase.from("match_players").update({ team: "B" }).match({ match_id: matchId, user_id: jugadores.find(x => x.id === id)?.user_id })),
+      ...eq1Ids.map((id) => supabase.from("match_players").update({ team: "A" }).match({ match_id: matchId, user_id: jugadoresConfirmados.find(x => x.id === id)?.user_id })),
+      ...eq2Ids.map((id) => supabase.from("match_players").update({ team: "B" }).match({ match_id: matchId, user_id: jugadoresConfirmados.find(x => x.id === id)?.user_id })),
     ];
     await Promise.all(updates);
 
@@ -582,7 +636,7 @@ export default function FutbolPartidoDetallePage() {
     setProcesando(true);
 
     await Promise.all(
-      jugadores.map((j) =>
+      jugadoresConfirmados.map((j) =>
         supabase.from("match_players").update({ goals: Number(goles[j.id]) || 0 }).match({ match_id: matchId, user_id: j.user_id })
       )
     );
@@ -608,7 +662,7 @@ export default function FutbolPartidoDetallePage() {
     await supabase.from("matches").update({ status: "jugado", winner_team: ganadorFinal, score_text: scorePayload }).eq("id", matchId);
 
     try {
-      const userIds = jugadores.map(j => j.user_id).filter(Boolean);
+      const userIds = jugadoresConfirmados.map(j => j.user_id).filter(Boolean);
       if (userIds.length > 0) {
         const { data: dbProfiles } = await supabase.from("futbol_profiles").select("*").in("id", userIds);
         const profilesMap = {};
@@ -617,7 +671,7 @@ export default function FutbolPartidoDetallePage() {
         const { data: catLogros } = await supabase.from("logros").select("*");
         const userLogrosToInsert = [];
 
-        for (const j of jugadores) {
+        for (const j of jugadoresConfirmados) {
           if (!j.user_id) continue;
           const currentP = profilesMap[j.user_id] || { id: j.user_id, partidos_jugados: 0, goles: 0, victorias: 0, derrotas: 0, rating: 64 };
 
@@ -694,7 +748,6 @@ export default function FutbolPartidoDetallePage() {
     await cargarDatos();
   }
 
-  // BOTÓN UNIRME AL PARTIDO -> DISPARA LA PASARELA DE PAGO O LA INSCRIPCIÓN
   const handleClicUnirme = () => {
     if (!usuarioActual) return router.push("/login");
 
@@ -770,7 +823,6 @@ export default function FutbolPartidoDetallePage() {
 
       const historialNuevo = [...(partido.payments_history || []), nuevoAbonoCupo];
 
-      // 1. Guardar pago en el historial del partido
       const { error: errMatch } = await supabase
         .from("matches")
         .update({ 
@@ -781,10 +833,8 @@ export default function FutbolPartidoDetallePage() {
 
       if (errMatch) throw errMatch;
 
-      // 2. Determinar equipo A o B para mantener balance
       const teamLetra = (equipo1.length <= equipo2.length) ? "A" : "B";
 
-      // 3. Unir al jugador en match_players usando la regla 'A' o 'B'
       const { error: errPlayer } = await supabase
         .from("match_players")
         .insert({
@@ -798,7 +848,7 @@ export default function FutbolPartidoDetallePage() {
 
       setInscrito(true);
       setModalUnirmePagoOpen(false);
-      setMensaje("¡Te has unido al partido con éxito! Comprobante enviado para validación.");
+      setMensaje("¡Comprobante enviado con éxito! Tu cupo está en revisión de pago.");
       await cargarDatos();
 
     } catch (err) {
@@ -900,54 +950,124 @@ export default function FutbolPartidoDetallePage() {
     <div className="min-h-screen bg-gray-50/50 pb-32 pt-4 md:pt-8 font-sans">
       <main className="max-w-3xl mx-auto px-4 flex flex-col gap-6">
         
-        {/* HERO BANNER */}
-        <div className="relative h-64 md:h-80 w-full bg-gray-900 rounded-3xl overflow-hidden shadow-md border border-gray-100">
-          <img src={partido.club?.image_url || "https://images.unsplash.com/photo-1518605368461-1ee7e53f090b"} alt="Cancha" className="absolute inset-0 w-full h-full object-cover opacity-60" />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0B0C15] via-[#0B0C15]/40 to-transparent"></div>
-          
-          <div className="absolute top-4 left-4 z-10">
-            <Link href="/futbol" className="w-10 h-10 bg-white/10 backdrop-blur-md rounded-full flex items-center justify-center text-white hover:bg-white/20 transition-colors">
+        {/* HERO BANNER CON INFORMACIÓN COMPLETA DE LA CANCHA Y CLUB */}
+        <div className="relative w-full min-h-[280px] md:min-h-[320px] bg-gray-900 rounded-3xl overflow-hidden shadow-xl border border-gray-100 flex flex-col justify-between p-6 sm:p-8">
+          <img
+            src={partido.club?.image_url || "https://images.unsplash.com/photo-1518605368461-1ee7e53f090b"}
+            alt={partido.court?.name || "Cancha"}
+            className="absolute inset-0 w-full h-full object-cover opacity-40"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0B0C15] via-[#0B0C15]/60 to-black/30"></div>
+
+          {/* BARRA SUPERIOR DEL BANNER */}
+          <div className="relative z-10 flex items-center justify-between gap-2">
+            <Link href="/futbol" className="w-10 h-10 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all border border-white/10">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7"></path></svg>
             </Link>
-          </div>
 
-          <div className="absolute top-4 right-4 z-10 flex gap-2">
-            {esPrivado && (
-              <span className="bg-white/95 text-indigo-800 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-md flex items-center gap-1.5">
-                Privado
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="bg-[#00FF9D]/20 text-[#00FF9D] text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full border border-[#00FF9D]/30 backdrop-blur-md">
+                ⚽ {obtenerFormatoFutbol(partido.court?.capacity)} ({partido.court?.capacity || 12} Jug.)
               </span>
-            )}
-            <span className={`bg-white/95 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-md ${
-              partido?.status === "jugado" ? "text-gray-500" : partido?.status === "en_curso" ? "text-blue-600" : "text-emerald-800"
-            }`}>
-              {partido?.status === "jugado" ? "Finalizado" : partido?.status === "en_curso" ? "En Curso" : costoCupoIndividual === 0 ? "Gratis" : `$${costoCupoIndividual.toFixed(2)} USD`}
-            </span>
+              {esPrivado && (
+                <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full border border-indigo-500/30 backdrop-blur-md">
+                  🔒 Privado
+                </span>
+              )}
+              <span className={`text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-md backdrop-blur-md ${
+                partido?.status === "jugado" ? "bg-gray-800 text-gray-300" : partido?.status === "en_curso" ? "bg-blue-600 text-white animate-pulse" : "bg-white text-emerald-900"
+              }`}>
+                {partido?.status === "jugado" ? "Finalizado" : partido?.status === "en_curso" ? "En Curso" : costoCupoIndividual === 0 ? "Gratis" : `$${costoCupoIndividual.toFixed(2)} USD / Cupo`}
+              </span>
+            </div>
           </div>
 
-          <div className="absolute bottom-6 left-4 right-4 md:left-8 z-10">
-            <h1 className="text-3xl md:text-5xl font-black text-white tracking-tight leading-none drop-shadow-md">{partido.court?.name}</h1>
-            <p className="text-white text-sm font-medium mt-2">📍 {partido.club?.city} • {partido.club?.name}</p>
+          {/* INFORMACIÓN DEL COMPLEJO DENTRO DEL BANNER */}
+          <div className="relative z-10 space-y-2 mt-auto pt-6">
+            <span className="bg-[#00FF9D] text-slate-950 text-[9px] font-black uppercase px-2.5 py-1 rounded-md shadow-xs inline-block">
+              📍 {partido.club?.name || "Complejo Deportivo"}
+            </span>
+
+            <h1 className="text-3xl md:text-5xl font-black text-white tracking-tight leading-none drop-shadow-md">
+              {partido.court?.name}
+            </h1>
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-bold text-slate-300 pt-1">
+              <span>📍 {partido.club?.address || "Dirección en sede"}, {partido.club?.city}</span>
+              {(partido.club?.phone || partido.club?.telefono) && (
+                <span className="text-[#00FF9D] font-black">📞 Recepción: {partido.club.phone || partido.club.telefono}</span>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* ORGANIZADOR BANNER DE PAGO & CANCELACIÓN */}
+        {/* FEEDBACK DE PAGO DE CUPO INDIVIDUAL O RESERVA */}
+        {estaInscrito && !esCreador && !esPrivado && (
+          <div>
+            {miEstadoPago === "pendiente" || miEstadoPago === "pendiente_aprobacion" ? (
+              <div className="bg-amber-50 border-2 border-amber-300 p-4 rounded-3xl flex items-center gap-3.5 shadow-xs">
+                <span className="text-3xl animate-pulse shrink-0">⏳</span>
+                <div>
+                  <h4 className="font-black text-amber-950 text-xs sm:text-sm uppercase tracking-wide">Tu comprobante está en revisión</h4>
+                  <p className="text-xs font-semibold text-amber-800 mt-0.5">
+                    Enviaste el pago de tu cupo (<strong>${costoCupoIndividual.toFixed(2)} USD</strong>). Una vez que recepción lo apruebe, ingresarás formalmente a la alineación oficial.
+                  </p>
+                </div>
+              </div>
+            ) : miEstadoPago === "aprobado" || miEstadoPago === "pago_en_sitio" || miEstadoPago === "liquidado" ? (
+              <div className="bg-emerald-50 border-2 border-emerald-300 p-4 rounded-3xl flex items-center gap-3.5 shadow-xs">
+                <span className="text-3xl shrink-0">✅</span>
+                <div>
+                  <h4 className="font-black text-emerald-950 text-xs sm:text-sm uppercase tracking-wide">¡Tu cupo está 100% Pagado y Aprobado!</h4>
+                  <p className="text-xs font-bold text-emerald-800 mt-0.5">
+                    Tu pago individual ha sido validado correctamente. Ya estás en la alineación oficial del partido.
+                  </p>
+                </div>
+              </div>
+            ) : miEstadoPago === "rechazado" ? (
+              <div className="bg-rose-50 border-2 border-rose-300 p-4 rounded-3xl flex items-center gap-3.5 shadow-xs">
+                <span className="text-3xl shrink-0">❌</span>
+                <div>
+                  <h4 className="font-black text-rose-950 text-xs sm:text-sm uppercase tracking-wide">Comprobante rechazado por recepción</h4>
+                  <p className="text-xs font-bold text-rose-800 mt-0.5">
+                    La recepción no pudo validar tu pago anterior. Intenta unirte nuevamente e ingresa un número de referencia válido.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        {/* ORGANIZADOR Y ESTADO DE RECAUDACIÓN (CLARO PARA PARTIDOS PÚBLICOS) */}
         {esCreador && partido?.status !== "cancelado" && (
           <div className="space-y-4">
             <div className={`p-5 sm:p-6 rounded-3xl border flex flex-col space-y-4 shadow-sm transition-all ${
-              calculosPagoReserva.restante === 0 ? "bg-emerald-50 border-emerald-200 text-emerald-950" : "bg-amber-50/80 border-amber-200 text-amber-950"
+              calculosPagoReserva.restante === 0 ? "bg-emerald-50 border-emerald-200 text-emerald-950" : "bg-blue-50/80 border-blue-200 text-slate-950"
             }`}>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="space-y-1">
-                  <span className="text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-md border bg-amber-100 text-amber-900 border-amber-300">
-                    {calculosPagoReserva.restante === 0 ? "✅ PAGO COMPLETO" : "⚠️ RESERVA PENDIENTE DE PAGO"}
+                  <span className="text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-md border bg-blue-100 text-blue-900 border-blue-300">
+                    {esPrivado ? (calculosPagoReserva.restante === 0 ? "✅ PAGO COMPLETO" : "⚠️ RESERVA PENDIENTE") : "🌐 RECAUDACIÓN PARTIDO PÚBLICO"}
                   </span>
-                  <h4 className="font-black text-base sm:text-lg">Total Reserva: <span className="text-slate-900">${calculosPagoReserva.totalCancha.toFixed(2)} USD</span></h4>
-                  <p className="text-xs font-semibold opacity-90">Abonado: <span className="font-black text-emerald-700">${calculosPagoReserva.totalAbonado.toFixed(2)} USD</span> • Falta: <span className="font-black text-rose-600">${calculosPagoReserva.restante.toFixed(2)} USD</span></p>
+
+                  <h4 className="font-black text-base sm:text-lg">
+                    {esPrivado ? "Total Reserva: " : "Meta Total de Cancha: "}
+                    <span className="text-slate-900">${calculosPagoReserva.totalCancha.toFixed(2)} USD</span>
+                  </h4>
+
+                  <p className="text-xs font-semibold opacity-90">
+                    Abonado Comunidad: <span className="font-black text-emerald-700">${calculosPagoReserva.totalAbonado.toFixed(2)} USD</span> 
+                    {!esPrivado && (
+                      <span className="text-slate-500 font-bold block sm:inline sm:ml-2">
+                        (A medida que los jugadores se unan, sus cupos de ${costoCupoIndividual.toFixed(2)} irán sumando aquí)
+                      </span>
+                    )}
+                  </p>
                 </div>
 
                 <div className="flex flex-wrap gap-2 shrink-0">
                   <button onClick={() => setModalPagoOpen(true)} className="bg-slate-900 text-[#00FF9D] font-black text-xs uppercase px-4 py-3 rounded-2xl cursor-pointer">
-                    💳 Registrar Pago
+                    💳 Registrar Pago Extra
                   </button>
                   <button onClick={cancelarReservaOrganizador} disabled={procesando} className="bg-rose-500/10 text-rose-700 hover:bg-rose-500 hover:text-white border border-rose-200 font-black text-xs uppercase px-4 py-3 rounded-2xl transition-all cursor-pointer">
                     🚫 Cancelar Reserva
@@ -955,7 +1075,7 @@ export default function FutbolPartidoDetallePage() {
                 </div>
               </div>
 
-              <div className={`p-3 rounded-2xl text-xs font-bold border ${horasHastaPartido < 6 ? "bg-rose-100 text-rose-900 border-rose-200" : "bg-amber-100 text-amber-900 border-amber-200"}`}>
+              <div className={`p-3 rounded-2xl text-xs font-bold border ${horasHastaPartido < 6 ? "bg-rose-100 text-rose-900 border-rose-200" : "bg-blue-100 text-blue-900 border-blue-200"}`}>
                 ⚠️ {horasHastaPartido < 6 ? "Faltan menos de 6h. Si cancelas ahora, tu dinero no será reembolsado." : "Política: Cancelaciones con menos de 6h de anticipación no se reembolsan."}
               </div>
             </div>
@@ -991,6 +1111,34 @@ export default function FutbolPartidoDetallePage() {
             </div>
           </div>
         </div>
+
+        {/* JUGADORES EN PROCESO DE VALIDACIÓN DE PAGO */}
+        {jugadoresPendientes.length > 0 && (
+          <div className="bg-amber-50/70 border border-amber-200 rounded-3xl p-5 space-y-3">
+            <div className="flex justify-between items-center border-b border-amber-200 pb-2">
+              <h4 className="text-xs font-black uppercase text-amber-900 flex items-center gap-1.5">
+                <span>⏳</span> En Validación de Pago ({jugadoresPendientes.length})
+              </h4>
+              <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full">
+                Pendientes por Recepción
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {jugadoresPendientes.map((j) => (
+                <div key={j.id} className="bg-white p-2.5 rounded-2xl border border-amber-200 flex justify-between items-center text-xs font-bold shadow-2xs">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                    <span className="text-slate-900">{j.nombre}</span>
+                  </div>
+                  <span className="text-[10px] font-black text-amber-800 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200">
+                    Comprobante Enviado
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* TABLA DE POSICIONES Y RESULTADOS AL FINALIZAR */}
         {modoDnd === "resultado" && (
@@ -1110,12 +1258,12 @@ export default function FutbolPartidoDetallePage() {
           </div>
         )}
 
-        {/* CONTENEDOR DE JUGADORES Y EQUIPOS */}
+        {/* CONTENEDOR DE JUGADORES CONFIRMADOS EN LA ALINEACIÓN */}
         <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm space-y-6">
           <div className="flex justify-between items-center border-b pb-4">
             <div>
               <h3 className="text-lg font-black text-gray-900">Alineaciones y Equipos</h3>
-              <p className="text-xs font-bold text-gray-400">{cuposOcupados} / {cuposTotales} Jugadores Inscritos</p>
+              <p className="text-xs font-bold text-gray-400">{cuposOcupados} / {cuposTotales} Jugadores Confirmados</p>
             </div>
             {esCreador && esPrivado && modoDnd !== "resultado" && (
               <button onClick={agregarEquipoExtra} className="px-3.5 py-2 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl cursor-pointer">
@@ -1132,14 +1280,14 @@ export default function FutbolPartidoDetallePage() {
                     key={eqNum}
                     id={`equipo-${eqNum}`}
                     titulo={`Equipo ${eqNum}`}
-                    jugadores={jugadores.filter(j => j.equipo === eqNum)}
+                    jugadores={jugadoresConfirmados.filter(j => j.equipo === eqNum)}
                     onEliminar={(equiposList.length > 2 && eqNum > 2) ? () => eliminarEquipoExtra(eqNum) : null}
                     victorias={wins[eqNum] || 0}
                     onModificarWin={(delta) => modificarWin(eqNum, delta)}
                     modo={modoDnd}
                     esMultiEquipo={equiposList.length > 2}
                   >
-                    {jugadores.filter(j => j.equipo === eqNum).map((j) => (
+                    {jugadoresConfirmados.filter(j => j.equipo === eqNum).map((j) => (
                       <JugadorDraggable
                         key={j.id}
                         jugador={j}
@@ -1166,10 +1314,10 @@ export default function FutbolPartidoDetallePage() {
               <div className="space-y-3 pt-6 border-t mt-6">
                 {modoDnd === "armar" && (
                   <>
-                    <button onClick={sortearEquipos} disabled={procesando || jugadores.length < cuposMinimos} className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+                    <button onClick={sortearEquipos} disabled={procesando || jugadoresConfirmados.length < cuposMinimos} className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
                       🎲 Sortear equipos equilibrados
                     </button>
-                    <button onClick={comenzarPartido} disabled={procesando || jugadores.length < cuposMinimos} className="w-full bg-[#00FF9D] text-slate-950 font-black uppercase tracking-widest hover:bg-[#00e58d] py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:bg-gray-200 disabled:text-gray-400 cursor-pointer">
+                    <button onClick={comenzarPartido} disabled={procesando || jugadoresConfirmados.length < cuposMinimos} className="w-full bg-[#00FF9D] text-slate-950 font-black uppercase tracking-widest hover:bg-[#00e58d] py-3.5 px-4 rounded-2xl text-sm transition-colors shadow-sm disabled:opacity-50 disabled:bg-gray-200 disabled:text-gray-400 cursor-pointer">
                       {procesando ? "Procesando…" : "▶ Comenzar partido"}
                     </button>
                   </>
@@ -1193,7 +1341,7 @@ export default function FutbolPartidoDetallePage() {
                       </span>
                     )}
                   </div>
-                  {jugadores.filter(j => j.equipo === eqNum).map(j => (
+                  {jugadoresConfirmados.filter(j => j.equipo === eqNum).map(j => (
                     <div key={j.id} className="bg-white p-2.5 rounded-xl border border-slate-100 flex justify-between items-center text-xs font-bold shadow-2xs">
                       <span>{j.nombre}</span>
                       {modoDnd === "resultado" && <span>{j.goles} ⚽</span>}
@@ -1206,14 +1354,25 @@ export default function FutbolPartidoDetallePage() {
         </div>
       </main>
 
-      {/* BARRA INFERIOR FLOTANTE CON PRECIO CORRECTO */}
+      {/* BARRA INFERIOR FLOTANTE CON PAGO / CONFIRMACIÓN DE ACCIÓN */}
       {!partidoIniciado && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-slate-900/95 text-white backdrop-blur-md p-3 rounded-2xl shadow-2xl border border-slate-800 z-40 flex items-center justify-between gap-3">
           {estaInscrito ? (
             <>
               <div className="flex items-center gap-2 pl-2">
-                <span className="text-emerald-400 font-bold text-xs flex items-center gap-1">
-                  <span>✅</span> {esCreador ? "Organizador Inscrito" : "Inscrito en Alineación"}
+                <span className={`text-xs font-bold flex items-center gap-1.5 ${
+                  miEstadoPago === "pendiente" || miEstadoPago === "pendiente_aprobacion"
+                    ? "text-amber-400"
+                    : "text-emerald-400"
+                }`}>
+                  <span>{miEstadoPago === "pendiente" || miEstadoPago === "pendiente_aprobacion" ? "⏳" : "✅"}</span>
+                  <span>
+                    {esCreador 
+                      ? "Organizador" 
+                      : (miEstadoPago === "pendiente" || miEstadoPago === "pendiente_aprobacion")
+                        ? "Pago en Revisión"
+                        : "Confirmado en Alineación"}
+                  </span>
                 </span>
               </div>
               {!esCreador && (
