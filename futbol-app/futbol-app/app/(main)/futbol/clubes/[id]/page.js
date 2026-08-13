@@ -17,6 +17,18 @@ const AMENIDADES_MAP = {
   lockers: { label: "Lockers / Casilleros", icon: "🔐" },
 };
 
+function obtenerFormatoFutbol(capacity) {
+  const cap = parseInt(capacity, 10);
+  if (cap === 10) return "Fútbol 5";
+  if (cap === 12) return "Fútbol 6";
+  if (cap === 14) return "Fútbol 7";
+  if (cap === 16) return "Fútbol 8";
+  if (cap === 18) return "Fútbol 9";
+  if (cap === 22) return "Fútbol 11";
+  if (cap > 0) return `Fútbol ${Math.floor(cap / 2)}`;
+  return "Fútbol";
+}
+
 function obtenerEpoch(fechaStr) {
   if (!fechaStr) return 0;
   if (fechaStr instanceof Date) return fechaStr.getTime();
@@ -1071,7 +1083,7 @@ export default function FutbolClubDetailPage() {
 
               {/* VISTA UNIFICADA B2C AGENDA PREMIUM */}
               <div className="space-y-6 font-sans">
-                {/* SELECTOR DE PISTA */}
+                {/* SELECTOR DE PISTA CON FORMATO DE FÚTBOL DESTACADO */}
                 <div>
                   <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5">
                     Selecciona la Cancha
@@ -1082,13 +1094,20 @@ export default function FutbolClubDetailPage() {
                         key={c.id}
                         type="button"
                         onClick={() => setCanchaFiltroMobile(c.id)}
-                        className={`px-4 py-2.5 rounded-2xl text-xs font-black uppercase shrink-0 transition-all cursor-pointer font-sans ${
+                        className={`px-4 py-2.5 rounded-2xl text-xs font-black uppercase shrink-0 transition-all cursor-pointer font-sans flex items-center gap-1.5 ${
                           canchaFiltroMobile === c.id
                             ? "bg-slate-900 text-[#00FF9D] shadow-md"
                             : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
                         }`}
                       >
-                        ⚽ {c.name}
+                        <span>⚽ {c.name}</span>
+                        <span className={`text-[9px] px-2 py-0.5 rounded-full font-black uppercase ${
+                          canchaFiltroMobile === c.id
+                            ? "bg-[#00FF9D]/20 text-[#00FF9D]"
+                            : "bg-slate-100 text-slate-700"
+                        }`}>
+                          {obtenerFormatoFutbol(c.capacity)}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -1234,7 +1253,7 @@ export default function FutbolClubDetailPage() {
                         ))}
                      </div>
 
-                     {/* FILAS DE CANCHAS */}
+                     {/* FILAS DE CANCHAS CON BADGE DESTACADO */}
                      {canchas.length === 0 ? (
                        <div className="p-8 text-center text-xs font-bold text-slate-400">No hay canchas configuradas.</div>
                      ) : (
@@ -1245,9 +1264,12 @@ export default function FutbolClubDetailPage() {
 
                          return (
                            <div key={cancha.id} className="flex border-b border-slate-100 relative h-16 group">
+                              {/* Etiqueta Cancha Destacada (Sticky) */}
                               <div className="w-32 shrink-0 sticky left-0 z-30 bg-white border-r border-slate-200 p-2 flex flex-col justify-center items-center group-hover:bg-slate-50 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
-                                 <span className="text-xs font-black text-slate-800 text-center leading-tight px-1 w-full truncate">{cancha.name}</span>
-                                 <span className="text-[8px] font-bold text-slate-400 mt-0.5">({cancha.capacity} Jug.)</span>
+                                 <span className="text-xs font-black text-slate-900 text-center leading-tight px-1 w-full truncate">{cancha.name}</span>
+                                 <span className="inline-block mt-1 px-2 py-0.5 bg-emerald-100 text-emerald-950 font-black text-[9px] uppercase rounded-full border border-emerald-300 shadow-2xs">
+                                   {obtenerFormatoFutbol(cancha.capacity)} ({cancha.capacity || 10} Jug.)
+                                 </span>
                               </div>
 
                               <div className="flex relative">
@@ -1379,7 +1401,7 @@ export default function FutbolClubDetailPage() {
         </div>
       </div>
 
-      {/* MODAL PASARELA DE PAGO CLIENTE CON SELECTOR DE DURACIÓN */}
+      {/* MODAL PASARELA DE PAGO CLIENTE CON DETALLE DESTACADO DE CANCHA Y FORMATO */}
       {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 font-sans" onClick={cerrarModalManual}>
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
@@ -1405,7 +1427,7 @@ export default function FutbolClubDetailPage() {
               <button onClick={cerrarModalManual} className="text-slate-400 hover:text-slate-700 font-bold text-lg cursor-pointer transition-colors">✕</button>
             </div>
 
-            {/* TARJETA DE RESUMEN DESTACADA DE LA RESERVA */}
+            {/* TARJETA DE RESUMEN DESTACADA DE LA RESERVA (CON FORMATO FÚTBOL) */}
             <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2.5 shadow-md border border-slate-800">
               <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                 <span className="text-[10px] font-black uppercase text-[#00FF9D] tracking-wider truncate max-w-[200px]">
@@ -1420,8 +1442,11 @@ export default function FutbolClubDetailPage() {
               
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
-                  <span className="text-[9px] font-bold text-slate-400 uppercase block">Cancha</span>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase block">Cancha & Formato</span>
                   <span className="font-black text-white text-xs sm:text-sm block truncate">⚽ {bloqueSeleccionado.cancha.name}</span>
+                  <span className="text-[10px] font-black text-[#00FF9D] uppercase block mt-0.5">
+                    🏆 {obtenerFormatoFutbol(bloqueSeleccionado.cancha.capacity)} ({bloqueSeleccionado.cancha.capacity || 10} Jugadores)
+                  </span>
                 </div>
                 <div>
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Fecha</span>
