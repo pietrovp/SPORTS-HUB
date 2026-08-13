@@ -4,14 +4,27 @@ import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
+// FUNCIÓN AUXILIAR PARA CÁLCULO REAL DEL CUPO INDIVIDUAL
+function obtenerPrecioCupoReal(match) {
+  if (!match) return 0;
+  const baseCancha = Number(match.total_price) || 0;
+  const feeCancha = Number(match.app_fee) || (baseCancha * 0.10);
+  const totalConFee = baseCancha + feeCancha;
+  const cuposTotales = match.court?.capacity || 12;
+
+  if (totalConFee > 0 && cuposTotales > 0) {
+    return totalConFee / cuposTotales;
+  }
+  return Number(match.price_per_player) || 0;
+}
+
 // COMPONENTE VISUAL MEJORADO PARA AVATARES DE JUGADORES
-function AvataresJugadores({ jugadores = [], cuposTotales = 14 }) {
+function AvataresJugadores({ jugadores = [], cuposTotales = 12 }) {
   const maxVisibles = 4;
   const inscritosCount = jugadores.length;
   const visibles = jugadores.slice(0, maxVisibles);
   const sobrantes = Math.max(0, inscritosCount - maxVisibles);
 
-  // Círculos vacíos con opacidad decreciente (60%, 40%, 20%)
   const vaciosAMostrar = Math.max(0, maxVisibles - visibles.length);
   const opacidades = ["opacity-60", "opacity-40", "opacity-20"];
 
@@ -19,7 +32,6 @@ function AvataresJugadores({ jugadores = [], cuposTotales = 14 }) {
     <div className="bg-slate-50/80 p-3 rounded-2xl border border-slate-100 flex items-center justify-between">
       <div className="flex items-center gap-2 overflow-hidden">
         <div className="flex -space-x-3 shrink-0">
-          {/* Avatares reales de jugadores inscritos */}
           {visibles.map((j, idx) => (
             <div
               key={j.id || idx}
@@ -38,7 +50,6 @@ function AvataresJugadores({ jugadores = [], cuposTotales = 14 }) {
             </div>
           ))}
 
-          {/* Círculos punteados con opacidad progresiva */}
           {Array.from({ length: vaciosAMostrar }).map((_, i) => (
             <div
               key={`empty-${i}`}
@@ -53,7 +64,6 @@ function AvataresJugadores({ jugadores = [], cuposTotales = 14 }) {
           ))}
         </div>
 
-        {/* Badge para mostrar cuántos jugadores adicionales hay */}
         {sobrantes > 0 && (
           <span className="text-[11px] font-black text-emerald-800 bg-emerald-100/90 border border-emerald-200 px-2.5 py-1 rounded-full shrink-0 shadow-2xs ml-1">
             +{sobrantes}
@@ -69,12 +79,11 @@ function AvataresJugadores({ jugadores = [], cuposTotales = 14 }) {
   );
 }
 
-// TARJETA DE PARTIDO CON FORMATO HORARIO EN ZONA CARACAS
-function TarjetaFutbolPartido({ match, esHistorial = false }) {
+// TARJETA DE PARTIDO CON BOTÓN DINÁMICO Y PRECIO CORREGIDO
+function TarjetaFutbolPartido({ match, user, esHistorial = false }) {
   const esPrivado = match.is_private || match.match_type === "privado";
   const dateObj = new Date(match.scheduled_at);
 
-  // Formato forzado a la zona horaria de Venezuela (America/Caracas)
   const fechaFormat = dateObj.toLocaleDateString("es-VE", {
     weekday: "short",
     day: "numeric",
@@ -91,6 +100,40 @@ function TarjetaFutbolPartido({ match, esHistorial = false }) {
 
   const enCurso = match.status === "en_curso";
   const finalizado = match.status === "jugado";
+
+  const cuposTotales = match.court?.capacity || 12;
+  const cuposOcupados = match.players?.length || 0;
+  const lleno = cuposOcupados >= cuposTotales;
+
+  const estaInscrito = !!user && (
+    match.created_by === user.id || 
+    (Array.isArray(match.players) && match.players.some((p) => p.user_id === user.id))
+  );
+
+  const precioCupoReal = obtenerPrecioCupoReal(match);
+
+  // TEXTO Y ESTILO DINÁMICO DEL BOTÓN DE ACCIÓN
+  let textoBoton = "Ver Alineación →";
+  let estiloBoton = "bg-slate-900 hover:bg-slate-800 text-[#00FF9D]";
+
+  if (finalizado) {
+    textoBoton = "📊 Ver Resumen y MVP";
+    estiloBoton = "bg-slate-800 hover:bg-slate-700 text-[#00FF9D] border border-slate-700";
+  } else if (enCurso) {
+    textoBoton = "▶ Ver Partido En Vivo";
+    estiloBoton = "bg-blue-600 hover:bg-blue-700 text-white shadow-md";
+  } else if (estaInscrito) {
+    textoBoton = "✅ Mi Partido / Alineación →";
+    estiloBoton = "bg-emerald-600 hover:bg-emerald-700 text-white shadow-md";
+  } else if (lleno) {
+    textoBoton = "🔒 Partido Lleno";
+    estiloBoton = "bg-slate-200 text-slate-400 cursor-not-allowed";
+  } else {
+    textoBoton = precioCupoReal > 0 
+      ? `⚽ Unirme al Partido ($${precioCupoReal.toFixed(2)}) →` 
+      : "⚽ Unirme al Partido (Gratis) →";
+    estiloBoton = "bg-[#00FF9D] hover:bg-emerald-400 text-slate-950 font-black shadow-md";
+  }
 
   return (
     <div className={`w-[310px] sm:w-[350px] shrink-0 snap-start rounded-3xl border p-5 shadow-sm space-y-4 flex flex-col justify-between transition-all ${
@@ -116,7 +159,13 @@ function TarjetaFutbolPartido({ match, esHistorial = false }) {
               enCurso ? "bg-blue-500 text-white animate-pulse" :
               "bg-slate-100 text-slate-700"
             }`}>
-              {finalizado ? "🏆 Finalizado" : enCurso ? "▶ En Curso" : match.price_per_player === 0 || esPrivado ? "Gratis" : `$${match.price_per_player} USD`}
+              {finalizado 
+                ? "🏆 Finalizado" 
+                : enCurso 
+                ? "▶ En Curso" 
+                : esPrivado 
+                ? "Gratis" 
+                : `$${precioCupoReal.toFixed(2)} USD`}
             </span>
           </div>
         </div>
@@ -138,21 +187,15 @@ function TarjetaFutbolPartido({ match, esHistorial = false }) {
             <span className="text-2xl font-black text-[#00FF9D] tracking-tight">{match.score_text || "Finalizado"}</span>
           </div>
         ) : (
-          <AvataresJugadores jugadores={match.players || []} cuposTotales={14} />
+          <AvataresJugadores jugadores={match.players || []} cuposTotales={cuposTotales} />
         )}
       </div>
 
       <Link
         href={`/futbol/partidos/${match.id}`}
-        className={`w-full py-3 font-black text-xs uppercase tracking-wider rounded-2xl text-center block transition-colors shadow-xs ${
-          finalizado
-            ? "bg-slate-800 hover:bg-slate-700 text-[#00FF9D] border border-slate-700"
-            : enCurso
-            ? "bg-blue-600 hover:bg-blue-700 text-white shadow-md"
-            : "bg-slate-900 hover:bg-slate-800 text-[#00FF9D]"
-        }`}
+        className={`w-full py-3.5 font-black text-xs uppercase tracking-wider rounded-2xl text-center block transition-all ${estiloBoton}`}
       >
-        {finalizado ? "📊 Ver Resumen y MVP" : enCurso ? "▶ Ver Partido En Vivo" : "Ver Alineación →"}
+        {textoBoton}
       </Link>
     </div>
   );
@@ -186,9 +229,9 @@ export default function FutbolPartidosPage() {
         .from("matches")
         .select(`
           id, club_id, court_id, match_type, is_private, scheduled_at, status,
-          price_per_player, total_price, created_by, winner_team, score_text,
+          price_per_player, total_price, app_fee, created_by, winner_team, score_text,
           club:clubs ( name, city, address ),
-          court:courts!inner ( name, sport_type )
+          court:courts!inner ( name, sport_type, capacity )
         `)
         .eq("court.sport_type", "futbol")
         .in("status", ["programado", "en_curso", "jugado"])
@@ -325,7 +368,7 @@ export default function FutbolPartidosPage() {
             ) : (
               <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin">
                 {misPartidosActivos.map((match) => (
-                  <TarjetaFutbolPartido key={match.id} match={match} />
+                  <TarjetaFutbolPartido key={match.id} match={match} user={user} />
                 ))}
               </div>
             )}
@@ -358,7 +401,7 @@ export default function FutbolPartidosPage() {
           ) : (
             <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin">
               {partidosAbiertos.map((match) => (
-                <TarjetaFutbolPartido key={match.id} match={match} />
+                <TarjetaFutbolPartido key={match.id} match={match} user={user} />
               ))}
             </div>
           )}
@@ -376,7 +419,7 @@ export default function FutbolPartidosPage() {
 
             <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x scrollbar-thin">
               {historialPartidos.map((match) => (
-                <TarjetaFutbolPartido key={match.id} match={match} esHistorial={true} />
+                <TarjetaFutbolPartido key={match.id} match={match} user={user} esHistorial={true} />
               ))}
             </div>
           </div>

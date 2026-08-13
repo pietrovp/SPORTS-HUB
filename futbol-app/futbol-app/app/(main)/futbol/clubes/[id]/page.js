@@ -690,6 +690,15 @@ export default function FutbolClubDetailPage() {
   const intentarCambiarDuracion = async (nuevaDuracion) => {
     if (!bloqueSeleccionado) return;
 
+    if (tipoReserva === "ranking" && nuevaDuracion !== 60) {
+      mostrarNotificacion(
+        "Duración fija para partidos públicos",
+        "Los partidos públicos para la comunidad tienen una duración estricta de 1 Hora (60 min).",
+        "warning"
+      );
+      return;
+    }
+
     const inicioDeseado = bloqueSeleccionado.dateObj;
     const canchaId = bloqueSeleccionado.cancha.id;
 
@@ -770,6 +779,25 @@ export default function FutbolClubDetailPage() {
     setMontoAbono(monedaAbono === "USD" ? totalUSD.toFixed(2) : (totalUSD * tasaBCV).toFixed(2));
   };
 
+  const cambiarTipoReserva = async (nuevoTipo) => {
+    setTipoReserva(nuevoTipo);
+
+    let dur = duracionMinutos;
+    if (nuevoTipo === "ranking" && duracionMinutos !== 60) {
+      dur = 60;
+      await intentarCambiarDuracion(60);
+    }
+
+    const factor = dur / 60;
+    const precioBaseTotal = bloqueSeleccionado.precioBaseTotal * factor;
+    const capBD = bloqueSeleccionado.cancha?.capacity || 10;
+    const baseCalc = nuevoTipo === "privado" ? precioBaseTotal : (precioBaseTotal / capBD);
+    const feeCalc = baseCalc * 0.10;
+    const totalUSD = baseCalc + feeCalc;
+
+    setMontoAbono(monedaAbono === "USD" ? totalUSD.toFixed(2) : (totalUSD * tasaBCV).toFixed(2));
+  };
+
   const handleSeleccionarImagen = (e, setPreview) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -783,20 +811,29 @@ export default function FutbolClubDetailPage() {
     reader.readAsDataURL(file);
   };
 
+  // CÁLCULOS DE PRECIO CORREGIDOS
   const calculosPrecio = useMemo(() => {
-    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0, capacidadOficial: 10 };
+    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0, capacidadOficial: 10, baseTotalCancha: 0, feeTotalCancha: 0 };
     
     const factorTiempo = duracionMinutos / 60;
-    const baseTotal = bloqueSeleccionado.precioBaseTotal * factorTiempo; 
-    const feeTotal = baseTotal * 0.10;
+    const baseTotalCancha = bloqueSeleccionado.precioBaseTotal * factorTiempo; 
+    const feeTotalCancha = baseTotalCancha * 0.10;
     const capBD = bloqueSeleccionado.cancha?.capacity || 10;
     
-    const baseCalculada = tipoReserva === "privado" ? baseTotal : (baseTotal / capBD);
-    const feeCalculado = tipoReserva === "privado" ? feeTotal : (feeTotal / capBD);
+    const baseCalculada = tipoReserva === "privado" ? baseTotalCancha : (baseTotalCancha / capBD);
+    const feeCalculado = tipoReserva === "privado" ? feeTotalCancha : (feeTotalCancha / capBD);
     const totalSug = baseCalculada + feeCalculado;
-    const precioIndividual = baseTotal / capBD;
+    const precioIndividual = (baseTotalCancha + feeTotalCancha) / capBD;
     
-    return { base: baseCalculada, fee: feeCalculado, totalSug, precioIndividual, capacidadOficial: capBD };
+    return { 
+      base: baseCalculada, 
+      fee: feeCalculado, 
+      totalSug, 
+      precioIndividual, 
+      capacidadOficial: capBD,
+      baseTotalCancha,
+      feeTotalCancha
+    };
   }, [bloqueSeleccionado, tipoReserva, duracionMinutos]);
 
   const cambiarMonedaAbono = (nuevaMoneda) => {
@@ -855,6 +892,7 @@ export default function FutbolClubDetailPage() {
 
       const scheduledAtISO = formatearScheduledAtISO(bloqueSeleccionado.dateObj);
 
+      // GUARDA SIEMPRE EL PRECIO TOTAL BASE Y FEE TOTAL DE LA CANCHA EN MATCHES
       const { data: newMatch, error: matchErr } = await supabase
         .from("matches")
         .insert({
@@ -862,9 +900,9 @@ export default function FutbolClubDetailPage() {
           court_id: bloqueSeleccionado.cancha.id,
           scheduled_at: scheduledAtISO,
           duration_minutes: duracionMinutos,
-          total_price: calculosPrecio.base,
+          total_price: calculosPrecio.baseTotalCancha, // $10.00 constante
           price_per_player: calculosPrecio.precioIndividual,
-          app_fee: calculosPrecio.fee,
+          app_fee: calculosPrecio.feeTotalCancha,     // $1.00 constante
           match_type: tipoReserva === "privado" ? "privado" : "abierto",
           is_private: tipoReserva === "privado", 
           is_competitive: false,
@@ -1401,10 +1439,10 @@ export default function FutbolClubDetailPage() {
         </div>
       </div>
 
-      {/* MODAL PASARELA DE PAGO CLIENTE CON DETALLE DESTACADO DE CANCHA Y FORMATO */}
+      {/* MODAL PASARELA DE PAGO CLIENTE CON ALTURA AJUSTADA (max-h-[90vh]) */}
       {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 font-sans" onClick={cerrarModalManual}>
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
             
             {/* ENCABEZADO DEL MODAL CON FLECHA SUPERIOR DE REGRESO */}
             <div className="flex justify-between items-center border-b pb-3">
@@ -1472,16 +1510,7 @@ export default function FutbolClubDetailPage() {
                     <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Modalidad de Reserva</label>
                     <select
                       value={tipoReserva}
-                      onChange={(e) => {
-                        const tipo = e.target.value;
-                        setTipoReserva(tipo);
-                        const factor = duracionMinutos / 60;
-                        const baseTotal = bloqueSeleccionado.precioBaseTotal * factor;
-                        const feeTotal = baseTotal * 0.10;
-                        const capBD = bloqueSeleccionado.cancha?.capacity || 10;
-                        const valUSD = tipo === "privado" ? (baseTotal + feeTotal) : ((baseTotal + feeTotal) / capBD);
-                        setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
-                      }}
+                      onChange={(e) => cambiarTipoReserva(e.target.value)}
                       className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-slate-800 font-sans"
                     >
                       <option value="privado">🔒 Reserva Privada (Cancha Completa para tu grupo)</option>
@@ -1503,15 +1532,17 @@ export default function FutbolClubDetailPage() {
                         const finDiaClub = obtenerFinDiaClub(bloqueSeleccionado.dateObj, club?.close_time);
                         const finDeseado = bloqueSeleccionado.dateObj.getTime() + d.min * 60000;
                         const excedeCierre = finDeseado > finDiaClub.getTime();
+                        const esPublico = tipoReserva === "ranking";
+                        const deshabilitado = excedeCierre || (esPublico && d.min !== 60);
 
                         return (
                           <button
                             key={d.min}
                             type="button"
-                            disabled={excedeCierre}
-                            onClick={() => !excedeCierre && intentarCambiarDuracion(d.min)}
+                            disabled={deshabilitado}
+                            onClick={() => !deshabilitado && intentarCambiarDuracion(d.min)}
                             className={`py-2 px-2 rounded-xl text-xs font-black uppercase border transition-all font-sans ${
-                              excedeCierre
+                              deshabilitado
                                 ? "bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed opacity-50"
                                 : duracionMinutos === d.min
                                 ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm cursor-pointer"
@@ -1531,7 +1562,7 @@ export default function FutbolClubDetailPage() {
                     </div>
                   ) : (
                     <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 text-xs font-bold text-blue-900">
-                      👥 Se creará una sala abierta para {calculosPrecio.capacidadOficial} jugadores por {duracionMinutos} min.
+                      👥 Se creará una sala abierta para {calculosPrecio.capacidadOficial} jugadores por 1 Hora (60 min obligatorios).
                     </div>
                   )}
                 </div>
@@ -1546,7 +1577,7 @@ export default function FutbolClubDetailPage() {
               <div className="space-y-4 text-xs font-bold text-slate-700">
                 <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-1">
                   <div className="flex justify-between text-[#00FF9D]">
-                    <span>{tipoReserva === "privado" ? `Cancha Completa (${duracionMinutos}m)` : "Tu Cupo Individual"}</span>
+                    <span>{tipoReserva === "privado" ? `Cancha Completa (${duracionMinutos}m)` : `Tu Cupo Individual (1 de ${calculosPrecio.capacidadOficial})`}</span>
                     <div className="text-right">
                       <span className="font-black block">${calculosPrecio.base.toFixed(2)}</span>
                       <span className="text-[10px] text-emerald-400/80 block">~Bs. {(calculosPrecio.base * tasaBCV).toFixed(2)}</span>

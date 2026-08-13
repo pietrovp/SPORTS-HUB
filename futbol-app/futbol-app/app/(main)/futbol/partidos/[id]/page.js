@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import {
@@ -37,6 +38,32 @@ function formatHora12(fechaStr) {
     hour12: true,
     timeZone: "America/Caracas",
   }).toUpperCase();
+}
+
+// CÁLCULO BLINDADO DE PRECIO POR CUPO (PREVIENE DOBLE DIVISIÓN)
+function obtenerPrecioCupoReal(partido) {
+  if (!partido) return 0;
+  
+  const capBD = Number(partido.court?.capacity) || 12;
+  const basePriceDB = Number(partido.total_price) || 0;
+  const feeDB = Number(partido.app_fee) || (basePriceDB * 0.10);
+  const pricePerPlayerDB = Number(partido.price_per_player) || 0;
+
+  // Si el precio base en la BD es el correcto de la cancha completa (>= $5)
+  if (basePriceDB >= 5) {
+    const totalConFee = basePriceDB + feeDB;
+    return totalConFee / capBD;
+  }
+
+  // Si en la BD ya viene el precio por jugador correcto (>= $0.50)
+  if (pricePerPlayerDB >= 0.50) {
+    return pricePerPlayerDB;
+  }
+
+  // Si la fila en la BD es antigua/corrupta (< $2), forzamos cálculo con el precio normal
+  const precioNormalCancha = Number(partido.court?.price_normal) || 10;
+  const totalEstimado = precioNormalCancha * 1.10;
+  return totalEstimado / capBD;
 }
 
 function iniciales(nombre) {
@@ -144,7 +171,6 @@ function EquipoColumna({ id, titulo, jugadores, onEliminar, victorias, onModific
         {jugadores.length > 0 && <span className="text-xs font-semibold text-gray-400 shrink-0">Media: <span className="text-gray-700 font-bold">{promedioMedia(jugadores)}</span></span>}
       </div>
 
-      {/* CONTADOR DE VICTORIAS / WINS PARA MODALIDAD RETAS / MULTIEQUIPO */}
       {esMultiEquipo && modo !== "resultado" && (
         <div className={`p-2.5 rounded-xl mb-3 flex items-center justify-between text-xs font-bold transition-all ${
           partidoEnCurso 
@@ -201,6 +227,7 @@ export default function FutbolPartidoDetallePage() {
   const router = useRouter();
   const matchId = params?.id;
 
+  const [mounted, setMounted] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [partido, setPartido] = useState(null);
   const [jugadores, setJugadores] = useState([]);
@@ -210,12 +237,12 @@ export default function FutbolPartidoDetallePage() {
   const [wins, setWins] = useState({ 1: 0, 2: 0 });
 
   const [inscrito, setInscrito] = useState(false);
-  const [inscripcionId, setInscripcionId] = useState(null);
+  const [tasaBCV, setTasaBCV] = useState(36.65);
 
   const [procesando, setProcesando] = useState(false);
   const [mensaje, setMensaje] = useState("");
 
-  // ESTADOS GESTIÓN DE PAGO
+  // ESTADOS PAGO ORGANIZADOR
   const [modalPagoOpen, setModalPagoOpen] = useState(false);
   const [formPago, setFormPago] = useState({
     monto: "",
@@ -225,16 +252,36 @@ export default function FutbolPartidoDetallePage() {
   });
   const [enviandoPago, setEnviandoPago] = useState(false);
 
+  // ESTADOS PAGO JUGADOR AL UNIRSE
+  const [modalUnirmePagoOpen, setModalUnirmePagoOpen] = useState(false);
+  const [monedaUnirme, setMonedaUnirme] = useState("USD");
+  const [formUnirmePago, setFormUnirmePago] = useState({
+    monto: "",
+    metodoPago: "pago_movil",
+    numReferencia: "",
+    previewComprobante: "",
+  });
+  const [enviandoUnirmePago, setEnviandoUnirmePago] = useState(false);
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const esCreador = usuarioActual?.id === partido?.created_by;
   const esPrivado = partido?.is_private || partido?.match_type === "privado";
-  const costoInscripcion = (esPrivado || esCreador) ? 0 : (partido?.price_per_player ?? 0);
 
-  const cuposTotales = partido?.court?.capacity || 14; 
+  const cuposTotales = partido?.court?.capacity || 12; 
   const cuposMinimos = 6;
   const cuposOcupados = jugadores.length;
   const lleno = cuposOcupados >= cuposTotales;
+
+  // CÁLCULO DE PRECIO DEL CUPO INDIVIDUAL CORREGIDO
+  const costoCupoIndividual = useMemo(() => {
+    if (esPrivado || esCreador) return 0;
+    return obtenerPrecioCupoReal(partido);
+  }, [partido, esPrivado, esCreador]);
   
   const miJugador = useMemo(() => jugadores.find((j) => j.user_id === usuarioActual?.id), [jugadores, usuarioActual]);
   const estaInscrito = !!miJugador || inscrito;
@@ -266,7 +313,6 @@ export default function FutbolPartidoDetallePage() {
     return { totalCancha, totalAbonado, restante, historial };
   }, [partido]);
 
-  // TABLA DE POSICIONES / TOP 3 PODIO (RETAS Y TRIANGULARES)
   const tablaPosiciones = useMemo(() => {
     return equiposList.map((eqNum) => {
       const integrantes = jugadores.filter(j => j.equipo === eqNum);
@@ -288,7 +334,6 @@ export default function FutbolPartidoDetallePage() {
     });
   }, [equiposList, jugadores, wins, goles]);
 
-  // RESULTADO PARA 2 EQUIPOS CLÁSICOS O MULTIEQUIPOS
   const resultadoInfo = useMemo(() => {
     if (partido?.status !== "jugado") return null;
 
@@ -312,6 +357,7 @@ export default function FutbolPartidoDetallePage() {
   }, [partido, equipo1, equipo2, jugadores, goles]);
 
   useEffect(() => {
+    obtenerTasaBCV();
     if (!matchId || !supabase) return;
     cargarDatos();
 
@@ -322,6 +368,23 @@ export default function FutbolPartidoDetallePage() {
 
     return () => { supabase.removeChannel(channel); };
   }, [matchId]);
+
+  async function obtenerTasaBCV() {
+    try {
+      const res = await fetch("/api/bcv-rate");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.usdRate) return setTasaBCV(parseFloat(data.usdRate));
+      }
+      const resFallback = await fetch("https://ve.dolarapi.com/v1/dolares/oficial");
+      if (resFallback.ok) {
+        const dataFallback = await resFallback.json();
+        if (dataFallback?.promedio) return setTasaBCV(parseFloat(dataFallback.promedio));
+      }
+    } catch (e) {
+      console.warn("Fallo al obtener Tasa BCV", e);
+    }
+  }
 
   async function cargarDatos() {
     if (!supabase || !matchId) return;
@@ -335,7 +398,7 @@ export default function FutbolPartidoDetallePage() {
         .select(`
           id, created_by, scheduled_at, status, is_private, price_per_player, total_price, app_fee, match_type, score_text, winner_team, payment_status, payments_history, payment_proof_urls,
           club:clubs(name, city, address, image_url),
-          court:courts(name, sport_type, capacity)
+          court:courts(name, sport_type, capacity, price_normal)
         `)
         .eq("id", matchId)
         .maybeSingle();
@@ -363,7 +426,7 @@ export default function FutbolPartidoDetallePage() {
         listaInscripciones.push({
           id: `creador-${partidoData.created_by}`,
           user_id: partidoData.created_by,
-          team: "1",
+          team: "A",
           goals: 0,
         });
       }
@@ -384,8 +447,7 @@ export default function FutbolPartidoDetallePage() {
         const listaEnriquecida = listaInscripciones.map(i => {
           const pGlob = perfilesGlobales[i.user_id];
           const fPerfil = perfilesFutbol[i.user_id];
-          let numEq = parseInt(i.team, 10);
-          if (isNaN(numEq)) numEq = i.team === "B" ? 2 : 1;
+          let numEq = i.team === "B" || i.team === "2" ? 2 : 1;
 
           return {
             id: i.id,
@@ -411,12 +473,10 @@ export default function FutbolPartidoDetallePage() {
         if (user) {
           const miInsc = listaEnriquecida.find(i => i.user_id === user.id);
           setInscrito(!!miInsc);
-          setInscripcionId(miInsc?.id && !miInsc.id.toString().startsWith("creador-") ? miInsc.id : null);
         }
       } else {
         setJugadores([]);
         setInscrito(false);
-        setInscripcionId(null);
       }
     } catch (err) {
       console.error(err);
@@ -440,7 +500,7 @@ export default function FutbolPartidoDetallePage() {
       if (afectados.length > 0) {
         await Promise.all(
           afectados.map(j =>
-            supabase.from("match_players").update({ team: "1" }).match({ match_id: matchId, user_id: j.user_id })
+            supabase.from("match_players").update({ team: "A" }).match({ match_id: matchId, user_id: j.user_id })
           )
         );
       }
@@ -473,7 +533,7 @@ export default function FutbolPartidoDetallePage() {
     const targetJugador = jugadores.find(j => j.id === inscripcionIdTarget);
     if (!targetJugador) return setProcesando(false);
 
-    const teamLetter = String(nuevoEquipo);
+    const teamLetter = nuevoEquipo === 2 ? "B" : "A";
     await supabase.from("match_players").update({ team: teamLetter }).match({ match_id: matchId, user_id: targetJugador.user_id });
     setJugadores((prev) => prev.map((j) => (j.id === inscripcionIdTarget ? { ...j, equipo: nuevoEquipo } : j)));
     setProcesando(false);
@@ -500,8 +560,8 @@ export default function FutbolPartidoDetallePage() {
     const { equipo1: eq1Ids, equipo2: eq2Ids } = balancearEquipos(jugadores);
 
     const updates = [
-      ...eq1Ids.map((id) => supabase.from("match_players").update({ team: "1" }).match({ match_id: matchId, user_id: jugadores.find(x => x.id === id)?.user_id })),
-      ...eq2Ids.map((id) => supabase.from("match_players").update({ team: "2" }).match({ match_id: matchId, user_id: jugadores.find(x => x.id === id)?.user_id })),
+      ...eq1Ids.map((id) => supabase.from("match_players").update({ team: "A" }).match({ match_id: matchId, user_id: jugadores.find(x => x.id === id)?.user_id })),
+      ...eq2Ids.map((id) => supabase.from("match_players").update({ team: "B" }).match({ match_id: matchId, user_id: jugadores.find(x => x.id === id)?.user_id })),
     ];
     await Promise.all(updates);
 
@@ -521,7 +581,11 @@ export default function FutbolPartidoDetallePage() {
   async function finalizarPartido() {
     setProcesando(true);
 
-    await Promise.all(jugadores.map((j) => supabase.from("match_players").update({ goals: Number(goles[j.id]) || 0 }).match({ match_id: matchId, user_id: j.user_id })));
+    await Promise.all(
+      jugadores.map((j) =>
+        supabase.from("match_players").update({ goals: Number(goles[j.id]) || 0 }).match({ match_id: matchId, user_id: j.user_id })
+      )
+    );
 
     let scorePayload = "";
     let ganadorFinal = "EMPATE";
@@ -543,25 +607,205 @@ export default function FutbolPartidoDetallePage() {
 
     await supabase.from("matches").update({ status: "jugado", winner_team: ganadorFinal, score_text: scorePayload }).eq("id", matchId);
 
+    try {
+      const userIds = jugadores.map(j => j.user_id).filter(Boolean);
+      if (userIds.length > 0) {
+        const { data: dbProfiles } = await supabase.from("futbol_profiles").select("*").in("id", userIds);
+        const profilesMap = {};
+        (dbProfiles || []).forEach(p => { profilesMap[p.id] = p; });
+
+        const { data: catLogros } = await supabase.from("logros").select("*");
+        const userLogrosToInsert = [];
+
+        for (const j of jugadores) {
+          if (!j.user_id) continue;
+          const currentP = profilesMap[j.user_id] || { id: j.user_id, partidos_jugados: 0, goles: 0, victorias: 0, derrotas: 0, rating: 64 };
+
+          const pjGoles = Number(goles[j.id]) || Number(j.goles) || 0;
+          const newPj = (currentP.partidos_jugados || 0) + 1;
+          const newGoles = (currentP.goles || 0) + pjGoles;
+
+          let esGano = false;
+          let esPerdio = false;
+
+          if (ganadorFinal !== "EMPATE") {
+            if (equiposList.length > 2) {
+              const topTeamNum = tablaPosiciones[0]?.eqNum;
+              if (j.equipo === topTeamNum) esGano = true;
+              else esPerdio = true;
+            } else {
+              if ((ganadorFinal === "A" && j.equipo === 1) || (ganadorFinal === "B" && j.equipo === 2)) {
+                esGano = true;
+              } else {
+                esPerdio = true;
+              }
+            }
+          }
+
+          const newWins = (currentP.victorias || 0) + (esGano ? 1 : 0);
+          const newLosses = (currentP.derrotas || 0) + (esPerdio ? 1 : 0);
+
+          let ratingBoost = 0;
+          if (esGano) ratingBoost += 1;
+          if (resultadoInfo?.mvp && resultadoInfo.mvp.user_id === j.user_id) ratingBoost += 1.5;
+          ratingBoost += Math.min(pjGoles * 0.5, 3);
+          const newRating = Math.min(99, Math.max(50, (Number(currentP.rating) || 64) + ratingBoost));
+
+          await supabase.from("futbol_profiles").upsert({
+            id: j.user_id,
+            partidos_jugados: newPj,
+            goles: newGoles,
+            victorias: newWins,
+            derrotas: newLosses,
+            rating: newRating
+          });
+
+          if (catLogros && catLogros.length > 0) {
+            for (const l of catLogros) {
+              const tituloLower = (l.titulo || "").toLowerCase();
+              const descLower = (l.descripcion || "").toLowerCase();
+
+              let cumple = false;
+              if (tituloLower.includes("debut") || descLower.includes("primer partido") || descLower.includes("1 partido")) if (newPj >= 1) cumple = true;
+              if (tituloLower.includes("gol") || descLower.includes("primer gol") || descLower.includes("1 gol")) if (newGoles >= 1) cumple = true;
+              if (descLower.includes("5 gol") || descLower.includes("cinco gol")) if (newGoles >= 5) cumple = true;
+              if (descLower.includes("10 gol") || descLower.includes("diez gol")) if (newGoles >= 10) cumple = true;
+              if (descLower.includes("victoria") || descLower.includes("ganar")) if (newWins >= 1) cumple = true;
+              if (tituloLower.includes("mvp") || descLower.includes("mvp")) if (resultadoInfo?.mvp && resultadoInfo.mvp.user_id === j.user_id) cumple = true;
+
+              if (cumple) {
+                userLogrosToInsert.push({ user_id: j.user_id, logro_id: l.id });
+              }
+            }
+          }
+        }
+
+        if (userLogrosToInsert.length > 0) {
+          await supabase.from("user_logros").upsert(userLogrosToInsert, { onConflict: "user_id,logro_id" });
+        }
+      }
+    } catch (eErr) {
+      console.error("Error actualizando estadísticas:", eErr);
+    }
+
     setPartido((prev) => ({ ...prev, status: "jugado", score_text: scorePayload }));
     setMensaje("¡Reserva y partido finalizados con éxito!");
     setProcesando(false);
     await cargarDatos();
   }
 
-  async function procesarInscripcion() {
+  // BOTÓN UNIRME AL PARTIDO -> DISPARA LA PASARELA DE PAGO O LA INSCRIPCIÓN
+  const handleClicUnirme = () => {
     if (!usuarioActual) return router.push("/login");
-    setProcesando(true);
 
+    if (costoCupoIndividual > 0) {
+      setFormUnirmePago({
+        monto: costoCupoIndividual.toFixed(2),
+        metodoPago: "pago_movil",
+        numReferencia: "",
+        previewComprobante: "",
+      });
+      setMonedaUnirme("USD");
+      setModalUnirmePagoOpen(true);
+    } else {
+      confirmarUnirseSinPago();
+    }
+  };
+
+  async function confirmarUnirseSinPago() {
+    setProcesando(true);
     try {
-      await supabase.from("match_players").insert({ match_id: partido.id, user_id: usuarioActual.id, team: "1", goals: 0 });
+      const teamLetra = (equipo1.length <= equipo2.length) ? "A" : "B";
+      await supabase.from("match_players").insert({ match_id: partido.id, user_id: usuarioActual.id, team: teamLetra, goals: 0 });
       setInscrito(true);
       setMensaje("¡Te has unido al partido con éxito!");
       await cargarDatos();
     } catch (err) {
-      setMensaje("Error al unirte.");
+      setMensaje("Error al unirte al partido.");
     } finally {
       setProcesando(false);
+    }
+  }
+
+  async function confirmarUnirseConPago(e) {
+    e.preventDefault();
+    if (!usuarioActual || !partido) return;
+
+    const valIngresado = parseFloat(formUnirmePago.monto);
+    if (isNaN(valIngresado) || valIngresado <= 0) {
+      return setMensaje("Ingresa un monto de pago válido.");
+    }
+
+    if (formUnirmePago.metodoPago !== "efectivo" && !formUnirmePago.previewComprobante && !formUnirmePago.numReferencia.trim()) {
+      return setMensaje("Por favor adjunta el comprobante o número de referencia.");
+    }
+
+    try {
+      setEnviandoUnirmePago(true);
+      
+      const { data: userProf } = await supabase
+        .from("profiles")
+        .select("nombre, apellido, telefono")
+        .eq("id", usuarioActual.id)
+        .maybeSingle();
+
+      const nombreCompleto = userProf
+        ? `${userProf.nombre || ''} ${userProf.apellido || ''}`.trim()
+        : usuarioActual.email;
+
+      const montoUSD = monedaUnirme === "VES" ? valIngresado / tasaBCV : valIngresado;
+
+      const nuevoAbonoCupo = {
+        id: `pay-cupo-${Date.now()}`,
+        user_id: usuarioActual.id,
+        user_name: nombreCompleto,
+        user_phone: userProf?.telefono || "Sin teléfono",
+        amount: montoUSD,
+        method: formUnirmePago.metodoPago,
+        reference: formUnirmePago.numReferencia.trim() || (monedaUnirme === "VES" ? `Bs. ${valIngresado.toFixed(2)}` : "Cupo Partido Abierto"),
+        receipt_url: formUnirmePago.previewComprobante || null,
+        status: formUnirmePago.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
+        created_at: new Date().toISOString(),
+      };
+
+      const historialNuevo = [...(partido.payments_history || []), nuevoAbonoCupo];
+
+      // 1. Guardar pago en el historial del partido
+      const { error: errMatch } = await supabase
+        .from("matches")
+        .update({ 
+          payments_history: historialNuevo,
+          payment_status: "pendiente_aprobacion"
+        })
+        .eq("id", partido.id);
+
+      if (errMatch) throw errMatch;
+
+      // 2. Determinar equipo A o B para mantener balance
+      const teamLetra = (equipo1.length <= equipo2.length) ? "A" : "B";
+
+      // 3. Unir al jugador en match_players usando la regla 'A' o 'B'
+      const { error: errPlayer } = await supabase
+        .from("match_players")
+        .insert({
+          match_id: partido.id,
+          user_id: usuarioActual.id,
+          team: teamLetra,
+          goals: 0
+        });
+
+      if (errPlayer) throw errPlayer;
+
+      setInscrito(true);
+      setModalUnirmePagoOpen(false);
+      setMensaje("¡Te has unido al partido con éxito! Comprobante enviado para validación.");
+      await cargarDatos();
+
+    } catch (err) {
+      console.error("Error al unirse al partido:", err);
+      setMensaje(err.message || "Error al procesar la inscripción.");
+    } finally {
+      setEnviandoUnirmePago(false);
     }
   }
 
@@ -630,7 +874,7 @@ export default function FutbolPartidoDetallePage() {
     }
   }
 
-  const handleSeleccionarImagen = (e) => {
+  const handleSeleccionarImagen = (e, setter) => {
     const file = e.target.files[0];
     if (!file) return;
 
@@ -641,7 +885,7 @@ export default function FutbolPartidoDetallePage() {
 
     const reader = new FileReader();
     reader.onloadend = () => {
-      setFormPago((prev) => ({ ...prev, previewComprobante: reader.result }));
+      setter(reader.result);
     };
     reader.readAsDataURL(file);
   };
@@ -649,8 +893,11 @@ export default function FutbolPartidoDetallePage() {
   if (cargando) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin" /></div>;
   if (!partido) return <div className="p-8 text-center"><h1 className="text-xl font-bold">Partido no encontrado</h1></div>;
 
+  const numIngresadoUnirme = parseFloat(formUnirmePago.monto) || 0;
+  const equivalenteUnirme = monedaUnirme === "USD" ? numIngresadoUnirme * tasaBCV : numIngresadoUnirme / tasaBCV;
+
   return (
-    <div className="min-h-screen bg-gray-50/50 pb-32 pt-4 md:pt-8">
+    <div className="min-h-screen bg-gray-50/50 pb-32 pt-4 md:pt-8 font-sans">
       <main className="max-w-3xl mx-auto px-4 flex flex-col gap-6">
         
         {/* HERO BANNER */}
@@ -673,7 +920,7 @@ export default function FutbolPartidoDetallePage() {
             <span className={`bg-white/95 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-md ${
               partido?.status === "jugado" ? "text-gray-500" : partido?.status === "en_curso" ? "text-blue-600" : "text-emerald-800"
             }`}>
-              {partido?.status === "jugado" ? "Finalizado" : partido?.status === "en_curso" ? "En Curso" : costoInscripcion === 0 ? "Gratis" : `$${costoInscripcion} USD`}
+              {partido?.status === "jugado" ? "Finalizado" : partido?.status === "en_curso" ? "En Curso" : costoCupoIndividual === 0 ? "Gratis" : `$${costoCupoIndividual.toFixed(2)} USD`}
             </span>
           </div>
 
@@ -747,15 +994,27 @@ export default function FutbolPartidoDetallePage() {
 
         {/* TABLA DE POSICIONES Y RESULTADOS AL FINALIZAR */}
         {modoDnd === "resultado" && (
-          <div className="space-y-4">
+          <div className="space-y-4 font-sans">
+            <style>{`
+              @keyframes lightSweep {
+                0% { transform: translateX(-100%); }
+                50% { transform: translateX(100%); }
+                100% { transform: translateX(100%); }
+              }
+              .animate-sweep {
+                animation: lightSweep 2.5s infinite;
+              }
+            `}</style>
+
             {equiposList.length > 2 ? (
-              /* PODIO Y TABLA DE POSICIONES PARA RETAS / MULTIEQUIPO */
               <div className="bg-slate-900 text-white rounded-3xl p-6 shadow-xl border border-slate-800 space-y-6">
                 <div className="text-center space-y-1">
                   <span className="text-xs font-black uppercase text-[#00FF9D] tracking-widest bg-[#00FF9D]/10 px-3 py-1 rounded-full border border-[#00FF9D]/20">
                     🏆 Torneo de Retas Finalizado
                   </span>
-                  <h2 className="text-2xl font-black text-white">Tabla Final de Posiciones</h2>
+                  <h2 className="text-2xl font-black text-white">
+                    {tablaPosiciones[0] ? `¡CAMPEÓN: EQUIPO ${tablaPosiciones[0].eqNum}! 🎉` : "Tabla Final de Posiciones"}
+                  </h2>
                 </div>
 
                 <div className="space-y-3">
@@ -792,23 +1051,60 @@ export default function FutbolPartidoDetallePage() {
                 </div>
               </div>
             ) : (
-              /* RESULTADO CLÁSICO 2 EQUIPOS */
               resultadoInfo && (
-                <div className="rounded-3xl p-6 text-center text-white shadow-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700">
-                  <span className="text-3xl block mb-1">🏆</span>
-                  <h2 className="text-3xl font-black">{resultadoInfo.g1} - {resultadoInfo.g2}</h2>
+                <div className="rounded-3xl p-6 text-center text-white shadow-xl bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-950 border-2 border-emerald-500/30 space-y-3 relative overflow-hidden">
+                  <div className="inline-block bg-[#00FF9D] text-slate-950 text-xs font-black uppercase tracking-widest px-4 py-1.5 rounded-full shadow-md">
+                    {resultadoInfo.equipoGanador === 1 
+                      ? "🏆 ¡VICTORIA DEL EQUIPO 1!" 
+                      : resultadoInfo.equipoGanador === 2 
+                        ? "🏆 ¡VICTORIA DEL EQUIPO 2!" 
+                        : "🤝 EMPATE APASIONANTE"}
+                  </div>
+                  
+                  <div className="flex items-center justify-center gap-6 pt-2">
+                    <div className="text-center">
+                      <span className="text-[10px] font-black uppercase text-slate-400 block mb-1">Equipo 1</span>
+                      <span className="text-4xl sm:text-5xl font-black text-white">{resultadoInfo.g1}</span>
+                    </div>
+                    <span className="text-2xl font-black text-[#00FF9D] mt-4">-</span>
+                    <div className="text-center">
+                      <span className="text-[10px] font-black uppercase text-slate-400 block mb-1">Equipo 2</span>
+                      <span className="text-4xl sm:text-5xl font-black text-white">{resultadoInfo.g2}</span>
+                    </div>
+                  </div>
                 </div>
               )
             )}
 
             {/* RECONOCIMIENTO MVP INDIVIDUAL */}
             {resultadoInfo?.mvp && (
-              <div className="bg-amber-100 border-2 border-amber-400 rounded-3xl p-5 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-black uppercase text-amber-900 block">👑 MVP del Partido</span>
-                  <h3 className="text-xl font-black text-gray-900">{resultadoInfo.mvp.nombre}</h3>
+              <div className="relative overflow-hidden bg-gradient-to-r from-amber-300 via-yellow-100 to-amber-400 border-2 border-amber-300 rounded-3xl p-5 sm:p-6 text-amber-950 shadow-xl flex items-center justify-between">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/60 to-transparent -translate-x-full animate-sweep pointer-events-none" />
+
+                <div className="flex items-center gap-3.5 z-10">
+                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-amber-950 text-[#00FF9D] font-black text-2xl flex items-center justify-center border-2 border-amber-300 shadow-md overflow-hidden shrink-0">
+                    {resultadoInfo.mvp.avatarUrl ? (
+                      <img src={resultadoInfo.mvp.avatarUrl} alt={resultadoInfo.mvp.nombre} className="w-full h-full object-cover" />
+                    ) : (
+                      "👑"
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-black uppercase tracking-wider bg-amber-950 text-amber-300 px-2.5 py-0.5 rounded-full shadow-xs">
+                        👑 MVP DEL PARTIDO
+                      </span>
+                    </div>
+                    <h3 className="text-lg sm:text-2xl font-black text-amber-950 leading-tight mt-1">{resultadoInfo.mvp.nombre}</h3>
+                    <p className="text-xs font-extrabold text-amber-900/80">Máximo anotador del encuentro</p>
+                  </div>
                 </div>
-                <span className="text-2xl font-black text-slate-900">{resultadoInfo.mvp.golesMvp} ⚽</span>
+
+                <div className="text-right z-10 shrink-0">
+                  <span className="text-2xl sm:text-4xl font-black text-amber-950 block leading-none">{resultadoInfo.mvp.golesMvp} ⚽</span>
+                  <span className="text-[10px] font-black uppercase text-amber-900/80 block mt-1">Goles Totales</span>
+                </div>
               </div>
             )}
           </div>
@@ -910,14 +1206,14 @@ export default function FutbolPartidoDetallePage() {
         </div>
       </main>
 
-      {/* BARRA INFERIOR FLOTANTE */}
+      {/* BARRA INFERIOR FLOTANTE CON PRECIO CORRECTO */}
       {!partidoIniciado && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-slate-900/95 text-white backdrop-blur-md p-3 rounded-2xl shadow-2xl border border-slate-800 z-40 flex items-center justify-between gap-3">
           {estaInscrito ? (
             <>
               <div className="flex items-center gap-2 pl-2">
                 <span className="text-emerald-400 font-bold text-xs flex items-center gap-1">
-                  <span>✅</span> {esCreador ? "Organizador Inscrito" : "Inscrito"}
+                  <span>✅</span> {esCreador ? "Organizador Inscrito" : "Inscrito en Alineación"}
                 </span>
               </div>
               {!esCreador && (
@@ -930,14 +1226,166 @@ export default function FutbolPartidoDetallePage() {
             <>
               <div className="pl-2">
                 <span className="text-[10px] font-bold text-slate-400 block uppercase">{esPrivado ? "Reserva Privada" : "Reserva tu cupo"}</span>
-                <span className="text-xs font-black text-white">{costoInscripcion === 0 ? "Gratis" : `$${costoInscripcion.toFixed(2)} USD`}</span>
+                <span className="text-xs font-black text-white">{costoCupoIndividual === 0 ? "Gratis" : `$${costoCupoIndividual.toFixed(2)} USD`}</span>
               </div>
-              <button onClick={procesarInscripcion} disabled={lleno || procesando} className="px-5 py-2.5 bg-[#00FF9D] text-slate-950 font-black text-xs uppercase rounded-xl hover:bg-emerald-400 transition-colors cursor-pointer">
+              <button onClick={handleClicUnirme} disabled={lleno || procesando} className="px-5 py-2.5 bg-[#00FF9D] text-slate-950 font-black text-xs uppercase rounded-xl hover:bg-emerald-400 transition-colors cursor-pointer">
                 {procesando ? "Procesando..." : lleno ? "Partido Lleno" : "Unirme al Partido"}
               </button>
             </>
           )}
         </div>
+      )}
+
+      {/* MODAL PAGO JUGADOR AL UNIRSE AL PARTIDO */}
+      {mounted && modalUnirmePagoOpen && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 font-sans" onClick={() => setModalUnirmePagoOpen(false)}>
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-start border-b pb-3">
+              <div>
+                <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                  ⚽ Unirme a Partido Público
+                </span>
+                <h3 className="text-lg font-black text-slate-900 mt-1">{partido.court?.name}</h3>
+                <p className="text-xs font-bold text-slate-500">{partido.club?.name}</p>
+              </div>
+              <button onClick={() => setModalUnirmePagoOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1 cursor-pointer">✕</button>
+            </div>
+
+            <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2 text-xs font-bold shadow-md">
+              <div className="flex justify-between text-[#00FF9D]">
+                <span>Tu Cupo Individual (Con Comisión):</span>
+                <span className="font-black">${costoCupoIndividual.toFixed(2)} USD</span>
+              </div>
+              <div className="flex justify-between text-slate-400 border-t border-slate-800 pt-2 text-[10px]">
+                <span>Equivalente en Bolívares (Tasa BCV):</span>
+                <span className="text-slate-200 font-black">~Bs. {(costoCupoIndividual * tasaBCV).toFixed(2)} VES</span>
+              </div>
+            </div>
+
+            <form onSubmit={confirmarUnirseConPago} className="space-y-3.5 text-xs font-bold text-slate-700">
+              <div>
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="block text-[10px] font-black uppercase text-slate-500">Monto Aportado ({monedaUnirme === "USD" ? "$" : "Bs."})</label>
+                  <div className="flex bg-slate-200 p-0.5 rounded-xl text-[10px] font-black">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (monedaUnirme !== "USD") {
+                          const val = parseFloat(formUnirmePago.monto) || 0;
+                          setFormUnirmePago({ ...formUnirmePago, monto: val > 0 ? (val / tasaBCV).toFixed(2) : "" });
+                          setMonedaUnirme("USD");
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${monedaUnirme === "USD" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"}`}
+                    >
+                      $ USD
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (monedaUnirme !== "VES") {
+                          const val = parseFloat(formUnirmePago.monto) || 0;
+                          setFormUnirmePago({ ...formUnirmePago, monto: val > 0 ? (val * tasaBCV).toFixed(2) : "" });
+                          setMonedaUnirme("VES");
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${monedaUnirme === "VES" ? "bg-slate-900 text-[#00FF9D] shadow-xs" : "text-slate-600"}`}
+                    >
+                      Bs. VES
+                    </button>
+                  </div>
+                </div>
+
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formUnirmePago.monto}
+                  onChange={(e) => setFormUnirmePago({ ...formUnirmePago, monto: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-base font-black text-slate-900 outline-none"
+                  required
+                />
+
+                {numIngresadoUnirme > 0 && (
+                  <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900 mt-1.5">
+                    <span>🧮 Conversión:</span>
+                    <span>
+                      {monedaUnirme === "USD"
+                        ? `Bs. ${equivalenteUnirme.toFixed(2)} VES`
+                        : `$${equivalenteUnirme.toFixed(2)} USD`}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-500 mb-1.5">Método de Pago</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: "pago_movil", label: "📱 Pago Móvil" },
+                    { id: "zelle", label: "🇺🇸 Zelle" },
+                    { id: "efectivo", label: "💵 En Sitio" },
+                  ].map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setFormUnirmePago({ ...formUnirmePago, metodoPago: m.id })}
+                      className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase border transition-all cursor-pointer ${
+                        formUnirmePago.metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm" : "bg-slate-50 text-slate-600 border-slate-200"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {formUnirmePago.metodoPago !== "efectivo" && (
+                <div className="space-y-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">
+                      N° de Referencia / ID Transacción *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. 123456"
+                      value={formUnirmePago.numReferencia}
+                      onChange={(e) => setFormUnirmePago({ ...formUnirmePago, numReferencia: e.target.value })}
+                      className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">
+                      Adjuntar Captura / Comprobante (Opcional)
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleSeleccionarImagen(e, (img) => setFormUnirmePago({ ...formUnirmePago, previewComprobante: img }))}
+                      className="w-full bg-white border border-slate-300 rounded-xl p-1 text-xs outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-slate-900 file:text-[#00FF9D]"
+                    />
+
+                    {formUnirmePago.previewComprobante && (
+                      <div className="mt-2 relative rounded-xl overflow-hidden border border-slate-200 max-h-24 bg-slate-950 flex items-center justify-center">
+                        <img src={formUnirmePago.previewComprobante} alt="Preview Comprobante" className="max-h-24 object-contain" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={enviandoUnirmePago}
+                className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black uppercase text-xs tracking-wider rounded-2xl shadow-md mt-2 cursor-pointer transition-all hover:bg-slate-800"
+              >
+                {enviandoUnirmePago ? "Enviando..." : "✓ Confirmar Pago y Unirme"}
+              </button>
+            </form>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL PAGO ORGANIZADOR */}
@@ -992,7 +1440,7 @@ export default function FutbolPartidoDetallePage() {
               {formPago.metodoPago !== "efectivo" && (
                 <>
                   <input type="text" placeholder="Número de Referencia" value={formPago.numReferencia} onChange={(e) => setFormPago({ ...formPago, numReferencia: e.target.value })} className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none" />
-                  <input type="file" accept="image/*" onChange={handleSeleccionarImagen} className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:bg-slate-900 file:text-[#00FF9D]" />
+                  <input type="file" accept="image/*" onChange={(e) => handleSeleccionarImagen(e, (img) => setFormPago((prev) => ({ ...prev, previewComprobante: img })))} className="w-full bg-white border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:bg-slate-900 file:text-[#00FF9D]" />
                 </>
               )}
 

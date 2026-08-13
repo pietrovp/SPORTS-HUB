@@ -695,6 +695,15 @@ export default function PublicClubDetailPage() {
   const intentarCambiarDuracion = async (nuevaDuracion) => {
     if (!bloqueSeleccionado) return;
 
+    if (tipoReserva === "ranking" && nuevaDuracion !== 60) {
+      mostrarNotificacion(
+        "Duración fija para partidos públicos",
+        "Los partidos públicos para la comunidad tienen una duración estricta de 1 Hora (60 min).",
+        "warning"
+      );
+      return;
+    }
+
     const inicioDeseado = bloqueSeleccionado.dateObj;
     const canchaId = bloqueSeleccionado.cancha.id;
 
@@ -775,6 +784,25 @@ export default function PublicClubDetailPage() {
     setMontoAbono(monedaAbono === "USD" ? totalUSD.toFixed(2) : (totalUSD * tasaBCV).toFixed(2));
   };
 
+  const cambiarTipoReserva = async (nuevoTipo) => {
+    setTipoReserva(nuevoTipo);
+
+    let dur = duracionMinutos;
+    if (nuevoTipo === "ranking" && duracionMinutos !== 60) {
+      dur = 60;
+      await intentarCambiarDuracion(60);
+    }
+
+    const factor = dur / 60;
+    const precioBaseTotal = bloqueSeleccionado.precioBaseTotal * factor;
+    const cant = nuevoTipo === "ranking" ? 4 : cantidadJugadores;
+    const baseCalc = nuevoTipo === "privado" ? precioBaseTotal : (precioBaseTotal / cant);
+    const feeCalc = baseCalc * 0.10;
+    const totalUSD = baseCalc + feeCalc;
+
+    setMontoAbono(monedaAbono === "USD" ? totalUSD.toFixed(2) : (totalUSD * tasaBCV).toFixed(2));
+  };
+
   const handleSeleccionarImagen = (e, setPreview) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -788,20 +816,29 @@ export default function PublicClubDetailPage() {
     reader.readAsDataURL(file);
   };
 
+  // CÁLCULOS DE PRECIO CORREGIDOS EN PÁDEL
   const calculosPrecio = useMemo(() => {
-    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0 };
+    if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0, capacidadOficial: 4, baseTotalCancha: 0, feeTotalCancha: 0 };
     
     const factorTiempo = duracionMinutos / 60;
-    const baseTotal = bloqueSeleccionado.precioBaseTotal * factorTiempo; 
-    const feeTotal = baseTotal * 0.10;
+    const baseTotalCancha = bloqueSeleccionado.precioBaseTotal * factorTiempo; 
+    const feeTotalCancha = baseTotalCancha * 0.10;
     const cant = tipoReserva === "ranking" ? 4 : cantidadJugadores;
     
-    const baseCalculada = tipoReserva === "privado" ? baseTotal : (baseTotal / cant);
-    const feeCalculado = tipoReserva === "privado" ? feeTotal : (feeTotal / cant);
+    const baseCalculada = tipoReserva === "privado" ? baseTotalCancha : (baseTotalCancha / cant);
+    const feeCalculado = tipoReserva === "privado" ? feeTotalCancha : (feeTotalCancha / cant);
     const totalSug = baseCalculada + feeCalculado;
-    const precioIndividual = baseTotal / cant;
+    const precioIndividual = (baseTotalCancha + feeTotalCancha) / cant;
     
-    return { base: baseCalculada, fee: feeCalculado, totalSug, precioIndividual };
+    return { 
+      base: baseCalculada, 
+      fee: feeCalculado, 
+      totalSug, 
+      precioIndividual, 
+      capacidadOficial: cant,
+      baseTotalCancha,
+      feeTotalCancha
+    };
   }, [bloqueSeleccionado, tipoReserva, cantidadJugadores, duracionMinutos]);
 
   const cambiarMonedaAbono = (nuevaMoneda) => {
@@ -862,6 +899,7 @@ export default function PublicClubDetailPage() {
       const esCompetitivo = tipoReserva === "ranking" || (tipoReserva === "privado" && activarRankedPrivado);
       const scheduledAtISO = formatearScheduledAtISO(bloqueSeleccionado.dateObj);
 
+      // GUARDA SIEMPRE EL PRECIO TOTAL BASE Y FEE TOTAL DE LA PISTA EN MATCHES
       const { data: newMatch, error: matchErr } = await supabase
         .from("matches")
         .insert({
@@ -869,9 +907,9 @@ export default function PublicClubDetailPage() {
           court_id: bloqueSeleccionado.cancha.id,
           scheduled_at: scheduledAtISO,
           duration_minutes: duracionMinutos,
-          total_price: calculosPrecio.base,
+          total_price: calculosPrecio.baseTotalCancha, // $10.00 constante
           price_per_player: calculosPrecio.precioIndividual,
-          app_fee: calculosPrecio.fee,
+          app_fee: calculosPrecio.feeTotalCancha,     // $1.00 constante
           match_type: tipoReserva,
           is_private: tipoReserva !== "ranking", 
           is_competitive: esCompetitivo,
@@ -1258,7 +1296,7 @@ export default function PublicClubDetailPage() {
                            <div key={cancha.id} className="flex border-b border-slate-100 relative h-16 group">
                               <div className="w-32 shrink-0 sticky left-0 z-30 bg-white border-r border-slate-200 p-2 flex flex-col justify-center items-center group-hover:bg-slate-50 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
                                  <span className="text-xs font-black text-slate-800 text-center leading-tight truncate px-1 w-full">{cancha.name}</span>
-                                 <span className="text-[8px] font-bold text-slate-400 mt-0.5">({cancha.capacity} Jug.)</span>
+                                 <span className="text-[8px] font-bold text-slate-400 mt-0.5">({cancha.capacity || 4} Jug.)</span>
                               </div>
 
                               <div className="flex relative">
@@ -1343,7 +1381,7 @@ export default function PublicClubDetailPage() {
                                      return (
                                        <div key={match.id} style={{ left: `${leftPx}px`, width: `${widthPx}px` }} className="absolute top-0 h-full p-0.5 z-20">
                                          <Link href={`/padel/partidos/${match.id}`} className="block h-full w-full">
-                                           <div className={`h-full w-full rounded-xl border flex flex-col justify-center px-2 py-1 shadow-sm transition-all hover:scale-[1.01] ${bgClass} overflow-hidden whitespace-nowrap`}>
+                                           <div className={`h-full w-full rounded-xl border flex flex-col justify-center px-2 py-1 shadow-sm transition-all hover:scale-[1.01] ${bgClass} overflow-hidden whitespace-nowrap cursor-pointer`}>
                                               <div className="flex items-center gap-1 mb-0.5">
                                                 <span className="text-[9px] font-black">{formatRangoHorarioExacto(match.scheduled_at, match.duration_minutes)}</span>
                                                 {esMiReserva && <span className={`text-[7px] uppercase font-black px-1 rounded ${badgeClass}`}>MÍA</span>}
@@ -1390,10 +1428,10 @@ export default function PublicClubDetailPage() {
         </div>
       </div>
 
-      {/* MODAL PASARELA DE PAGO CLIENTE CON SELECTOR DE DURACIÓN */}
+      {/* MODAL PASARELA DE PAGO CLIENTE CON ALTURA AJUSTADA (max-h-[90vh]) */}
       {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
         <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 font-sans" onClick={cerrarModalManual}>
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden" onClick={(e) => e.stopPropagation()}>
             
             {/* ENCABEZADO DEL MODAL CON FLECHA SUPERIOR DE REGRESO */}
             <div className="flex justify-between items-center border-b pb-3">
@@ -1458,16 +1496,7 @@ export default function PublicClubDetailPage() {
                     <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Modalidad de Reserva</label>
                     <select
                       value={tipoReserva}
-                      onChange={(e) => {
-                        const tipo = e.target.value;
-                        setTipoReserva(tipo);
-                        const factor = duracionMinutos / 60;
-                        const baseTotal = bloqueSeleccionado.precioBaseTotal * factor;
-                        const feeTotal = baseTotal * 0.10;
-                        const cant = tipo === "ranking" ? 4 : cantidadJugadores;
-                        const valUSD = tipo === "privado" ? (baseTotal + feeTotal) : ((baseTotal + feeTotal) / cant);
-                        setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
-                      }}
+                      onChange={(e) => cambiarTipoReserva(e.target.value)}
                       className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-slate-800 font-sans"
                     >
                       <option value="privado">🔒 Reserva Privada (Pista Completa)</option>
@@ -1489,15 +1518,17 @@ export default function PublicClubDetailPage() {
                         const finDiaClub = obtenerFinDiaClub(bloqueSeleccionado.dateObj, club?.close_time);
                         const finDeseado = bloqueSeleccionado.dateObj.getTime() + d.min * 60000;
                         const excedeCierre = finDeseado > finDiaClub.getTime();
+                        const esPublico = tipoReserva === "ranking";
+                        const deshabilitado = excedeCierre || (esPublico && d.min !== 60);
 
                         return (
                           <button
                             key={d.min}
                             type="button"
-                            disabled={excedeCierre}
-                            onClick={() => !excedeCierre && intentarCambiarDuracion(d.min)}
+                            disabled={deshabilitado}
+                            onClick={() => !deshabilitado && intentarCambiarDuracion(d.min)}
                             className={`py-2 px-2 rounded-xl text-xs font-black uppercase border transition-all font-sans ${
-                              excedeCierre
+                              deshabilitado
                                 ? "bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed opacity-50"
                                 : duracionMinutos === d.min
                                 ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm cursor-pointer"
@@ -1517,7 +1548,7 @@ export default function PublicClubDetailPage() {
                     </div>
                   ) : (
                     <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 text-xs font-bold text-blue-900">
-                      👥 Se creará una sala abierta para 4 jugadores por {duracionMinutos} min.
+                      👥 Se creará una sala abierta para 4 jugadores por 1 Hora (60 min obligatorios).
                     </div>
                   )}
                 </div>
@@ -1532,7 +1563,7 @@ export default function PublicClubDetailPage() {
               <div className="space-y-4 text-xs font-bold text-slate-700">
                 <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-1">
                   <div className="flex justify-between text-[#00FF9D]">
-                    <span>{tipoReserva === "privado" ? `Cancha Completa (${duracionMinutos}m)` : "Tu Cupo Individual"}</span>
+                    <span>{tipoReserva === "privado" ? `Pista Completa (${duracionMinutos}m)` : "Tu Cupo Individual (1 de 4)"}</span>
                     <div className="text-right">
                       <span className="font-black block">${calculosPrecio.base.toFixed(2)}</span>
                       <span className="text-[10px] text-emerald-400/80 block">~Bs. {(calculosPrecio.base * tasaBCV).toFixed(2)}</span>
