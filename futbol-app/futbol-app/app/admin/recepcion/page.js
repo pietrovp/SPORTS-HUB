@@ -41,6 +41,39 @@ function parsearFechaBD(fechaStr) {
   return new Date(`${cleanStr}-04:00`);
 }
 
+// Extrae Hora y Minuto forzados siempre en la zona horaria de Venezuela
+function obtenerHoraMinutoVET(dateObj) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Caracas",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(dateObj);
+  let hour = parts.find((p) => p.type === "hour").value;
+  const minute = parts.find((p) => p.type === "minute").value;
+  if (hour === "24") hour = "00";
+  return { 
+    hourStr: hour, 
+    minuteStr: minute, 
+    hourInt: parseInt(hour, 10), 
+    minuteInt: parseInt(minute, 10) 
+  };
+}
+
+// Genera la cadena ISO fijando la hora real de Venezuela
+function formatearScheduledAtISO(dateObj) {
+  const fechaISO = formatearFechaISOVET(dateObj);
+  const { hourStr, minuteStr } = obtenerHoraMinutoVET(dateObj);
+  return `${fechaISO}T${hourStr}:${minuteStr}:00-04:00`;
+}
+
+// Obtiene el objeto Date con la hora exacta de cierre del club
+function obtenerFinDiaClub(dateObj, closeTimeStr) {
+  const fechaISO = formatearFechaISOVET(dateObj);
+  const [hStr, mStr] = (closeTimeStr || "23:00:00").split(":");
+  return crearFechaVET(fechaISO, parseInt(hStr, 10), parseInt(mStr || "0", 10));
+}
+
 function horarioYaPaso(dateObj) {
   return dateObj.getTime() <= Date.now();
 }
@@ -132,7 +165,8 @@ function generarItemsAgendaMobile(canchaId, diaObj, partidos, bloqueos, club) {
       continue;
     }
 
-    const esHoraPunto = curr.getMinutes() === 0;
+    const { hourInt, minuteInt } = obtenerHoraMinutoVET(curr);
+    const esHoraPunto = minuteInt === 0;
     const esValidoMostrar = esHoraPunto || trasReservaPrev;
 
     if (esValidoMostrar) {
@@ -140,8 +174,8 @@ function generarItemsAgendaMobile(canchaId, diaObj, partidos, bloqueos, club) {
       items.push({
         tipo: "libre",
         startObj: new Date(currTime),
-        horaInt: curr.getHours(),
-        minutosInt: curr.getMinutes(),
+        horaInt: hourInt,
+        minutosInt: minuteInt,
         etiqueta: hLabel,
         vencido: horarioYaPaso(curr),
       });
@@ -149,7 +183,7 @@ function generarItemsAgendaMobile(canchaId, diaObj, partidos, bloqueos, club) {
 
     trasReservaPrev = false;
 
-    if (curr.getMinutes() === 30) {
+    if (minuteInt === 30) {
       curr = new Date(currTime + 30 * 60000);
     } else {
       const proximo30 = currTime + 30 * 60000;
@@ -321,6 +355,7 @@ export default function RecepcionElite() {
 
   const [modalAgendarOpen, setModalAgendarOpen] = useState(false);
   const [bloqueAgendar, setBloqueAgendar] = useState(null);
+  const [duracionMinutosPOS, setDuracionMinutosPOS] = useState(60);
   const [monedaAgendarPOS, setMonedaAgendarPOS] = useState("USD");
   const [formAgendarPOS, setFormAgendarPOS] = useState({
     nombreCliente: "",
@@ -410,7 +445,7 @@ export default function RecepcionElite() {
       )
       .on("broadcast", { event: "lock_event" }, (payload) => {
         const data = payload.payload;
-        if (data?.type === "INSERT") {
+        if (data?.type === "INSERT" || data?.type === "UPDATE") {
           setBloqueosActivos((prev) => [
             ...prev.filter(l => !(l.court_id === data.lock.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.lock.scheduled_at)) < 5000)),
             data.lock
@@ -688,9 +723,8 @@ export default function RecepcionElite() {
 
   const calcularPrecioPorBloque = (cancha, dateObj) => {
     try {
-      const hora = dateObj.getHours();
-      const minutos = dateObj.getMinutes();
-      const horaFormateada = `${String(hora).padStart(2, '0')}:${String(minutos).padStart(2, '0')}`;
+      const { hourInt, minuteInt } = obtenerHoraMinutoVET(dateObj);
+      const horaFormateada = `${String(hourInt).padStart(2, '0')}:${String(minuteInt).padStart(2, '0')}`;
 
       if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
         const precioNormal = parseFloat(cancha.price_normal);
@@ -701,11 +735,11 @@ export default function RecepcionElite() {
         return horaFormateada >= (bloque.start_time || "00:00") && horaFormateada < (bloque.end_time || "23:59");
       });
 
-      if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price))) {
-        return { precio: parseFloat(bloqueEncontrado.price), esPico: false };
+      if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price_60 || bloqueEncontrado.price))) {
+        return { precio: parseFloat(bloqueEncontrado.price_60 || bloqueEncontrado.price), esPico: false };
       }
 
-      const primerPrecio = parseFloat(cancha.pricing_blocks[0].price);
+      const primerPrecio = parseFloat(cancha.pricing_blocks[0].price_60 || cancha.pricing_blocks[0].price);
       return { precio: isNaN(primerPrecio) ? 15 : primerPrecio, esPico: false };
     } catch (error) {
       console.error("Error calculando precio bloque:", error);
@@ -716,16 +750,36 @@ export default function RecepcionElite() {
   const abrirModalAgendarPOS = async (cancha, fechaHoraBD, horaLabel, precioCalculado) => {
     if (!user) return;
 
-    const targetTime = obtenerEpoch(fechaHoraBD);
+    const dateObj = typeof fechaHoraBD === "string" ? parsearFechaBD(fechaHoraBD) : fechaHoraBD;
+    
+    if (horarioYaPaso(dateObj)) {
+      mostrarNotificacion("Horario no disponible", "Este bloque ya pasó y no puede ser reservado.", "warning");
+      return;
+    }
+
+    const finDiaClub = obtenerFinDiaClub(dateObj, clubInfo?.close_time);
+    if (dateObj.getTime() + 60 * 60000 > finDiaClub.getTime()) {
+      const hCierreFmt = finDiaClub.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" });
+      mostrarNotificacion(
+        "Fuera de Horario", 
+        `No es posible alquilar en este turno porque el complejo cierra a las ${hCierreFmt}.`, 
+        "warning"
+      );
+      return;
+    }
+
+    const slotTime = dateObj.getTime();
+    const scheduledAtISO = formatearScheduledAtISO(dateObj);
 
     const lockExistente = bloqueosActivos.find((l) => {
       if (l.court_id !== cancha.id) return false;
-      return Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000;
+      if (new Date(l.expires_at).getTime() <= Date.now()) return false;
+      return Math.abs(obtenerEpoch(l.scheduled_at) - slotTime) < 5000;
     });
 
-    if (lockExistente && lockExistente.user_id !== user.id) {
+    if (lockExistente) {
       return mostrarNotificacion(
-        "Pista ocupada temporalmente", 
+        "Pista en proceso de reserva", 
         "Un usuario u otro cajero está procesando el pago para esta pista en este momento. Intenta de nuevo en unos minutos.", 
         "warning"
       );
@@ -737,13 +791,28 @@ export default function RecepcionElite() {
       
       const nuevoLock = {
         court_id: cancha.id,
-        scheduled_at: fechaHoraBD,
+        scheduled_at: scheduledAtISO,
         user_id: user.id,
         expires_at: expiresAt,
+        duration_minutes: 60,
       };
 
+      const { error: lockErr } = await supabase
+        .from("padel_locks")
+        .insert(nuevoLock);
+
+      if (lockErr) {
+        console.error("Error insertando bloqueo POS:", lockErr);
+        await cargarBloqueos();
+        return mostrarNotificacion(
+          "Pista en proceso de reserva",
+          "Alguien más se ha adelantado a reservar esta pista en este preciso momento.",
+          "warning"
+        );
+      }
+
       setBloqueosActivos((prev) => [
-        ...prev.filter(l => !(l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000)),
+        ...prev.filter(l => !(l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - slotTime) < 5000)),
         nuevoLock
       ]);
 
@@ -754,17 +823,12 @@ export default function RecepcionElite() {
         payload: { type: "INSERT", lock: nuevoLock }
       });
 
-      const { error: lockErr } = await supabase
-        .from("padel_locks")
-        .upsert(nuevoLock, { onConflict: 'court_id,scheduled_at' });
-
-      if (lockErr) throw lockErr;
-
-      const precioBaseTotal = precioCalculado || cancha.price_credits || 15;
+      setDuracionMinutosPOS(60);
+      const precioBaseTotal = precioCalculado || cancha.price_credits || cancha.price_normal || 15;
       const feeSugerido = precioBaseTotal * 0.10;
       const totalSugerido = precioBaseTotal + feeSugerido;
 
-      setBloqueAgendar({ cancha, fechaHoraBD, horaLabel, precioBaseTotal });
+      setBloqueAgendar({ cancha, dateObj, scheduledAtISO, horaLabel, precioBaseTotal });
       setMonedaAgendarPOS("USD");
       setFormAgendarPOS({
         nombreCliente: "",
@@ -784,9 +848,88 @@ export default function RecepcionElite() {
     }
   };
 
+  const intentarCambiarDuracionPOS = async (nuevaDuracion) => {
+    if (!bloqueAgendar) return;
+
+    const inicioDeseado = bloqueAgendar.dateObj;
+    const canchaId = bloqueAgendar.cancha.id;
+
+    // Validar cierre del club
+    const finDiaClub = obtenerFinDiaClub(inicioDeseado, clubInfo?.close_time);
+    const finDeseado = new Date(inicioDeseado.getTime() + nuevaDuracion * 60000);
+
+    if (finDeseado.getTime() > finDiaClub.getTime()) {
+      const hCierreFmt = finDiaClub.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" });
+      mostrarNotificacion("Excede el horario de cierre", `No es posible alquilar ${nuevaDuracion} minutos porque el complejo cierra a las ${hCierreFmt}.`, "warning");
+      return;
+    }
+
+    // Validar solapamiento
+    const chocaPartido = partidosPeriodo.some((m) => {
+      if (m.court_id !== canchaId) return false;
+      return haySolapamiento(inicioDeseado, nuevaDuracion, m.scheduled_at, m.duration_minutes || 60);
+    });
+
+    const chocaLock = bloqueosActivos.some((l) => {
+      if (l.court_id !== canchaId) return false;
+      if (Math.abs(obtenerEpoch(l.scheduled_at) - inicioDeseado.getTime()) < 5000) return false;
+      if (new Date(l.expires_at).getTime() <= Date.now()) return false;
+      return haySolapamiento(inicioDeseado, nuevaDuracion, l.scheduled_at, l.duration_minutes || 60);
+    });
+
+    if (chocaPartido || chocaLock) {
+      mostrarNotificacion("Horario no disponible", `No es posible alquilar ${nuevaDuracion} minutos porque la pista se encuentra ocupada en el bloque contiguo.`, "warning");
+      return;
+    }
+
+    setDuracionMinutosPOS(nuevaDuracion);
+
+    if (user) {
+      const scheduledAtISO = bloqueAgendar.scheduledAtISO || formatearScheduledAtISO(inicioDeseado);
+      const targetTime = inicioDeseado.getTime();
+
+      const updatedLock = {
+        court_id: canchaId,
+        scheduled_at: scheduledAtISO,
+        duration_minutes: nuevaDuracion,
+        user_id: user.id,
+        expires_at: new Date(Date.now() + 10 * 60000).toISOString()
+      };
+
+      setBloqueosActivos((prev) => [
+        ...prev.filter(l => !(l.court_id === canchaId && Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000)),
+        updatedLock
+      ]);
+
+      const channel = supabase.channel(`locks_club_${clubId}`);
+      channel.send({
+        type: "broadcast",
+        event: "lock_event",
+        payload: { type: "UPDATE", lock: updatedLock }
+      });
+
+      await supabase
+        .from("padel_locks")
+        .update({ duration_minutes: nuevaDuracion })
+        .match({ court_id: canchaId, scheduled_at: scheduledAtISO, user_id: user.id });
+    }
+
+    const factor = nuevaDuracion / 60;
+    const baseNueva = bloqueAgendar.precioBaseTotal * factor;
+    const feeNuevo = baseNueva * 0.10;
+    const totalNuevoUSD = baseNueva + feeNuevo;
+
+    setFormAgendarPOS((prev) => ({
+      ...prev,
+      montoCustomUSD: monedaAgendarPOS === "USD" ? totalNuevoUSD.toFixed(2) : (totalNuevoUSD * tasaBCV).toFixed(2)
+    }));
+  };
+
   const cerrarModalAgendarPOS = async () => {
     setModalAgendarOpen(false);
     if (bloqueAgendar && user) {
+      const scheduledAtISO = bloqueAgendar.scheduledAtISO || formatearScheduledAtISO(bloqueAgendar.dateObj);
+      
       const channel = supabase.channel(`locks_club_${clubId}`);
       channel.send({
         type: "broadcast",
@@ -794,18 +937,15 @@ export default function RecepcionElite() {
         payload: { 
           type: "DELETE", 
           court_id: bloqueAgendar.cancha.id, 
-          scheduled_at: bloqueAgendar.fechaHoraBD 
+          scheduled_at: scheduledAtISO 
         }
       });
 
       await supabase
         .from("padel_locks")
         .delete()
-        .match({
-          court_id: bloqueAgendar.cancha.id,
-          scheduled_at: bloqueAgendar.fechaHoraBD,
-          user_id: user.id
-        });
+        .eq("court_id", bloqueAgendar.cancha.id)
+        .eq("scheduled_at", scheduledAtISO);
 
       await cargarBloqueos();
     }
@@ -813,11 +953,12 @@ export default function RecepcionElite() {
 
   const calculosAgendarPOS = useMemo(() => {
     if (!bloqueAgendar) return { base: 0, fee: 0, totalSugerido: 0 };
-    const base = bloqueAgendar.precioBaseTotal;
+    const factor = duracionMinutosPOS / 60;
+    const base = bloqueAgendar.precioBaseTotal * factor;
     const fee = base * 0.10;
     const totalSugerido = base + fee;
     return { base, fee, totalSugerido };
-  }, [bloqueAgendar]);
+  }, [bloqueAgendar, duracionMinutosPOS]);
 
   const handleSeleccionarImagenPOS = (e, setter) => {
     const file = e.target.files[0];
@@ -848,7 +989,8 @@ export default function RecepcionElite() {
     }
 
     const montoUSD = monedaAgendarPOS === "VES" ? valIngresado / tasaBCV : valIngresado;
-    const { cancha, fechaHoraBD } = bloqueAgendar;
+    const { cancha, dateObj } = bloqueAgendar;
+    const scheduledAtISO = bloqueAgendar.scheduledAtISO || formatearScheduledAtISO(dateObj);
 
     try {
       setProcesando(true);
@@ -857,12 +999,12 @@ export default function RecepcionElite() {
         .from("matches")
         .select("id")
         .eq("court_id", cancha.id)
-        .eq("scheduled_at", fechaHoraBD)
+        .eq("scheduled_at", scheduledAtISO)
         .neq("status", "cancelado")
         .maybeSingle();
 
       if (matchExistente) {
-        await supabase.from("padel_locks").delete().match({ court_id: cancha.id, scheduled_at: fechaHoraBD, user_id: user.id });
+        await supabase.from("padel_locks").delete().eq("court_id", cancha.id).eq("scheduled_at", scheduledAtISO);
         await cargarBloqueos();
         setModalAgendarOpen(false);
         return mostrarNotificacion("Pista Ocupada", "Un usuario acaba de confirmar la reserva en esta pista para el mismo horario.", "warning");
@@ -894,9 +1036,10 @@ export default function RecepcionElite() {
         .insert({
           club_id: clubId,
           court_id: cancha.id,
-          scheduled_at: fechaHoraBD,
+          scheduled_at: scheduledAtISO,
+          duration_minutes: duracionMinutosPOS,
           total_price: base,
-          price_per_player: base / 4,
+          price_per_player: base / (cancha.capacity || 4),
           app_fee: fee,
           match_type: "privado",
           is_private: true,
@@ -931,17 +1074,15 @@ export default function RecepcionElite() {
         payload: { 
           type: "DELETE", 
           court_id: cancha.id, 
-          scheduled_at: fechaHoraBD 
+          scheduled_at: scheduledAtISO 
         }
       });
 
       await supabase
         .from("padel_locks")
         .delete()
-        .match({
-          court_id: cancha.id,
-          scheduled_at: fechaHoraBD
-        });
+        .eq("court_id", cancha.id)
+        .eq("scheduled_at", scheduledAtISO);
 
       await cargarBloqueos();
       setModalAgendarOpen(false);
@@ -1894,6 +2035,12 @@ export default function RecepcionElite() {
     ? numIngresadoAgendar * tasaBCV
     : numIngresadoAgendar / tasaBCV;
 
+  // CÁLCULOS DINÁMICOS PARA LA TARJETA DEL MODAL POS
+  const horaInicioObjPOS = bloqueAgendar?.dateObj;
+  const horaFinObjPOS = horaInicioObjPOS ? new Date(horaInicioObjPOS.getTime() + duracionMinutosPOS * 60000) : null;
+  const fmtHoraModal = (d) => d ? d.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" }).toUpperCase() : "";
+  const rangoHorarioDinamicoPOS = horaInicioObjPOS && horaFinObjPOS ? `${fmtHoraModal(horaInicioObjPOS)} - ${fmtHoraModal(horaFinObjPOS)}` : "";
+
   return (
     <div className="flex flex-col w-full min-h-screen bg-slate-100 font-sans p-2 sm:p-4 space-y-3">
 
@@ -2128,7 +2275,7 @@ export default function RecepcionElite() {
                                 <button
                                   key={`free-${idx}`}
                                   type="button"
-                                  onClick={() => abrirModalAgendarPOS(cancha, `${formatearFechaISOVET(item.startObj)}T${String(item.horaInt).padStart(2,"0")}:${String(item.minutosInt).padStart(2,"0")}:00-04:00`, item.etiqueta, precioOriginal)}
+                                  onClick={() => abrirModalAgendarPOS(cancha, item.startObj, item.etiqueta, precioOriginal)}
                                   className="w-full p-3 rounded-2xl bg-white border border-slate-200 hover:border-emerald-300 hover:shadow-sm flex justify-between items-center transition-all cursor-pointer active:scale-[0.98] shadow-2xs"
                                 >
                                   <div className="flex items-center gap-2">
@@ -2204,13 +2351,11 @@ export default function RecepcionElite() {
 
                                        const { precio: precio0 } = calcularPrecioPorBloque(cancha, b.dateObj0);
 
-                                       // Si la hora ENTERA (:00 a :00 siguiente) está completamente libre y no vencida:
                                        if (!isOcupado0 && !isOcupado30 && !vencido0) {
-                                         const fechaHoraBDSlot = `${formatearFechaISOVET(b.dateObj0)}T${String(b.dateObj0.getHours()).padStart(2, "0")}:00:00-04:00`;
                                          return (
                                            <div key={i} className="w-28 shrink-0 border-r border-slate-100 h-full relative p-1">
                                              <button
-                                               onClick={() => abrirModalAgendarPOS(cancha, fechaHoraBDSlot, b.etiqueta, precio0)}
+                                               onClick={() => abrirModalAgendarPOS(cancha, b.dateObj0, b.etiqueta, precio0)}
                                                className="w-full h-full rounded-xl bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200 hover:border-emerald-400 flex flex-col items-center justify-center transition-all shadow-2xs group cursor-pointer active:scale-95"
                                              >
                                                <span className="text-[10px] font-black text-emerald-800 uppercase leading-none">+ Agendar</span>
@@ -2220,7 +2365,6 @@ export default function RecepcionElite() {
                                          );
                                        }
 
-                                       // De lo contrario (hora dividida / parcialmente ocupada o vencida), renderizamos 2 celdas de 30 min (w-14 cada una)
                                        const slots = [
                                          { dateObj: b.dateObj0, min: 0, isOcupado: isOcupado0, vencido: vencido0 },
                                          { dateObj: b.dateObj30, min: 30, isOcupado: isOcupado30, vencido: vencido30 },
@@ -2228,13 +2372,12 @@ export default function RecepcionElite() {
 
                                        return slots.map((s, sIdx) => {
                                          const { precio: precioSlot } = calcularPrecioPorBloque(cancha, s.dateObj);
-                                         const fechaHoraBDSlot = `${formatearFechaISOVET(s.dateObj)}T${String(s.dateObj.getHours()).padStart(2, "0")}:${String(s.min).padStart(2, "0")}:00-04:00`;
 
                                          return (
                                            <div key={`${i}-${sIdx}`} className="w-14 shrink-0 border-r border-slate-100 h-full relative p-1">
                                              {!s.isOcupado && !s.vencido ? (
                                                <button
-                                                 onClick={() => abrirModalAgendarPOS(cancha, fechaHoraBDSlot, s.dateObj.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" }), precioSlot)}
+                                                 onClick={() => abrirModalAgendarPOS(cancha, s.dateObj, s.dateObj.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" }), precioSlot)}
                                                  className="w-full h-full rounded-lg bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200 hover:border-emerald-400 flex flex-col items-center justify-center transition-all shadow-2xs group cursor-pointer active:scale-[0.96]"
                                                >
                                                  <span className="text-[8px] font-black text-emerald-800 uppercase leading-none">+</span>
@@ -2250,18 +2393,18 @@ export default function RecepcionElite() {
                                        });
                                     })}
 
-                                    {/* Overlays de Partidos acotados a límites exactos */}
+                                    {/* Overlays de Partidos */}
                                     {partidosPeriodo.filter(m => m.court_id === cancha.id).map(match => {
                                         const startEpoch = obtenerEpoch(match.scheduled_at);
                                         if (startEpoch < gridStart || startEpoch >= gridEnd) return null;
 
                                         const offsetMin = (startEpoch - gridStart) / 60000;
-                                        const leftPx = (offsetMin / 30) * 56; // w-14 = 3.5rem = 56px
+                                        const leftPx = (offsetMin / 30) * 56;
 
                                         const dur = match.duration_minutes || 60;
                                         const maxDur = (gridEnd - startEpoch) / 60000;
                                         const effectiveDur = Math.min(dur, maxDur);
-                                        const widthPx = (effectiveDur / 30) * 56 - 2; // -2px for padding/gap
+                                        const widthPx = (effectiveDur / 30) * 56 - 2;
                                         
                                         const esReembolsoPendiente = match.status === "cancelado_pendiente_reembolso" || match.payment_status === "reembolso_pendiente";
                                         const esLiquidado = match.payment_status === "liquidado";
@@ -2313,7 +2456,7 @@ export default function RecepcionElite() {
                                         );
                                     })}
 
-                                    {/* Overlays de Bloqueos acotados a límites exactos */}
+                                    {/* Overlays de Bloqueos */}
                                     {bloqueosActivos.filter(l => l.court_id === cancha.id).map(lock => {
                                         const startEpoch = obtenerEpoch(lock.scheduled_at);
                                         if (startEpoch < gridStart || startEpoch >= gridEnd) return null;
@@ -2541,12 +2684,79 @@ export default function RecepcionElite() {
               <div>
                 <span className="text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Nueva Reserva POS</span>
                 <h3 className="text-base sm:text-lg font-black text-slate-900 mt-0.5">{bloqueAgendar.cancha.name}</h3>
-                <p className="text-xs font-bold text-slate-500">{bloqueAgendar.horaLabel}</p>
               </div>
-              <button onClick={cerrarModalAgendarPOS} className="text-slate-400 font-bold cursor-pointer">✕</button>
+              <button onClick={cerrarModalAgendarPOS} className="text-slate-400 font-bold cursor-pointer hover:text-slate-700">✕</button>
             </div>
 
+            {/* TARJETA DE RESUMEN DESTACADA EN POS */}
+            {(() => {
+              const horaInicioObjPOS = bloqueAgendar?.dateObj;
+              const horaFinObjPOS = horaInicioObjPOS ? new Date(horaInicioObjPOS.getTime() + duracionMinutosPOS * 60000) : null;
+              const fmtHoraModal = (d) => d ? d.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" }).toUpperCase() : "";
+              const rangoHorarioDinamicoPOS = horaInicioObjPOS && horaFinObjPOS ? `${fmtHoraModal(horaInicioObjPOS)} - ${fmtHoraModal(horaFinObjPOS)}` : "";
+
+              return (
+                <div className="bg-slate-900 text-white p-3.5 rounded-2xl space-y-2 shadow-md border border-slate-800 text-xs">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
+                    <span className="text-[10px] font-black uppercase text-[#00FF9D] tracking-wider truncate">
+                      📍 {clubInfo?.name || "Complejo"}
+                    </span>
+                    <span className="text-[10px] font-extrabold bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md border border-slate-700">
+                      {duracionMinutosPOS} Mins
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase block">Cancha</span>
+                      <span className="font-black text-white text-xs block truncate">{bloqueAgendar.cancha.name}</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase block">Horario Reservado</span>
+                      <span className="font-black text-[#00FF9D] text-xs block truncate">⏰ {rangoHorarioDinamicoPOS}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             <form onSubmit={ejecutarAgendarPOS} className="space-y-3.5 text-xs font-bold text-slate-700">
+              
+              {/* SELECTOR DE DURACIÓN */}
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">
+                  Duración del Alquiler
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { min: 60, label: "1 Hora (60m)" },
+                    { min: 90, label: "1.5 Horas (90m)" },
+                    { min: 120, label: "2 Horas (120m)" },
+                  ].map((d) => {
+                    const finDiaClub = obtenerFinDiaClub(bloqueAgendar.dateObj, clubInfo?.close_time);
+                    const finDeseado = bloqueAgendar.dateObj.getTime() + d.min * 60000;
+                    const excedeCierre = finDeseado > finDiaClub.getTime();
+
+                    return (
+                      <button
+                        key={d.min}
+                        type="button"
+                        disabled={excedeCierre}
+                        onClick={() => !excedeCierre && intentarCambiarDuracionPOS(d.min)}
+                        className={`py-2 px-2 rounded-xl text-xs font-black uppercase border transition-all font-sans ${
+                          excedeCierre
+                            ? "bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed opacity-50"
+                            : duracionMinutosPOS === d.min
+                            ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm cursor-pointer"
+                            : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100 cursor-pointer"
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div>
                 <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Nombre del Cliente</label>
                 <input
@@ -2629,7 +2839,7 @@ export default function RecepcionElite() {
 
               <div className="bg-slate-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs">
                 <div className="flex justify-between items-start text-slate-400">
-                  <span>Cancha Base (Pista Completa):</span>
+                  <span>Cancha Base ({duracionMinutosPOS}m):</span>
                   <div className="text-right">
                     <span className="text-white font-black block">${calculosAgendarPOS.base.toFixed(2)}</span>
                     <span className="text-[10px] text-slate-400 block">Bs. {(calculosAgendarPOS.base * tasaBCV).toFixed(2)}</span>
@@ -2719,7 +2929,7 @@ export default function RecepcionElite() {
               <button
                 type="submit"
                 disabled={procesando}
-                className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black uppercase text-xs tracking-wider rounded-2xl shadow-md mt-2 cursor-pointer"
+                className="w-full py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black uppercase text-xs tracking-wider rounded-2xl shadow-md mt-2 cursor-pointer transition-all hover:bg-slate-800"
               >
                 {procesando ? "Guardando..." : "✓ Agendar y Registrar Cobro"}
               </button>
