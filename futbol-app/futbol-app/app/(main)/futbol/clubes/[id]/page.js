@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import Link from "next/link";
@@ -23,7 +23,7 @@ function obtenerEpoch(fechaStr) {
   let clean = String(fechaStr).trim().replace(" ", "T");
   const tieneOffset = clean.includes("Z") || clean.includes("+") || (clean.indexOf("-", 10) !== -1);
   if (!tieneOffset) {
-    clean = clean.substring(0, 19) + "-04:00";
+    clean = `${clean.substring(0, 19)}-04:00`;
   }
   return new Date(clean).getTime();
 }
@@ -31,7 +31,7 @@ function obtenerEpoch(fechaStr) {
 function parsearFechaVET(fechaStr) {
   if (!fechaStr) return new Date();
   const cleanStr = fechaStr.replace(" ", "T").substring(0, 19);
-  const isoVET = cleanStr.endsWith("Z") ? cleanStr.slice(0, -1) : cleanStr + "-04:00";
+  const isoVET = `${cleanStr.endsWith("Z") ? cleanStr.slice(0, -1) : cleanStr}-04:00`;
   return new Date(isoVET);
 }
 
@@ -55,8 +55,128 @@ function crearFechaVET(dateYYYYMMDD, hora24, minutos24) {
 }
 
 function horarioYaPaso(dateObj) {
-  const ahora = new Date();
-  return dateObj.getTime() <= ahora.getTime();
+  return dateObj.getTime() <= Date.now();
+}
+
+function haySolapamiento(inicioA, duracionA, inicioB, duracionB) {
+  const startA = obtenerEpoch(inicioA);
+  const endA = startA + (duracionA || 60) * 60 * 1000;
+  const startB = obtenerEpoch(inicioB);
+  const endB = startB + (duracionB || 60) * 60 * 1000;
+  return startA < endB && endA > startB;
+}
+
+function formatRangoHorarioExacto(isoStr, durationMin) {
+  const start = parsearFechaVET(isoStr);
+  const end = new Date(start.getTime() + (durationMin || 60) * 60000);
+  const fmt = (d) => d.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" }).toUpperCase();
+  return `${fmt(start)} - ${fmt(end)}`;
+}
+
+function generarItemsAgendaMobile(canchaId, fechaSeleccionada, partidos, bloqueos, club) {
+  if (!club) return [];
+  const horaApertura = parseInt((club.open_time || "07:00:00").split(":")[0], 10);
+  const minApertura = parseInt((club.open_time || "07:00:00").split(":")[1] || "0", 10);
+  const horaCierre = parseInt((club.close_time || "23:00:00").split(":")[0], 10);
+  const fechaSelISO = formatearFechaISOVET(fechaSeleccionada);
+
+  let curr = crearFechaVET(fechaSelISO, horaApertura, minApertura);
+  const finDia = crearFechaVET(fechaSelISO, horaCierre, 0);
+
+  const items = [];
+  let trasReservaPrev = false;
+
+  while (curr.getTime() < finDia.getTime()) {
+    const currTime = curr.getTime();
+
+    const match = partidos.find((m) => m.court_id === canchaId && Math.abs(obtenerEpoch(m.scheduled_at) - currTime) < 60000);
+    if (match) {
+      const dur = match.duration_minutes || 60;
+      items.push({
+        tipo: "partido",
+        partido: match,
+        startObj: new Date(currTime),
+        duracion: dur,
+        rangoTexto: formatRangoHorarioExacto(match.scheduled_at, dur),
+      });
+      curr = new Date(currTime + dur * 60000);
+      trasReservaPrev = true;
+      continue;
+    }
+
+    const lock = bloqueos.find((l) => l.court_id === canchaId && Math.abs(obtenerEpoch(l.scheduled_at) - currTime) < 60000);
+    if (lock) {
+      const dur = lock.duration_minutes || 60;
+      items.push({
+        tipo: "bloqueo",
+        lock: lock,
+        startObj: new Date(currTime),
+        duracion: dur,
+        rangoTexto: formatRangoHorarioExacto(lock.scheduled_at, dur),
+      });
+      curr = new Date(currTime + dur * 60000);
+      trasReservaPrev = true;
+      continue;
+    }
+
+    const ongoingMatch = partidos.find((m) => {
+      if (m.court_id !== canchaId) return false;
+      const s = obtenerEpoch(m.scheduled_at);
+      const e = s + (m.duration_minutes || 60) * 60000;
+      return currTime > s && currTime < e;
+    });
+    if (ongoingMatch) {
+      const e = obtenerEpoch(ongoingMatch.scheduled_at) + (ongoingMatch.duration_minutes || 60) * 60000;
+      curr = new Date(e);
+      trasReservaPrev = true;
+      continue;
+    }
+
+    const ongoingLock = bloqueos.find((l) => {
+      if (l.court_id !== canchaId) return false;
+      const s = obtenerEpoch(l.scheduled_at);
+      const e = s + (l.duration_minutes || 60) * 60000;
+      return currTime > s && currTime < e;
+    });
+    if (ongoingLock) {
+      const e = obtenerEpoch(ongoingLock.scheduled_at) + (ongoingLock.duration_minutes || 60) * 60000;
+      curr = new Date(e);
+      trasReservaPrev = true;
+      continue;
+    }
+
+    const esHoraPunto = curr.getMinutes() === 0;
+    const esValidoMostrar = esHoraPunto || trasReservaPrev;
+
+    if (esValidoMostrar) {
+      const hLabel = curr.toLocaleTimeString("es-ES", { timeZone: "America/Caracas", hour: "2-digit", minute: "2-digit", hour12: true });
+      items.push({
+        tipo: "libre",
+        startObj: new Date(currTime),
+        horaInt: curr.getHours(),
+        minutosInt: curr.getMinutes(),
+        etiqueta: hLabel,
+        vencido: horarioYaPaso(curr),
+      });
+    }
+
+    trasReservaPrev = false;
+
+    if (curr.getMinutes() === 30) {
+      curr = new Date(currTime + 30 * 60000);
+    } else {
+      const proximo30 = currTime + 30 * 60000;
+      const hayAlgoEn30 = partidos.some(m => m.court_id === canchaId && Math.abs(obtenerEpoch(m.scheduled_at) - proximo30) < 60000) ||
+                          bloqueos.some(l => l.court_id === canchaId && Math.abs(obtenerEpoch(l.scheduled_at) - proximo30) < 60000);
+      if (hayAlgoEn30) {
+        curr = new Date(currTime + 30 * 60000);
+      } else {
+        curr = new Date(currTime + 60 * 60000);
+      }
+    }
+  }
+
+  return items;
 }
 
 export default function FutbolClubDetailPage() {
@@ -67,22 +187,22 @@ export default function FutbolClubDetailPage() {
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
   const [user, setUser] = useState(null);
+
   const [club, setClub] = useState(null);
   const [canchas, setCanchas] = useState([]);
   const [partidosClub, setPartidosClub] = useState([]);
   const [bloqueosActivos, setBloqueosActivos] = useState([]);
 
-  // Tasa BCV Oficial
   const [tasaBCV, setTasaBCV] = useState(36.65);
-  const [fechaSeleccionada, setFechaSeleccionada] = useState(new Date());
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(() => new Date());
   const [promocionHoy, setPromocionHoy] = useState(null);
 
   const [popupNotif, setPopupNotif] = useState({ open: false, title: "", message: "", type: "info" });
-  
-  // Modales de Reserva
+
   const [modalReservaOpen, setModalReservaOpen] = useState(false);
   const [pasoModal, setPasoModal] = useState(1);
   const [bloqueSeleccionado, setBloqueSeleccionado] = useState(null);
+  const [duracionMinutos, setDuracionMinutos] = useState(60);
   const [procesandoReserva, setProcesandoReserva] = useState(false);
   const [tiempoRestante, setTiempoRestante] = useState(null);
 
@@ -93,6 +213,10 @@ export default function FutbolClubDetailPage() {
   const [numReferencia, setNumReferencia] = useState("");
   const [previewComprobante, setPreviewComprobante] = useState("");
 
+  const [canchaFiltroMobile, setCanchaFiltroMobile] = useState(null);
+
+  const channelRef = useRef(null);
+
   useEffect(() => {
     setMounted(true);
     if (clubId) {
@@ -102,10 +226,19 @@ export default function FutbolClubDetailPage() {
     }
   }, [clubId]);
 
+  useEffect(() => {
+    if (canchas.length > 0 && !canchaFiltroMobile) {
+      setCanchaFiltroMobile(canchas[0].id);
+    }
+  }, [canchas, canchaFiltroMobile]);
+
   async function cargarDatosIniciales() {
     setLoading(true);
     try {
-      await Promise.all([obtenerTasaBCV(), cargarDetalleClub()]);
+      await Promise.all([
+        obtenerTasaBCV(),
+        cargarDetalleClub()
+      ]);
     } catch (e) {
       console.error("Error en carga inicial", e);
     } finally {
@@ -121,44 +254,39 @@ export default function FutbolClubDetailPage() {
 
   useEffect(() => {
     if (!clubId || !supabase) return;
+
     cargarBloqueos();
 
-    const channel = supabase.channel(`locks_club_${clubId}`, {
+    const channelName = `locks_club_${clubId}`;
+    const channel = supabase.channel(channelName, {
       config: { broadcast: { self: true } }
     });
 
+    channelRef.current = channel;
+
     channel
-      .on("postgres_changes", { event: "*", schema: "public", table: "padel_locks" }, () => {
-        cargarBloqueos();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` }, () => {
-        cargarDetalleClub();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "match_players" }, () => {
-        cargarDetalleClub();
-      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "padel_locks" }, () => cargarBloqueos())
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `club_id=eq.${clubId}` }, () => cargarDetalleClub())
+      .on("postgres_changes", { event: "*", schema: "public", table: "match_players" }, () => cargarDetalleClub())
       .on("broadcast", { event: "lock_event" }, (payload) => {
         const data = payload.payload;
-        if (data?.type === "INSERT") {
+        if (data?.type === "INSERT" || data?.type === "UPDATE") {
           setBloqueosActivos((prev) => [
-            ...prev.filter((l) => !(l.court_id === data.lock.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.lock.scheduled_at)) < 5000)),
-            data.lock,
+            ...prev.filter(l => !(l.court_id === data.lock.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.lock.scheduled_at)) < 5000)),
+            data.lock
           ]);
         } else if (data?.type === "DELETE") {
           setBloqueosActivos((prev) =>
-            prev.filter((l) => !(l.court_id === data.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.scheduled_at)) < 5000))
+            prev.filter(l => !(l.court_id === data.court_id && Math.abs(obtenerEpoch(l.scheduled_at) - obtenerEpoch(data.scheduled_at)) < 5000))
           );
         }
-      })
-      .on("broadcast", { event: "match_event" }, (payload) => {
-        if (payload.payload?.type === "INSERT_MATCH") {
-          cargarDetalleClub();
-        }
+        cargarBloqueos();
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
+      channelRef.current = null;
     };
   }, [clubId]);
 
@@ -203,10 +331,10 @@ export default function FutbolClubDetailPage() {
       const { data } = await supabase
         .from("padel_locks")
         .select("*")
-        .gt("expires_at", ahoraISO);
+        .gt("expires_at", ahoraISO); 
       setBloqueosActivos(data || []);
     } catch (error) {
-      console.error("Error cargando bloqueos", error);
+      console.error("Error cargando bloqueos:", error);
     }
   }
 
@@ -214,20 +342,25 @@ export default function FutbolClubDetailPage() {
     setModalReservaOpen(false);
     setTiempoRestante(null);
     mostrarNotificacion(
-      "⏱️ Tiempo Expirado",
-      "Han pasado los 10 minutos. La cancha de fútbol ha sido liberada para otros usuarios.",
+      "⏱️ Tiempo Expirado", 
+      "Han pasado los 10 minutos. La cancha ha sido liberada para otros usuarios.", 
       "warning"
     );
 
     if (bloqueSeleccionado && user) {
       const scheduledAtISO = bloqueSeleccionado.dateObj.toISOString();
-      
-      const channel = supabase.channel(`locks_club_${clubId}`);
-      channel.send({
-        type: "broadcast",
-        event: "lock_event",
-        payload: { type: "DELETE", court_id: bloqueSeleccionado.cancha.id, scheduled_at: scheduledAtISO },
-      });
+
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "lock_event",
+          payload: { 
+            type: "DELETE", 
+            court_id: bloqueSeleccionado.cancha.id, 
+            scheduled_at: scheduledAtISO 
+          }
+        });
+      }
 
       await supabase
         .from("padel_locks")
@@ -242,23 +375,28 @@ export default function FutbolClubDetailPage() {
   const cerrarModalManual = async () => {
     setModalReservaOpen(false);
     setTiempoRestante(null);
-    
+
     if (bloqueSeleccionado && user) {
       const scheduledAtISO = bloqueSeleccionado.dateObj.toISOString();
-      
-      const channel = supabase.channel(`locks_club_${clubId}`);
-      channel.send({
-        type: "broadcast",
-        event: "lock_event",
-        payload: { type: "DELETE", court_id: bloqueSeleccionado.cancha.id, scheduled_at: scheduledAtISO },
-      });
+
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "lock_event",
+          payload: { 
+            type: "DELETE", 
+            court_id: bloqueSeleccionado.cancha.id, 
+            scheduled_at: scheduledAtISO 
+          }
+        });
+      }
 
       await supabase
         .from("padel_locks")
         .delete()
         .eq("court_id", bloqueSeleccionado.cancha.id)
         .eq("user_id", user.id);
-        
+
       await cargarBloqueos();
     }
   };
@@ -266,6 +404,7 @@ export default function FutbolClubDetailPage() {
   async function cargarPromocionDelDia() {
     try {
       const hoyStr = formatearFechaISOVET(fechaSeleccionada);
+
       const { data: promoActiva } = await supabase
         .from("padel_promotions")
         .select("*")
@@ -273,15 +412,17 @@ export default function FutbolClubDetailPage() {
         .lte("start_date", hoyStr)
         .gte("end_date", hoyStr)
         .maybeSingle();
+
       setPromocionHoy(promoActiva || null);
     } catch (e) {
-      console.error("Error buscando promo", e);
+      console.error("Error buscando promo:", e);
     }
   }
 
   async function cargarDetalleClub() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      
       if (session && session.user) {
         setUser(session.user);
       } else {
@@ -290,7 +431,7 @@ export default function FutbolClubDetailPage() {
 
       const { data: clubData, error: cErr } = await supabase
         .from("clubs")
-        .select(`id, name, city, address, image_url, amenities, open_time, close_time, slot_duration_minutes`)
+        .select("id, name, city, address, image_url, amenities, open_time, close_time, slot_duration_minutes")
         .eq("id", clubId)
         .maybeSingle();
 
@@ -302,59 +443,24 @@ export default function FutbolClubDetailPage() {
 
       const { data: courtsData } = await supabase
         .from("courts")
-        .select(`id, name, sport_type, capacity, price_normal, pricing_blocks`)
+        .select("id, name, sport_type, capacity, price_normal, pricing_blocks")
         .eq("club_id", clubId)
         .eq("is_active", true)
         .order("court_number", { ascending: true });
 
-      const canchasFutbol = (courtsData || []).filter((c) => c.sport_type === "futbol");
+      const canchasFutbol = (courtsData || []).filter(c => c.sport_type === "futbol");
       setCanchas(canchasFutbol);
 
       const { data: matchesData } = await supabase
         .from("matches")
-        .select(`*, court:courts(name)`)
+        .select("*, court:courts(name)")
         .eq("club_id", clubId)
         .neq("status", "cancelado")
         .order("scheduled_at", { ascending: true });
 
-      const matchIds = (matchesData || []).map((m) => m.id);
-
-      if (matchIds.length > 0) {
-        const { data: playersData } = await supabase
-          .from("match_players")
-          .select(`id, match_id, user_id, team`)
-          .in("match_id", matchIds);
-
-        const allUserIds = Array.from(new Set((playersData || []).map((p) => p.user_id).filter(Boolean)));
-        let profilesMap = {};
-
-        if (allUserIds.length > 0) {
-          const { data: profsData } = await supabase
-            .from("profiles")
-            .select("id, nombre, apellido, avatar_url, telefono")
-            .in("id", allUserIds);
-          (profsData || []).forEach((p) => { profilesMap[p.id] = p; });
-        }
-
-        const playersByMatch = {};
-        (playersData || []).forEach((p) => {
-          if (!playersByMatch[p.match_id]) playersByMatch[p.match_id] = [];
-          playersByMatch[p.match_id].push({
-            ...p,
-            profile: profilesMap[p.user_id] || null,
-          });
-        });
-
-        const partidosFinales = matchesData.map((m) => ({
-          ...m,
-          players: playersByMatch[m.id] || [],
-        }));
-        setPartidosClub(partidosFinales);
-      } else {
-        setPartidosClub(matchesData || []);
-      }
+      setPartidosClub(matchesData || []);
     } catch (err) {
-      console.error("Error cargando detalle del club", err);
+      console.error("Error cargando detalle del club:", err);
     } finally {
       cargarPromocionDelDia();
     }
@@ -362,21 +468,25 @@ export default function FutbolClubDetailPage() {
 
   const calcularPrecioPorBloque = (cancha, horaInt, minutosInt) => {
     try {
-      const horaFormateada = `${String(horaInt).padStart(2, "0")}:${String(minutosInt).padStart(2, "0")}`;
+      const horaFormateada = `${String(horaInt).padStart(2, '0')}:${String(minutosInt).padStart(2, '0')}`;
+
       if (!cancha.pricing_blocks || !Array.isArray(cancha.pricing_blocks) || cancha.pricing_blocks.length === 0) {
         const precioNormal = parseFloat(cancha.price_normal);
-        return { precio: isNaN(precioNormal) ? 30 : precioNormal };
+        return { precio: isNaN(precioNormal) ? 15 : precioNormal, esPico: false };
       }
-      const bloqueEncontrado = cancha.pricing_blocks.find((bloque) => {
-        return horaFormateada >= bloque.start_time && horaFormateada <= bloque.end_time;
+
+      const bloqueEncontrado = cancha.pricing_blocks.find(bloque => {
+        return horaFormateada >= (bloque.start_time || "00:00") && horaFormateada < (bloque.end_time || "23:59");
       });
-      if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price))) {
-        return { precio: parseFloat(bloqueEncontrado.price) };
+
+      if (bloqueEncontrado && !isNaN(parseFloat(bloqueEncontrado.price_60 || bloqueEncontrado.price))) {
+        return { precio: parseFloat(bloqueEncontrado.price_60 || bloqueEncontrado.price), esPico: false };
       }
-      const primerPrecio = parseFloat(cancha.pricing_blocks[0].price);
-      return { precio: isNaN(primerPrecio) ? 30 : primerPrecio };
+
+      const primerPrecio = parseFloat(cancha.pricing_blocks[0].price_60 || cancha.pricing_blocks[0].price);
+      return { precio: isNaN(primerPrecio) ? 15 : primerPrecio, esPico: false };
     } catch (error) {
-      return { precio: 30 };
+      return { precio: 15, esPico: false }; 
     }
   };
 
@@ -384,6 +494,7 @@ export default function FutbolClubDetailPage() {
     const list = [];
     const hoyISO = formatearFechaISOVET(new Date());
     const [y, m, d] = hoyISO.split("-").map(Number);
+
     for (let i = 0; i < 7; i++) {
       const dateObj = crearFechaVET(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`, 12, 0);
       dateObj.setDate(dateObj.getDate() + i);
@@ -392,22 +503,17 @@ export default function FutbolClubDetailPage() {
     return list;
   }, []);
 
-  const bloquesHorarios = useMemo(() => {
+  const bloquesHorariosDesktop = useMemo(() => {
     if (!club) return [];
-    const duracion = club.slot_duration_minutes || 60;
-    const horaApertura = parseInt(club.open_time || "07:00:00".split(":")[0], 10);
-    const horaCierre = parseInt(club.close_time || "23:00:00".split(":")[0], 10);
-
+    const horaApertura = parseInt((club.open_time || "07:00:00").split(":")[0], 10);
+    const horaCierre = parseInt((club.close_time || "23:00:00").split(":")[0], 10);
     const fechaSelISO = formatearFechaISOVET(fechaSeleccionada);
     const bloques = [];
 
-    let curH = horaApertura;
-    let curM = 0;
-
-    while (curH < horaCierre || (curH === horaCierre && curM === 0)) {
-      if (curH === horaCierre && curM === 0) break;
-      const dateObjSlot = crearFechaVET(fechaSelISO, curH, curM);
-      const hLabel = dateObjSlot.toLocaleTimeString("es-ES", {
+    for (let curH = horaApertura; curH < horaCierre; curH++) {
+      const dateObj0 = crearFechaVET(fechaSelISO, curH, 0);
+      const dateObj30 = crearFechaVET(fechaSelISO, curH, 30);
+      const hLabel = dateObj0.toLocaleTimeString("es-ES", {
         timeZone: "America/Caracas",
         hour: "2-digit",
         minute: "2-digit",
@@ -417,15 +523,9 @@ export default function FutbolClubDetailPage() {
       bloques.push({
         etiqueta: hLabel,
         horaInt: curH,
-        minutosInt: curM,
-        dateObj: dateObjSlot,
+        dateObj0,
+        dateObj30,
       });
-
-      curM += duracion;
-      if (curM >= 60) {
-        curH += Math.floor(curM / 60);
-        curM = curM % 60;
-      }
     }
     return bloques;
   }, [club, fechaSeleccionada]);
@@ -436,13 +536,15 @@ export default function FutbolClubDetailPage() {
       setTimeout(() => router.push("/login"), 1800);
       return;
     }
-    if (horarioYaPaso(bloque.dateObj)) {
+
+    if (horarioYaPaso(bloque.startObj || bloque.dateObj)) {
       mostrarNotificacion("Horario no disponible", "Este bloque ya pasó y no puede ser reservado.", "warning");
       return;
     }
 
-    const slotTime = bloque.dateObj.getTime();
-    
+    const startObj = bloque.startObj || bloque.dateObj;
+    const slotTime = startObj.getTime();
+
     const lockExistente = bloqueosActivos.find((l) => {
       if (l.court_id !== cancha.id) return false;
       const lockTime = obtenerEpoch(l.scheduled_at);
@@ -451,78 +553,156 @@ export default function FutbolClubDetailPage() {
 
     if (lockExistente && lockExistente.user_id !== user.id) {
       return mostrarNotificacion(
-        "⏳ Cancha en proceso de reserva",
-        "Alguien más está procesando el pago para esta cancha ahora mismo. Si no completa la reserva en 10 minutos, volverá a estar disponible.",
+        "Cancha en proceso de reserva", 
+        "Alguien más está procesando el pago para esta cancha ahora mismo.", 
         "warning"
       );
     }
 
     try {
       setProcesandoReserva(true);
-      const expiresAt = new Date(Date.now() + 10 * 60000).toISOString();
-      const fechaISO = formatearFechaISOVET(bloque.dateObj);
-      const hStr = String(bloque.horaInt).padStart(2, "0");
-      const mStr = String(bloque.minutosInt).padStart(2, "0");
+      
+      const expiresAt = new Date(Date.now() + 10 * 60000).toISOString(); 
+      const fechaISO = formatearFechaISOVET(startObj);
+      const hStr = String(startObj.getHours()).padStart(2, "0");
+      const mStr = String(startObj.getMinutes()).padStart(2, "0");
       const scheduledAtISO = `${fechaISO}T${hStr}:${mStr}:00-04:00`;
 
       const nuevoLock = {
         court_id: cancha.id,
         scheduled_at: scheduledAtISO,
+        duration_minutes: 60,
         user_id: user.id,
-        expires_at: expiresAt,
+        expires_at: expiresAt
       };
 
       setBloqueosActivos((prev) => [
-        ...prev.filter((l) => !(l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - slotTime) < 5000)),
-        nuevoLock,
+        ...prev.filter(l => !(l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - slotTime) < 5000)),
+        nuevoLock
       ]);
 
-      const channel = supabase.channel(`locks_club_${clubId}`);
-      channel.send({
-        type: "broadcast",
-        event: "lock_event",
-        payload: { type: "INSERT", lock: nuevoLock },
-      });
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "lock_event",
+          payload: { type: "INSERT", lock: nuevoLock }
+        });
+      }
 
       const { error: lockErr } = await supabase
         .from("padel_locks")
-        .upsert(nuevoLock, { onConflict: "court_id,scheduled_at" });
+        .upsert(nuevoLock, { onConflict: 'court_id,scheduled_at' });
 
       if (lockErr) throw lockErr;
 
-      setTiempoRestante(600); 
-      const precioBaseTotal = precioCalculado || cancha.price_normal || 30;
-
+      setTiempoRestante(600);
+      const precioBaseTotal = precioCalculado || cancha.price_normal || 16;
+      
       setBloqueSeleccionado({
         cancha,
-        dateObj: bloque.dateObj,
-        horaLabel: bloque.etiqueta,
-        precioBaseTotal,
+        dateObj: startObj,
+        horaLabel: bloque.etiqueta || startObj.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true }),
+        precioBaseTotal: precioBaseTotal,
       });
 
+      setDuracionMinutos(60);
       setTipoReserva("privado");
       setMetodoPago("pago_movil");
       setMonedaAbono("USD");
-      setMontoAbono((precioBaseTotal * 1.10).toFixed(2));
+      
+      const valUSD = precioBaseTotal * 1.10;
+      setMontoAbono(valUSD.toFixed(2));
+      
       setNumReferencia("");
       setPreviewComprobante("");
       setPasoModal(1);
       setModalReservaOpen(true);
+
     } catch (e) {
-      console.error("Error al bloquear la cancha", e);
-      mostrarNotificacion("Error", "No se pudo iniciar la reserva, intenta nuevamente.", "error");
+      console.error("Error al bloquear la cancha:", e);
+      mostrarNotificacion("Error", "No se pudo iniciar la reserva.", "error");
       await cargarBloqueos();
     } finally {
       setProcesandoReserva(false);
     }
   };
 
+  const intentarCambiarDuracion = async (nuevaDuracion) => {
+    if (!bloqueSeleccionado) return;
+
+    const inicioDeseado = bloqueSeleccionado.dateObj;
+    const canchaId = bloqueSeleccionado.cancha.id;
+
+    const chocaPartido = partidosClub.some((m) => {
+      if (m.court_id !== canchaId) return false;
+      return haySolapamiento(inicioDeseado, nuevaDuracion, m.scheduled_at, m.duration_minutes || 60);
+    });
+
+    const chocaLock = bloqueosActivos.some((l) => {
+      if (l.court_id !== canchaId || l.user_id === user?.id) return false;
+      return haySolapamiento(inicioDeseado, nuevaDuracion, l.scheduled_at, l.duration_minutes || 60);
+    });
+
+    if (chocaPartido || chocaLock) {
+      mostrarNotificacion(
+        "Horario no disponible",
+        `No es posible alquilar ${nuevaDuracion} minutos porque la cancha se encuentra ocupada en el bloque contiguo.`,
+        "warning"
+      );
+      return;
+    }
+
+    setDuracionMinutos(nuevaDuracion);
+
+    if (user) {
+      const scheduledAtISO = bloqueSeleccionado.dateObj.toISOString();
+      const targetTime = bloqueSeleccionado.dateObj.getTime();
+
+      const updatedLock = {
+        court_id: canchaId,
+        scheduled_at: scheduledAtISO,
+        duration_minutes: nuevaDuracion,
+        user_id: user.id,
+        expires_at: new Date(Date.now() + 10 * 60000).toISOString()
+      };
+
+      setBloqueosActivos((prev) => [
+        ...prev.filter(l => !(l.court_id === canchaId && Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000)),
+        updatedLock
+      ]);
+
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "lock_event",
+          payload: { type: "UPDATE", lock: updatedLock }
+        });
+      }
+
+      await supabase
+        .from("padel_locks")
+        .update({ duration_minutes: nuevaDuracion })
+        .match({ court_id: canchaId, scheduled_at: scheduledAtISO, user_id: user.id });
+    }
+
+    const factor = nuevaDuracion / 60;
+    const precioBase = bloqueSeleccionado.precioBaseTotal * factor;
+    const capBD = bloqueSeleccionado.cancha?.capacity || 10;
+    const baseCalc = tipoReserva === "privado" ? precioBase : (precioBase / capBD);
+    const feeCalc = baseCalc * 0.10;
+    const totalUSD = baseCalc + feeCalc;
+
+    setMontoAbono(monedaAbono === "USD" ? totalUSD.toFixed(2) : (totalUSD * tasaBCV).toFixed(2));
+  };
+
   const handleSeleccionarImagen = (e, setPreview) => {
     const file = e.target.files[0];
     if (!file) return;
+
     if (!file.type.startsWith("image/")) {
-      return mostrarNotificacion("Archivo Inválido", "Por favor selecciona una imagen válida (JPG, PNG).", "error");
+      return mostrarNotificacion("Archivo Inválido", "Por favor selecciona una imagen válida.", "error");
     }
+
     const reader = new FileReader();
     reader.onloadend = () => setPreview(reader.result);
     reader.readAsDataURL(file);
@@ -530,24 +710,23 @@ export default function FutbolClubDetailPage() {
 
   const calculosPrecio = useMemo(() => {
     if (!bloqueSeleccionado) return { base: 0, fee: 0, totalSug: 0, precioIndividual: 0, capacidadOficial: 10 };
-    const baseTotal = bloqueSeleccionado.precioBaseTotal;
+    
+    const factorTiempo = duracionMinutos / 60;
+    const baseTotal = bloqueSeleccionado.precioBaseTotal * factorTiempo; 
     const feeTotal = baseTotal * 0.10;
     const capBD = bloqueSeleccionado.cancha?.capacity || 10;
-
+    
     const baseCalculada = tipoReserva === "privado" ? baseTotal : (baseTotal / capBD);
     const feeCalculado = tipoReserva === "privado" ? feeTotal : (feeTotal / capBD);
+    const totalSug = baseCalculada + feeCalculado;
+    const precioIndividual = baseTotal / capBD;
     
-    return {
-      base: baseCalculada,
-      fee: feeCalculado,
-      totalSug: baseCalculada + feeCalculado,
-      precioIndividual: (baseTotal + feeTotal) / capBD,
-      capacidadOficial: capBD
-    };
-  }, [bloqueSeleccionado, tipoReserva]);
+    return { base: baseCalculada, fee: feeCalculado, totalSug, precioIndividual, capacidadOficial: capBD };
+  }, [bloqueSeleccionado, tipoReserva, duracionMinutos]);
 
   const cambiarMonedaAbono = (nuevaMoneda) => {
     if (nuevaMoneda === monedaAbono) return;
+    
     const valActual = parseFloat(montoAbono);
     if (!isNaN(valActual) && valActual > 0) {
       setMontoAbono(nuevaMoneda === "VES" ? (valActual * tasaBCV).toFixed(2) : (valActual / tasaBCV).toFixed(2));
@@ -560,34 +739,46 @@ export default function FutbolClubDetailPage() {
 
     const valIngresado = parseFloat(montoAbono);
     if (isNaN(valIngresado) || valIngresado <= 0) {
-      return mostrarNotificacion("Monto Inválido", "Por favor ingresa un monto válido a abonar.", "error");
-    }
-    if (metodoPago !== "efectivo" && !previewComprobante && !numReferencia.trim()) {
-      return mostrarNotificacion("Falta Comprobante", "Por favor adjunta la captura de tu comprobante de pago o ingresa el número de referencia.", "error");
+      return mostrarNotificacion("Monto Inválido", "Por favor ingresa un monto válido.", "error");
     }
 
-    const montoUSD = monedaAbono === "VES" ? (valIngresado / tasaBCV) : valIngresado;
-    const esPrivado = tipoReserva === "privado";
+    if (metodoPago !== "efectivo" && !previewComprobante && !numReferencia.trim()) {
+      return mostrarNotificacion("Falta Comprobante", "Por favor adjunta el comprobante o referencia.", "error");
+    }
+
+    const montoUSD = monedaAbono === "VES" ? valIngresado / tasaBCV : valIngresado;
 
     try {
       setProcesandoReserva(true);
 
-      const { data: userProf } = await supabase.from("profiles").select("nombre, apellido, telefono").eq("id", user.id).maybeSingle();
-      const nombreUsuario = userProf ? `${userProf.nombre} ${userProf.apellido}`.trim() : user.email;
+      const { data: userProf } = await supabase
+        .from("profiles")
+        .select("nombre, apellido, telefono")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const nombreUsuarioCompleto = userProf 
+        ? `${userProf.nombre} ${userProf.apellido}`.trim() 
+        : user.email;
+      
+      const telefonoUsuario = userProf?.telefono || "Sin teléfono";
+
+      const estadoPagoFinal = metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion";
 
       const nuevoAbono = {
         id: `pay-${Date.now()}`,
         user_id: user.id,
-        username: nombreUsuario,
-        userphone: userProf?.telefono || "Sin teléfono",
+        user_name: nombreUsuarioCompleto,
+        user_phone: telefonoUsuario,
         amount: montoUSD,
         method: metodoPago,
-        reference: numReferencia.trim() || (monedaAbono === "VES" ? `Abono Bs. ${valIngresado.toFixed(2)} S/R` : ""),
+        reference: numReferencia.trim() || (monedaAbono === "VES" ? `Abono Bs. ${valIngresado.toFixed(2)}` : "S/R"),
         receipt_url: previewComprobante || null,
         status: metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
         created_at: new Date().toISOString(),
       };
 
+      const esCompetitivo = tipoReserva === "ranking" || (tipoReserva === "privado" && activarRankedPrivado);
       const scheduledAtISO = bloqueSeleccionado.dateObj.toISOString();
 
       const { data: newMatch, error: matchErr } = await supabase
@@ -596,32 +787,76 @@ export default function FutbolClubDetailPage() {
           club_id: clubId,
           court_id: bloqueSeleccionado.cancha.id,
           scheduled_at: scheduledAtISO,
-          total_price: bloqueSeleccionado.precioBaseTotal,
+          duration_minutes: duracionMinutos,
+          total_price: calculosPrecio.base,
           price_per_player: calculosPrecio.precioIndividual,
           app_fee: calculosPrecio.fee,
-          match_type: esPrivado ? "privado" : "abierto",
-          is_private: esPrivado,
-          is_competitive: !esPrivado,
+          match_type: tipoReserva === "privado" ? "privado" : "abierto",
+          is_private: tipoReserva === "privado", 
+          is_competitive: esCompetitivo,
           status: "programado",
-          payment_status: metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente_aprobacion",
+          payment_status: estadoPagoFinal,
           payment_method: metodoPago,
           payment_proof_urls: previewComprobante ? [previewComprobante] : [],
           payments_history: [nuevoAbono],
           created_by: user.id,
-          notes: "Reserva de Fútbol",
         })
         .select()
         .single();
 
-      if (matchErr) throw new Error(matchErr.message);
+      if (matchErr) throw new Error(matchErr.message || "Error guardando la reserva");
 
-      await supabase.from("match_players").insert({ match_id: newMatch.id, user_id: user.id, team: "1" });
-      await supabase.from("padel_locks").delete().eq("court_id", bloqueSeleccionado.cancha.id).eq("user_id", user.id);
+      await supabase.from("match_players").insert({
+        match_id: newMatch.id,
+        user_id: user.id,
+        team: "A",
+      });
 
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "match_event",
+          payload: { 
+            type: "INSERT_MATCH", 
+            match: newMatch,
+            canchaNombre: bloqueSeleccionado.cancha.name 
+          }
+        });
+        channelRef.current.send({
+          type: "broadcast",
+          event: "lock_event",
+          payload: { 
+            type: "DELETE", 
+            court_id: bloqueSeleccionado.cancha.id, 
+            scheduled_at: scheduledAtISO 
+          }
+        });
+      }
+
+      await supabase
+        .from("padel_locks")
+        .delete()
+        .match({
+          court_id: bloqueSeleccionado.cancha.id,
+          scheduled_at: scheduledAtISO
+        });
+
+      await cargarBloqueos();
+
+      setTiempoRestante(null);
       setModalReservaOpen(false);
+
+      mostrarNotificacion(
+        "¡Reserva Registrada!",
+        metodoPago === "efectivo" 
+          ? "✅ Reserva creada con éxito. Pagar el restante en recepción." 
+          : "✅ Comprobante enviado. La reserva queda PENDIENTE hasta su validación.",
+        "success"
+      );
+      
       router.push(`/futbol/partidos/${newMatch.id}`);
     } catch (err) {
-      console.error(err);
+      console.error("Error al procesar reserva:", err);
       mostrarNotificacion("Error al Reservar", err.message || "Verifica los datos e inténtalo de nuevo.", "error");
     } finally {
       setProcesandoReserva(false);
@@ -637,15 +872,15 @@ export default function FutbolClubDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center font-sans">
+        <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }
 
   if (!club) {
     return (
-      <div className="min-h-screen bg-slate-50 p-8 text-center space-y-4">
+      <div className="min-h-screen bg-slate-50 p-8 text-center space-y-4 font-sans">
         <h2 className="text-xl font-black text-slate-900">Complejo no encontrado</h2>
         <Link href="/futbol/clubes" className="px-5 py-2.5 bg-slate-900 text-white font-bold rounded-xl text-xs inline-block">
           Volver al directorio
@@ -659,42 +894,52 @@ export default function FutbolClubDetailPage() {
   const equivalenteCalculado = monedaAbono === "USD" ? numIngresado * tasaBCV : numIngresado / tasaBCV;
 
   return (
-    <div className="min-h-screen bg-slate-50/50 px-2 py-4 sm:px-6 md:px-8 space-y-6">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <div className="min-h-screen bg-slate-50/50 px-2 py-3 sm:px-6 md:px-8 space-y-4 sm:space-y-8 font-sans">
+      <div className="mx-auto max-w-7xl space-y-4 sm:space-y-8">
+        
         {/* HERO BANNER */}
-        <div className="relative w-full h-52 sm:h-80 bg-slate-900 rounded-3xl overflow-hidden shadow-xl border border-slate-200">
+        <div className="relative w-full h-48 sm:h-80 bg-slate-900 rounded-2xl sm:rounded-[2.5rem] overflow-hidden shadow-xl border border-slate-200">
           {club.image_url ? (
             <img src={club.image_url} alt={club.name} className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-950"></div>
           )}
+          
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent"></div>
-          <div className="absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-6 text-white flex flex-col md:flex-row md:items-end justify-between gap-3">
+          
+          <div className="absolute bottom-3 left-3 right-3 sm:bottom-6 sm:left-6 sm:right-6 text-white flex flex-col sm:flex-row sm:items-end justify-between gap-3">
             <div className="space-y-1 max-w-2xl">
-              <span className="bg-emerald-500 text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-3 py-1 rounded-full shadow-sm">
-                ✅ Complejo de Fútbol Verificado
+              <span className="bg-[#00FF9D] text-slate-950 font-black text-[9px] sm:text-[10px] uppercase px-2 py-0.5 sm:px-3 sm:py-1 rounded-full shadow-sm">
+                ✓ Complejo de Fútbol Verificado
               </span>
-              <h1 className="text-xl sm:text-4xl font-black">{club.name}</h1>
-              <p className="text-[11px] sm:text-sm text-slate-300 font-medium">📍 {club.address} — {club.city}</p>
+              <h1 className="text-lg sm:text-4xl font-black truncate">{club.name}</h1>
+              <p className="text-[10px] sm:text-sm text-slate-300 font-medium">
+                📍 {club.address || "Cabudare"}, {club.city}
+              </p>
             </div>
+            
             <div>
-              <a href="#reserva-pistas" className="px-5 py-2.5 sm:px-6 sm:py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition-all text-center">
-                Reservar Cancha
+              <a 
+                href="#reserva-pistas" 
+                className="w-full sm:w-auto px-4 py-2 sm:px-6 sm:py-3 bg-[#00FF9D] hover:bg-[#00cc7d] text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl sm:rounded-2xl shadow-lg transition-all text-center block font-sans"
+              >
+                Reservar Cancha ↓
               </a>
             </div>
           </div>
         </div>
 
-        {/* LAYOUT 2 COLUMNAS */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-4 space-y-6">
-            <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm space-y-3">
+        {/* LAYOUT GRID */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-8 items-start">
+          
+          <div className="lg:col-span-4 space-y-4 sm:space-y-6">
+            <div className="bg-white rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 border border-slate-200 shadow-sm space-y-2 sm:space-y-3">
               <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-tight">Amenidades</h3>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5 sm:gap-2">
                 {listAmenidades.map((key) => {
                   const am = AMENIDADES_MAP[key] || { label: key, icon: "✨" };
                   return (
-                    <span key={key} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-slate-800 text-xs font-bold">
+                    <span key={key} className="inline-flex items-center gap-1 px-2 py-1 sm:px-3 sm:py-1.5 rounded-full bg-slate-100 text-slate-800 text-[10px] sm:text-xs font-bold">
                       <span>{am.icon}</span>
                       <span>{am.label}</span>
                     </span>
@@ -704,26 +949,28 @@ export default function FutbolClubDetailPage() {
             </div>
           </div>
 
-          <div className="lg:col-span-8 space-y-6" id="reserva-pistas">
-            <div className="bg-white rounded-3xl p-4 sm:p-6 border border-slate-200 shadow-sm space-y-4">
-              <div className="flex justify-between items-center border-b pb-3">
-                <h2 className="text-base sm:text-lg font-black text-slate-900">Reserva tu Cancha en Tiempo Real</h2>
-                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">{canchas.length} canchas</span>
+          <div className="lg:col-span-8 space-y-4 sm:space-y-6" id="reserva-pistas">
+            <div className="bg-white rounded-2xl sm:rounded-3xl p-3 sm:p-6 border border-slate-200 shadow-sm space-y-3 sm:space-y-5">
+              <div className="flex justify-between items-center border-b pb-2 sm:pb-3">
+                <h2 className="text-sm sm:text-lg font-black text-slate-900">Reserva tu Cancha en Tiempo Real</h2>
+                <span className="text-[10px] sm:text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full">{canchas.length} canchas</span>
               </div>
 
-              {/* Selector de Días */}
-              <div className="flex gap-2 overflow-x-auto pb-1">
+              {/* Selector de Días Horizontal */}
+              <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {diasSiguientes.map((dObj, i) => {
                   const isSel = formatearFechaISOVET(fechaSeleccionada) === formatearFechaISOVET(dObj);
                   return (
                     <button
                       key={i}
                       onClick={() => setFechaSeleccionada(dObj)}
-                      className={`shrink-0 px-4 py-2.5 rounded-2xl border text-center transition-all ${
-                        isSel ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md" : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                      className={`shrink-0 px-2.5 py-1.5 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl text-center border transition-all cursor-pointer font-sans ${
+                        isSel
+                          ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                       }`}
                     >
-                      <span className="text-[9px] font-black uppercase block opacity-60">
+                      <span className="text-[8px] sm:text-[10px] font-black uppercase block opacity-60">
                         {i === 0 ? "Hoy" : dObj.toLocaleDateString("es-ES", { timeZone: "America/Caracas", weekday: "short" })}
                       </span>
                       <span className="text-xs sm:text-sm font-black block mt-0.5">
@@ -736,161 +983,339 @@ export default function FutbolClubDetailPage() {
 
               {/* AVISO DE PROMOCIÓN */}
               {promocionHoy && (
-                <div className="bg-rose-50 border border-rose-200 p-3 sm:p-4 rounded-2xl flex items-center gap-3 shadow-sm my-4">
-                  <span className="text-3xl animate-bounce">🔥</span>
+                <div className="bg-rose-50 border border-rose-200 p-2.5 sm:p-4 rounded-2xl flex items-center gap-2.5 sm:gap-3 shadow-sm my-2 sm:my-4">
+                  <span className="text-2xl sm:text-3xl animate-bounce">🎁</span>
                   <div>
-                    <h4 className="text-xs sm:text-sm font-black text-rose-900 uppercase tracking-tight">{promocionHoy.name}</h4>
-                    <p className="text-[10px] sm:text-xs font-bold text-rose-700">¡Aprovecha! Precios especiales aplicados en las tarifas de hoy.</p>
+                    <h4 className="text-xs sm:text-sm font-black text-rose-900 uppercase tracking-tight">
+                      {promocionHoy.name}
+                    </h4>
+                    <p className="text-[9px] sm:text-xs font-bold text-rose-700">
+                      ¡Aprovecha! Precios especiales aplicados en las tarifas de hoy.
+                    </p>
                   </div>
                 </div>
               )}
 
-              {/* GRILLA DE CANCHAS DE FÚTBOL */}
-              <div className="overflow-x-auto relative rounded-2xl border-2 border-slate-300 bg-white shadow-xs">
-                <div className="min-w-[500px] w-full">
-                  {/* CABECERA PISTAS */}
-                  <div className="flex bg-slate-950 text-white border-b-2 border-slate-800 sticky top-0 z-30">
-                    <div className="w-20 p-3 font-black text-xs text-slate-300 text-center uppercase tracking-wider border-r border-slate-800 bg-slate-950">
-                      Hora
-                    </div>
+              {/* VISTA UNIFICADA B2C AGENDA PREMIUM */}
+              <div className="space-y-6 font-sans">
+                {/* SELECTOR DE PISTA */}
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 block mb-1.5">
+                    Selecciona la Cancha
+                  </label>
+                  <div className="flex gap-2 overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                     {canchas.map((c) => (
-                      <div key={c.id} className="flex-1 min-w-[150px] p-3 text-center border-l border-slate-800 font-black text-xs uppercase">
-                        <span>{c.name}</span>
-                        <span className="text-[9px] text-slate-400 block">({c.capacity || 10} JUGADORES)</span>
-                      </div>
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setCanchaFiltroMobile(c.id)}
+                        className={`px-4 py-2.5 rounded-2xl text-xs font-black uppercase shrink-0 transition-all cursor-pointer font-sans ${
+                          canchaFiltroMobile === c.id
+                            ? "bg-slate-900 text-[#00FF9D] shadow-md"
+                            : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                        }`}
+                      >
+                        ⚽ {c.name}
+                      </button>
                     ))}
                   </div>
+                </div>
 
-                  {canchas.length === 0 ? (
-                    <div className="p-8 text-center text-xs font-bold text-slate-400">
-                      Este complejo no tiene canchas de fútbol configuradas.
+                {/* VISTA MÓVIL/TABLET NATIVA: LISTA SECUENCIAL */}
+                <div className="block lg:hidden bg-white p-4 sm:p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                  <div className="flex justify-between items-center border-b pb-3">
+                    <div>
+                      <h3 className="text-sm font-black uppercase text-slate-900">Agenda & Disponibilidad</h3>
+                      <p className="text-[10px] font-bold text-slate-400">Turnos organizados en horas completas. La media hora solo se habilita al liberar espacio.</p>
                     </div>
-                  ) : (
-                    /* FILAS DE HORARIOS */
-                    bloquesHorarios.map((bloque, idx) => (
-                      <div key={idx} className="flex border-b border-slate-200 hover:bg-slate-50 transition-colors h-20">
-                        <div className="w-20 shrink-0 flex flex-col items-center justify-center bg-slate-100 border-r-2 border-slate-300 p-1 text-center">
-                          <span className="text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
-                          <span className="text-[9px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
-                        </div>
+                  </div>
 
-                        {/* CELDAS CANCHAS */}
-                        {canchas.map((cancha) => {
-                          const targetTime = bloque.dateObj.getTime();
-                          const bloqueVencido = horarioYaPaso(bloque.dateObj);
-                          const partidoOcupado = partidosClub.find((m) => m.court_id === cancha.id && Math.abs(obtenerEpoch(m.scheduled_at) - targetTime) < 5000);
-                          const lockOcupado = bloqueosActivos.find((l) => l.court_id === cancha.id && Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000);
+                  <div className="space-y-2.5">
+                    {(() => {
+                      const canchaActual = canchas.find((c) => c.id === canchaFiltroMobile) || canchas[0];
+                      if (!canchaActual) {
+                        return <p className="text-xs font-bold text-slate-400 text-center py-6">No hay canchas disponibles.</p>;
+                      }
 
-                          const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, bloque.horaInt, bloque.minutosInt);
-                          let precioUSD = precioOriginal;
-                          let esPromoAplicada = false;
+                      const agendaItems = generarItemsAgendaMobile(canchaActual.id, fechaSeleccionada, partidosClub, bloqueosActivos, club);
 
-                          if (promocionHoy) {
-                            const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
-                            if (hasBlocks) {
-                              const hStr = String(bloque.horaInt).padStart(2, "0");
-                              const mStr = String(bloque.minutosInt).padStart(2, "0");
-                              const horaBotonStr = `${hStr}:${mStr}`;
-                              const bloqueAplicable = promocionHoy.time_blocks.find((b) => {
-                                return horaBotonStr >= b.start_time && horaBotonStr <= (b.end_time || "23:59");
-                              });
-                              if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
-                                precioUSD = parseFloat(bloqueAplicable.price);
-                                esPromoAplicada = true;
-                              }
-                            } else {
-                              const promoPrice = parseFloat(promocionHoy.price_normal);
-                              precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
-                              esPromoAplicada = true;
-                            }
-                          }
+                      if (agendaItems.length === 0) {
+                        return <p className="text-xs font-bold text-slate-400 text-center py-6">No hay horarios configurados para esta fecha.</p>;
+                      }
 
-                          if (partidoOcupado) {
-                            const esMiReserva = !!user && (
-                              partidoOcupado.created_by === user.id ||
-                              (Array.isArray(partidoOcupado.players) && partidoOcupado.players.some((p) => p.user_id === user.id))
-                            );
-
-                            if (esMiReserva) {
-                              return (
-                                <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
-                                  <Link href={`/futbol/partidos/${partidoOcupado.id}`} className="block h-full">
-                                    <div className="h-full w-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-emerald-950 text-white border-emerald-500 hover:bg-emerald-900 transition-all">
-                                      <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-[#00FF9D] text-slate-950 truncate">
-                                        MI RESERVA
-                                      </span>
-                                      <div>
-                                        <p className="text-xs font-black text-white">Ver Partido ⚽</p>
-                                        <p className="text-[8px] text-slate-300 font-bold">Haz clic para gestionar</p>
-                                      </div>
-                                    </div>
-                                  </Link>
-                                </div>
-                              );
-                            }
-
-                            return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
-                                <div className="h-full rounded-xl p-2 flex flex-col justify-between shadow-xs border-2 text-left bg-slate-950 text-white border-slate-800 opacity-90 cursor-not-allowed">
-                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">RESERVADO</span>
-                                  <p className="text-xs font-black text-slate-400">Cancha Reservada</p>
-                                </div>
-                              </div>
-                            );
-                          }
-
-                          if (lockOcupado) {
-                            return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
-                                <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
-                                  <span className="text-xl animate-pulse">⏳</span>
-                                  <p className="text-xs font-black text-amber-600 mt-1">En proceso...</p>
-                                </div>
-                              </div>
-                            );
-                          }
-
-                          if (bloqueVencido) {
-                            return (
-                              <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
-                                <div className="h-full rounded-xl p-2 flex flex-col items-center justify-center border-2 border-slate-200 bg-slate-100 text-center cursor-not-allowed opacity-75">
-                                  <span className="text-lg">⏰</span>
-                                  <p className="text-xs font-black text-slate-500 mt-1">Horario finalizado</p>
-                                </div>
-                              </div>
-                            );
-                          }
+                      return agendaItems.map((item, idx) => {
+                        if (item.tipo === "partido") {
+                          const match = item.partido;
+                          const esMiReserva = !!user && (match.created_by === user.id || (Array.isArray(match.players) && match.players.some((p) => p.user_id === user.id)));
+                          
+                          const isApproved = match.payment_status === "aprobado" || match.payment_status === "pagado" || match.payment_status === "completado";
+                          const isPending = !isApproved;
+                          
+                          const bgClass = isPending ? "bg-amber-100 border-amber-300 text-amber-950" : "bg-emerald-100 border-emerald-300 text-emerald-950";
+                          const badgeClass = isPending ? "bg-amber-200 text-amber-950" : "bg-[#00FF9D] text-slate-950";
+                          const statusText = isPending ? "⏳ Pendiente" : "✅ Confirmada";
 
                           return (
-                            <div key={cancha.id} className="flex-1 min-w-[150px] p-1 border-l border-slate-200">
-                              <button
-                                onClick={() => abrirModalTurno(cancha, bloque, precioUSD)}
-                                className="h-full w-full bg-slate-50 hover:bg-emerald-50 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all cursor-pointer"
-                              >
-                                {esPromoAplicada && (
-                                  <span className="text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1 py-0.5 rounded shadow-xs mb-0.5">
-                                    Promo
+                            <div key={`match-${match.id}-${idx}`}>
+                              <Link href={`/futbol/partidos/${match.id}`} className="block w-full">
+                                <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all shadow-sm cursor-pointer ${bgClass}`}>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full ${badgeClass}`}>
+                                        {esMiReserva ? "✨ MI RESERVA" : "RESERVADO"} ({item.duracion}M)
+                                      </span>
+                                    </div>
+                                    <p className="text-sm font-black">{item.rangoTexto}</p>
+                                    <p className="text-[10px] font-bold">{statusText}</p>
+                                  </div>
+                                  <span className="text-xs font-black opacity-80">
+                                    {esMiReserva ? "Ver Detalle →" : "Ocupado"}
                                   </span>
-                                )}
-                                <span className="text-xs font-black text-emerald-700">Agendar ➕</span>
-                                <span className="text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
-                              </button>
+                                </div>
+                              </Link>
                             </div>
                           );
-                        })}
-                      </div>
-                    ))
-                  )}
+                        }
+
+                        if (item.tipo === "bloqueo") {
+                          const lock = item.lock;
+                          const esMiLock = user && lock.user_id === user.id;
+
+                          return (
+                            <div key={`lock-${lock.id || idx}-${idx}`}>
+                              <div className="p-4 rounded-2xl border border-dashed border-orange-300 bg-orange-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+                                <div>
+                                  <span className="text-[9px] font-black uppercase bg-orange-200 text-orange-900 px-2.5 py-0.5 rounded-full">
+                                    ⏳ EN PROCESO DE RESERVA ({item.duracion}M)
+                                  </span>
+                                  <p className="text-sm font-black text-orange-950 mt-1">{item.rangoTexto}</p>
+                                </div>
+                                <span className="text-xs font-bold text-orange-800">
+                                  {esMiLock ? "Tu reserva en curso" : "Reservando..."}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Item libre disponible
+                        const { precio: precioOriginal } = calcularPrecioPorBloque(canchaActual, item.horaInt, item.minutosInt);
+
+                        if (item.vencido) {
+                          return (
+                            <div key={`free-${idx}`} className="p-3.5 rounded-2xl bg-slate-50 text-slate-400 border border-slate-200 opacity-60 flex justify-between items-center text-xs font-bold cursor-not-allowed">
+                              <span className="font-bold">⏰ {item.etiqueta}</span>
+                              <span className="text-[10px] uppercase font-black text-slate-400">Finalizado</span>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={`free-${idx}`}
+                            className="p-3.5 rounded-2xl bg-white border border-slate-200 hover:border-emerald-300 hover:shadow-sm flex justify-between items-center transition-all cursor-pointer active:scale-[0.99]"
+                            onClick={() => abrirModalTurno(canchaActual, item, precioOriginal)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="bg-slate-100 text-slate-900 text-xs font-black px-3 py-1.5 rounded-xl border border-slate-200">
+                                {item.etiqueta}
+                              </span>
+                              <span className="text-xs font-bold text-slate-400">Disponible</span>
+                            </div>
+                            <div className="px-4 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-xs">
+                              Reservar ${precioOriginal.toFixed(2)} →
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
                 </div>
               </div>
+
+              {/* VISTA ESCRITORIO CON MOTOR DE LÍNEA DE TIEMPO HORIZONTAL */}
+              <div className="hidden lg:block bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden font-sans">
+                <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                  <div>
+                    <h3 className="text-sm font-black uppercase text-slate-900">Agenda Horizontal</h3>
+                    <p className="text-[10px] font-bold text-slate-500">Visualiza la disponibilidad de todas las canchas a la vez.</p>
+                  </div>
+                  <div className="flex gap-4 text-[10px] font-bold text-slate-500">
+                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-emerald-100 border border-emerald-300"></div> Aprobada</div>
+                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-amber-100 border border-amber-300"></div> Pendiente</div>
+                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-orange-50 border border-dashed border-orange-300"></div> En proceso</div>
+                  </div>
+                </div>
+                
+                <div className="overflow-x-auto relative">
+                  <div className="w-max pb-4">
+                     {/* CABECERA HORARIA */}
+                     <div className="flex border-b border-slate-200 bg-slate-100 sticky top-0 z-30">
+                        <div className="w-32 shrink-0 sticky left-0 z-40 bg-slate-100 border-r border-slate-200 p-2 flex items-center justify-center">
+                           <span className="text-[10px] font-black uppercase text-slate-500">Canchas</span>
+                        </div>
+                        {bloquesHorariosDesktop.map((b, i) => (
+                           <div key={i} className="w-28 shrink-0 py-2 border-r border-slate-200 text-center flex flex-col justify-center">
+                              <span className="text-xs font-black text-slate-800">{b.etiqueta.split(" ")[0]}</span>
+                              <span className="text-[8px] font-bold text-slate-500">{b.etiqueta.split(" ")[1]}</span>
+                           </div>
+                        ))}
+                     </div>
+
+                     {/* FILAS DE CANCHAS */}
+                     {canchas.length === 0 ? (
+                       <div className="p-8 text-center text-xs font-bold text-slate-400">No hay canchas configuradas.</div>
+                     ) : (
+                       canchas.map((cancha) => {
+                         const gridStart = bloquesHorariosDesktop[0]?.dateObj0.getTime() || 0;
+                         const lastBlock = bloquesHorariosDesktop[bloquesHorariosDesktop.length - 1];
+                         const gridEnd = lastBlock ? lastBlock.dateObj30.getTime() + 30 * 60000 : 0;
+
+                         return (
+                           <div key={cancha.id} className="flex border-b border-slate-100 relative h-16 group">
+                              {/* Etiqueta Cancha (Sticky) */}
+                              <div className="w-32 shrink-0 sticky left-0 z-30 bg-white border-r border-slate-200 p-2 flex flex-col justify-center items-center group-hover:bg-slate-50 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
+                                 <span className="text-xs font-black text-slate-800 text-center leading-tight px-1 w-full truncate">{cancha.name}</span>
+                                 <span className="text-[8px] font-bold text-slate-400 mt-0.5">({cancha.capacity} Jug.)</span>
+                              </div>
+
+                              {/* Celdas clickeables con unificación de 1 hora libre */}
+                              <div className="flex relative">
+                                 {bloquesHorariosDesktop.map((b, i) => {
+                                    const isOcupado0 = partidosClub.some((m) => m.court_id === cancha.id && haySolapamiento(b.dateObj0, 30, m.scheduled_at, m.duration_minutes)) ||
+                                                       bloqueosActivos.some((l) => l.court_id === cancha.id && haySolapamiento(b.dateObj0, 30, l.scheduled_at, l.duration_minutes));
+
+                                    const isOcupado30 = partidosClub.some((m) => m.court_id === cancha.id && haySolapamiento(b.dateObj30, 30, m.scheduled_at, m.duration_minutes)) ||
+                                                        bloqueosActivos.some((l) => l.court_id === cancha.id && haySolapamiento(b.dateObj30, 30, l.scheduled_at, l.duration_minutes));
+
+                                    const vencido0 = horarioYaPaso(b.dateObj0);
+                                    const vencido30 = horarioYaPaso(b.dateObj30);
+
+                                    const { precio: precio0 } = calcularPrecioPorBloque(cancha, b.horaInt, 0);
+
+                                    // Si la hora ENTERA (:00 a :00 siguiente) está completamente libre y no vencida:
+                                    if (!isOcupado0 && !isOcupado30 && !vencido0) {
+                                      return (
+                                        <div key={i} className="w-28 shrink-0 border-r border-slate-100 h-full relative p-1 z-10 pointer-events-auto">
+                                          <button
+                                            onClick={() => abrirModalTurno(cancha, { dateObj: b.dateObj0, horaInt: b.horaInt, minutosInt: 0, etiqueta: b.etiqueta }, precio0)}
+                                            className="w-full h-full rounded-xl bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200 hover:border-emerald-400 flex flex-col items-center justify-center transition-all shadow-2xs group cursor-pointer active:scale-95"
+                                          >
+                                            <span className="text-[10px] font-black text-emerald-800 uppercase leading-none">+ Agendar</span>
+                                            <span className="text-[10px] font-black text-emerald-600 mt-0.5">${precio0.toFixed(2)}</span>
+                                          </button>
+                                        </div>
+                                      );
+                                    }
+
+                                    // De lo contrario (hora dividida / parcialmente ocupada o vencida), renderizamos 2 celdas de 30 min (w-14 cada una)
+                                    const slots = [
+                                      { dateObj: b.dateObj0, min: 0, isOcupado: isOcupado0, vencido: vencido0 },
+                                      { dateObj: b.dateObj30, min: 30, isOcupado: isOcupado30, vencido: vencido30 },
+                                    ];
+
+                                    return slots.map((s, sIdx) => {
+                                      const { precio: precioSlot } = calcularPrecioPorBloque(cancha, b.horaInt, s.min);
+
+                                      return (
+                                        <div key={`${i}-${sIdx}`} className="w-14 shrink-0 border-r border-slate-100 h-full relative p-1 z-10 pointer-events-auto">
+                                          {!s.isOcupado && !s.vencido ? (
+                                            <button
+                                              onClick={() => abrirModalTurno(cancha, { dateObj: s.dateObj, horaInt: b.horaInt, minutosInt: s.min, etiqueta: s.dateObj.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" }) }, precioSlot)}
+                                              className="w-full h-full rounded-lg bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200/80 hover:border-emerald-400 flex flex-col items-center justify-center transition-all shadow-2xs group cursor-pointer active:scale-[0.96]"
+                                            >
+                                              <span className="text-[8px] font-black text-emerald-800 uppercase leading-none">+</span>
+                                              <span className="text-[9px] font-black text-emerald-600 mt-0.5">${precioSlot.toFixed(0)}</span>
+                                            </button>
+                                          ) : s.vencido && !s.isOcupado ? (
+                                            <div className="w-full h-full p-0.5">
+                                              <div className="w-full h-full rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center opacity-50">
+                                                <span className="text-[8px] font-bold text-slate-300">⏰</span>
+                                              </div>
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      );
+                                    });
+                                 })}
+
+                                 {/* Overlays de Partidos acotados a límites exactos */}
+                                 {partidosClub.filter(m => m.court_id === cancha.id).map(match => {
+                                     const startEpoch = obtenerEpoch(match.scheduled_at);
+                                     if (startEpoch < gridStart || startEpoch >= gridEnd) return null;
+
+                                     const offsetMin = (startEpoch - gridStart) / 60000;
+                                     const leftPx = (offsetMin / 30) * 56;
+
+                                     const dur = match.duration_minutes || 60;
+                                     const maxDur = (gridEnd - startEpoch) / 60000;
+                                     const effectiveDur = Math.min(dur, maxDur);
+                                     const widthPx = (effectiveDur / 30) * 56 - 2;
+                                     
+                                     const isApproved = match.payment_status === "aprobado" || match.payment_status === "pagado" || match.payment_status === "completado";
+                                     const isPending = !isApproved;
+
+                                     const esMiReserva = !!user && (match.created_by === user.id || match.players?.some(p => p.user_id === user.id));
+                                     
+                                     const bgClass = isPending ? "bg-amber-100 border-amber-300 text-amber-950" : "bg-emerald-100 border-emerald-300 text-emerald-950";
+                                     const badgeClass = isPending ? "bg-amber-200 text-amber-950" : "bg-emerald-200 text-emerald-950";
+                                     const icon = isPending ? "⏳" : "✅";
+                                     const textStatus = isPending ? "Pendiente" : "Confirmada";
+
+                                     return (
+                                       <div key={match.id} style={{ left: `${leftPx}px`, width: `${widthPx}px` }} className="absolute top-0 h-full p-0.5 z-20">
+                                         <Link href={`/futbol/partidos/${match.id}`} className="block h-full w-full">
+                                           <div className={`h-full w-full rounded-xl border flex flex-col justify-center px-2 py-1 shadow-sm transition-all hover:scale-[1.01] ${bgClass} overflow-hidden whitespace-nowrap cursor-pointer`}>
+                                              <div className="flex items-center gap-1 mb-0.5">
+                                                <span className="text-[9px] font-black">{formatRangoHorarioExacto(match.scheduled_at, match.duration_minutes)}</span>
+                                                {esMiReserva && <span className={`text-[7px] uppercase font-black px-1 rounded ${badgeClass}`}>MÍA</span>}
+                                              </div>
+                                              <span className="text-[10px] font-bold truncate flex items-center gap-1">{icon} {textStatus}</span>
+                                           </div>
+                                         </Link>
+                                       </div>
+                                     );
+                                 })}
+
+                                 {/* Overlays de Bloqueos acotados a límites exactos */}
+                                 {bloqueosActivos.filter(l => l.court_id === cancha.id).map(lock => {
+                                     const startEpoch = obtenerEpoch(lock.scheduled_at);
+                                     if (startEpoch < gridStart || startEpoch >= gridEnd) return null;
+
+                                     const offsetMin = (startEpoch - gridStart) / 60000;
+                                     const leftPx = (offsetMin / 30) * 56;
+
+                                     const dur = lock.duration_minutes || 60;
+                                     const maxDur = (gridEnd - startEpoch) / 60000;
+                                     const effectiveDur = Math.min(dur, maxDur);
+                                     const widthPx = (effectiveDur / 30) * 56 - 2;
+
+                                     return (
+                                       <div key={lock.id || lock.scheduled_at} style={{ left: `${leftPx}px`, width: `${widthPx}px` }} className="absolute top-0 h-full p-0.5 z-20 pointer-events-none">
+                                           <div className="h-full w-full rounded-xl border border-dashed border-orange-300 bg-orange-50 flex flex-col justify-center px-2 py-1 shadow-sm overflow-hidden whitespace-nowrap">
+                                              <span className="text-[9px] font-black text-orange-800">{formatRangoHorarioExacto(lock.scheduled_at, lock.duration_minutes)}</span>
+                                              <span className="text-[10px] font-medium text-orange-600 truncate">Procesando...</span>
+                                           </div>
+                                       </div>
+                                     );
+                                 })}
+                              </div>
+                           </div>
+                         );
+                       })
+                     )}
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
       </div>
 
-      {/* MODAL PASARELA DE PAGO CLIENTE */}
+      {/* MODAL PASARELA DE PAGO CLIENTE CON SELECTOR DE DURACIÓN */}
       {mounted && modalReservaOpen && bloqueSeleccionado && createPortal(
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4" onClick={cerrarModalManual}>
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 font-sans" onClick={cerrarModalManual}>
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-start border-b pb-3">
               <div>
@@ -910,31 +1335,59 @@ export default function FutbolClubDetailPage() {
                       onChange={(e) => {
                         const tipo = e.target.value;
                         setTipoReserva(tipo);
-                        const baseTotal = bloqueSeleccionado.precioBaseTotal;
+                        const factor = duracionMinutos / 60;
+                        const baseTotal = bloqueSeleccionado.precioBaseTotal * factor;
                         const feeTotal = baseTotal * 0.10;
                         const capBD = bloqueSeleccionado.cancha?.capacity || 10;
                         const valUSD = tipo === "privado" ? (baseTotal + feeTotal) : ((baseTotal + feeTotal) / capBD);
                         setMontoAbono(monedaAbono === "USD" ? valUSD.toFixed(2) : (valUSD * tasaBCV).toFixed(2));
                       }}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-slate-800"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-slate-800 font-sans"
                     >
                       <option value="privado">🔒 Reserva Privada (Cancha Completa para tu grupo)</option>
                       <option value="ranking">🏆 Partido Público (Abrir cupos para la comunidad)</option>
                     </select>
                   </div>
 
+                  {/* SELECTOR DE DURACIÓN */}
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1.5">
+                      Duración del Alquiler
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { min: 60, label: "1 Hora (60m)" },
+                        { min: 90, label: "1.5 Horas (90m)" },
+                        { min: 120, label: "2 Horas (120m)" },
+                      ].map((d) => (
+                        <button
+                          key={d.min}
+                          type="button"
+                          onClick={() => intentarCambiarDuracion(d.min)}
+                          className={`py-2 px-2 rounded-xl text-xs font-black uppercase border cursor-pointer transition-all font-sans ${
+                            duracionMinutos === d.min
+                              ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm"
+                              : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                          }`}
+                        >
+                          {d.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {tipoReserva === "privado" ? (
                     <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 text-xs font-bold text-amber-900">
-                      🤝 Al alquilar la cancha completa, tú y tu grupo deciden libremente cómo organizarse, rotar o armar los equipos durante el partido.
+                      🤝 Al alquilar la cancha completa ({duracionMinutos} min), tú y tu grupo deciden cómo organizarse libremente.
                     </div>
                   ) : (
                     <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 text-xs font-bold text-blue-900">
-                      👥 Se creará una sala abierta para {calculosPrecio.capacidadOficial} jugadores. Tú solo pagas tu cupo individual.
+                      👥 Se creará una sala abierta para {calculosPrecio.capacidadOficial} jugadores por {duracionMinutos} min.
                     </div>
                   )}
                 </div>
 
-                <button onClick={() => setPasoModal(2)} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl shadow-md cursor-pointer">
+                <button onClick={() => setPasoModal(2)} className="w-full py-3.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase tracking-wider rounded-2xl shadow-md cursor-pointer font-sans">
                   Continuar al Pago →
                 </button>
               </div>
@@ -944,13 +1397,12 @@ export default function FutbolClubDetailPage() {
               <div className="space-y-4 text-xs font-bold text-slate-700">
                 <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-1">
                   <div className="flex justify-between text-[#00FF9D]">
-                    <span>{tipoReserva === "privado" ? "Cancha Completa" : "Tu Cupo Individual"}</span>
+                    <span>{tipoReserva === "privado" ? `Cancha Completa (${duracionMinutos}m)` : "Tu Cupo Individual"}</span>
                     <div className="text-right">
                       <span className="font-black block">${calculosPrecio.base.toFixed(2)}</span>
                       <span className="text-[10px] text-emerald-400/80 block">~Bs. {(calculosPrecio.base * tasaBCV).toFixed(2)}</span>
                     </div>
                   </div>
-
                   <div className="flex justify-between text-slate-400">
                     <span>Comisión App (+10%)</span>
                     <div className="text-right">
@@ -958,7 +1410,6 @@ export default function FutbolClubDetailPage() {
                       <span className="text-[10px] text-slate-400 block">~Bs. {(calculosPrecio.fee * tasaBCV).toFixed(2)}</span>
                     </div>
                   </div>
-
                   <div className="flex justify-between text-white font-black border-t border-slate-800 pt-2 text-sm">
                     <span>Total a Pagar</span>
                     <div className="text-right">
@@ -985,10 +1436,9 @@ export default function FutbolClubDetailPage() {
                     onChange={(e) => setMontoAbono(e.target.value)}
                     disabled={tipoReserva === "ranking"}
                     readOnly={tipoReserva === "ranking"}
-                    className="w-full bg-white border border-slate-300 rounded-xl p-3 text-base font-black text-slate-900 outline-none disabled:bg-slate-100 disabled:text-slate-500"
+                    className="w-full bg-white border border-slate-300 rounded-xl p-3 text-base font-black text-slate-900 outline-none disabled:bg-slate-100 disabled:text-slate-500 font-sans"
                   />
 
-                  {/* VISTA PREVIA Y CÁLCULO DE CONVERSIÓN CON TASA BCV */}
                   {numIngresado > 0 && (
                     <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl flex justify-between items-center text-[10px] font-black text-emerald-900 mt-2">
                       <span>Conversión (Tasa BCV: Bs. {tasaBCV.toFixed(2)})</span>
@@ -1009,7 +1459,7 @@ export default function FutbolClubDetailPage() {
                       { id: "zelle", label: "🇺🇸 Zelle" },
                       { id: "efectivo", label: "💵 En Sitio" },
                     ].map((m) => (
-                      <button key={m.id} type="button" onClick={() => setMetodoPago(m.id)} className={`py-2.5 rounded-xl font-black text-[10px] uppercase border ${metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-slate-50 text-slate-600 border-slate-200"}`}>
+                      <button key={m.id} type="button" onClick={() => setMetodoPago(m.id)} className={`py-2.5 rounded-xl font-black text-[10px] uppercase border cursor-pointer font-sans ${metodoPago === m.id ? "bg-slate-900 text-[#00FF9D] border-slate-900" : "bg-slate-50 text-slate-600 border-slate-200"}`}>
                         {m.label}
                       </button>
                     ))}
@@ -1018,14 +1468,14 @@ export default function FutbolClubDetailPage() {
 
                 {metodoPago !== "efectivo" && (
                   <div className="space-y-2">
-                    <input type="text" placeholder="N° Referencia Transacción *" value={numReferencia} onChange={(e) => setNumReferencia(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none" />
-                    <input type="file" accept="image/*" onChange={(e) => handleSeleccionarImagen(e, setPreviewComprobante)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:bg-slate-900 file:text-[#00FF9D]" />
+                    <input type="text" placeholder="N° Referencia Transacción *" value={numReferencia} onChange={(e) => setNumReferencia(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none font-sans" />
+                    <input type="file" accept="image/*" onChange={(e) => handleSeleccionarImagen(e, setPreviewComprobante)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-1.5 text-xs font-bold outline-none file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:bg-slate-900 file:text-[#00FF9D] font-sans" />
                   </div>
                 )}
 
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => setPasoModal(1)} className="w-1/3 py-3 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl cursor-pointer">Volver</button>
-                  <button type="button" onClick={confirmarReservaYPago} disabled={procesandoReserva} className="w-2/3 py-3 bg-slate-900 text-[#00FF9D] font-black uppercase rounded-2xl shadow-md cursor-pointer">
+                  <button type="button" onClick={() => setPasoModal(1)} className="w-1/3 py-3 bg-slate-100 text-slate-700 font-black uppercase rounded-2xl cursor-pointer font-sans">Volver</button>
+                  <button type="button" onClick={confirmarReservaYPago} disabled={procesandoReserva} className="w-2/3 py-3 bg-slate-900 text-[#00FF9D] font-black uppercase rounded-2xl shadow-md cursor-pointer font-sans">
                     {procesandoReserva ? "Enviando..." : "Confirmar Reserva"}
                   </button>
                 </div>
@@ -1038,13 +1488,13 @@ export default function FutbolClubDetailPage() {
 
       {/* POPUP NOTIFICACIÓN */}
       {mounted && popupNotif.open && createPortal(
-        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4 font-sans">
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-3 text-center animate-in fade-in zoom-in-95 duration-150">
             <h3 className="text-base font-black text-slate-900">{popupNotif.title}</h3>
             <p className="text-xs font-bold text-slate-600">{popupNotif.message}</p>
             <button
               onClick={() => setPopupNotif({ ...popupNotif, open: false })}
-              className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl hover:bg-slate-800 transition-colors"
+              className="w-full py-2.5 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl hover:bg-slate-800 transition-colors cursor-pointer font-sans"
             >
               Entendido
             </button>

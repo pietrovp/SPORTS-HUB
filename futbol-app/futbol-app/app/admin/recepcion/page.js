@@ -41,6 +41,158 @@ function parsearFechaBD(fechaStr) {
   return new Date(`${cleanStr}-04:00`);
 }
 
+function horarioYaPaso(dateObj) {
+  return dateObj.getTime() <= Date.now();
+}
+
+function haySolapamiento(inicioA, duracionA, inicioB, duracionB) {
+  const startA = obtenerEpoch(inicioA);
+  const endA = startA + (duracionA || 60) * 60 * 1000;
+  const startB = obtenerEpoch(inicioB);
+  const endB = startB + (duracionB || 60) * 60 * 1000;
+  return startA < endB && endA > startB;
+}
+
+function formatRangoHorarioExacto(isoStr, durationMin) {
+  const start = parsearFechaBD(isoStr);
+  const end = new Date(start.getTime() + (durationMin || 60) * 60000);
+  const fmt = (d) => d.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" }).toUpperCase();
+  return `${fmt(start)} - ${fmt(end)}`;
+}
+
+function generarItemsAgendaMobile(canchaId, diaObj, partidos, bloqueos, club) {
+  if (!club) return [];
+  const horaApertura = parseInt((club.open_time || "07:00:00").split(":")[0], 10);
+  const minApertura = parseInt((club.open_time || "07:00:00").split(":")[1] || "0", 10);
+  const horaCierre = parseInt((club.close_time || "23:00:00").split(":")[0], 10);
+  const fechaSelISO = formatearFechaISOVET(diaObj);
+
+  let curr = crearFechaVET(fechaSelISO, horaApertura, minApertura);
+  const finDia = crearFechaVET(fechaSelISO, horaCierre, 0);
+
+  const items = [];
+  let trasReservaPrev = false;
+
+  while (curr.getTime() < finDia.getTime()) {
+    const currTime = curr.getTime();
+
+    const match = partidos.find((m) => m.court_id === canchaId && Math.abs(obtenerEpoch(m.scheduled_at) - currTime) < 60000);
+    if (match) {
+      const dur = match.duration_minutes || 60;
+      items.push({
+        tipo: "partido",
+        partido: match,
+        startObj: new Date(currTime),
+        duracion: dur,
+        rangoTexto: formatRangoHorarioExacto(match.scheduled_at, dur),
+      });
+      curr = new Date(currTime + dur * 60000);
+      trasReservaPrev = true;
+      continue;
+    }
+
+    const lock = bloqueos.find((l) => l.court_id === canchaId && Math.abs(obtenerEpoch(l.scheduled_at) - currTime) < 60000);
+    if (lock) {
+      const dur = lock.duration_minutes || 60;
+      items.push({
+        tipo: "bloqueo",
+        lock: lock,
+        startObj: new Date(currTime),
+        duracion: dur,
+        rangoTexto: formatRangoHorarioExacto(lock.scheduled_at, dur),
+      });
+      curr = new Date(currTime + dur * 60000);
+      trasReservaPrev = true;
+      continue;
+    }
+
+    const ongoingMatch = partidos.find((m) => {
+      if (m.court_id !== canchaId) return false;
+      const s = obtenerEpoch(m.scheduled_at);
+      const e = s + (m.duration_minutes || 60) * 60000;
+      return currTime > s && currTime < e;
+    });
+    if (ongoingMatch) {
+      const e = obtenerEpoch(ongoingMatch.scheduled_at) + (ongoingMatch.duration_minutes || 60) * 60000;
+      curr = new Date(e);
+      trasReservaPrev = true;
+      continue;
+    }
+
+    const ongoingLock = bloqueos.find((l) => {
+      if (l.court_id !== canchaId) return false;
+      const s = obtenerEpoch(l.scheduled_at);
+      const e = s + (l.duration_minutes || 60) * 60000;
+      return currTime > s && currTime < e;
+    });
+    if (ongoingLock) {
+      const e = obtenerEpoch(ongoingLock.scheduled_at) + (ongoingLock.duration_minutes || 60) * 60000;
+      curr = new Date(e);
+      trasReservaPrev = true;
+      continue;
+    }
+
+    const esHoraPunto = curr.getMinutes() === 0;
+    const esValidoMostrar = esHoraPunto || trasReservaPrev;
+
+    if (esValidoMostrar) {
+      const hLabel = curr.toLocaleTimeString("es-ES", { timeZone: "America/Caracas", hour: "2-digit", minute: "2-digit", hour12: true });
+      items.push({
+        tipo: "libre",
+        startObj: new Date(currTime),
+        horaInt: curr.getHours(),
+        minutosInt: curr.getMinutes(),
+        etiqueta: hLabel,
+        vencido: horarioYaPaso(curr),
+      });
+    }
+
+    trasReservaPrev = false;
+
+    if (curr.getMinutes() === 30) {
+      curr = new Date(currTime + 30 * 60000);
+    } else {
+      const proximo30 = currTime + 30 * 60000;
+      const hayAlgoEn30 = partidos.some(m => m.court_id === canchaId && Math.abs(obtenerEpoch(m.scheduled_at) - proximo30) < 60000) ||
+                          bloqueos.some(l => l.court_id === canchaId && Math.abs(obtenerEpoch(l.scheduled_at) - proximo30) < 60000);
+      if (hayAlgoEn30) {
+        curr = new Date(currTime + 30 * 60000);
+      } else {
+        curr = new Date(currTime + 60 * 60000);
+      }
+    }
+  }
+
+  return items;
+}
+
+const generarBloquesHorariosDesktop = (diaObj, club) => {
+  if (!club) return [];
+  const horaApertura = parseInt((club.open_time || "07:00:00").split(":")[0], 10);
+  const horaCierre = parseInt((club.close_time || "23:00:00").split(":")[0], 10);
+  const fechaSelISO = formatearFechaISOVET(diaObj);
+  const bloques = [];
+
+  for (let curH = horaApertura; curH < horaCierre; curH++) {
+    const dateObj0 = crearFechaVET(fechaSelISO, curH, 0);
+    const dateObj30 = crearFechaVET(fechaSelISO, curH, 30);
+    const hLabel = dateObj0.toLocaleTimeString("es-ES", {
+      timeZone: "America/Caracas",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+
+    bloques.push({
+      etiqueta: hLabel,
+      horaInt: curH,
+      dateObj0,
+      dateObj30,
+    });
+  }
+  return bloques;
+};
+
 function CustomDarkDatePicker({ value, onChange }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
@@ -530,13 +682,9 @@ export default function RecepcionElite() {
         diaObj,
         diaIdx,
         nombreDiaLargoMayus,
-        canchas: canchasFiltradas.map((cancha) => ({
-          cancha,
-          keyCol: `${cancha.id}_${diaObj.toISOString()}`,
-        })),
       };
     });
-  }, [diasVisibles, canchasFiltradas]);
+  }, [diasVisibles]);
 
   const calcularPrecioPorBloque = (cancha, dateObj) => {
     try {
@@ -564,37 +712,6 @@ export default function RecepcionElite() {
       return { precio: 15, esPico: false }; 
     }
   };
-
-  const bloquesHorarios = useMemo(() => {
-    if (!clubInfo) return [];
-    const duracion = clubInfo.slot_duration_minutes || 60;
-    const horaApertura = parseInt((clubInfo.open_time || "07:00:00").split(":")[0], 10);
-    const horaCierre = parseInt((clubInfo.close_time || "23:00:00").split(":")[0], 10);
-
-    const bloques = [];
-    let curH = horaApertura;
-    let curM = 0;
-
-    while (curH < horaCierre || (curH === horaCierre && curM === 0)) {
-      if (curH === horaCierre && curM > 0) break;
-      const periodo = curH >= 12 ? "PM" : "AM";
-      const hora12 = curH % 12 || 12;
-      const hStr = `${hora12}:${String(curM).padStart(2, "0")} ${periodo}`;
-
-      bloques.push({
-        etiqueta: hStr,
-        horaInt: curH,
-        minutosInt: curM,
-      });
-
-      curM += duracion;
-      if (curM >= 60) {
-        curH += Math.floor(curM / 60);
-        curM = curM % 60;
-      }
-    }
-    return bloques;
-  }, [clubInfo]);
 
   const abrirModalAgendarPOS = async (cancha, fechaHoraBD, horaLabel, precioCalculado) => {
     if (!user) return;
@@ -1306,7 +1423,7 @@ export default function RecepcionElite() {
       };
 
       setMatchSeleccionado(matchActualizado);
-      mostrarNotificacion("Pago Aprobado", "✅ El pago ha sido verificado y approved correctamente.", "success");
+      mostrarNotificacion("Pago Aprobado", "✅ El pago ha sido verificado y aprobado correctamente.", "success");
       await cargarPartidosPeriodo();
 
     } catch (err) {
@@ -1925,256 +2042,313 @@ export default function RecepcionElite() {
           </div>
         )}
 
-        {/* GRILLA RESPONSIVA POS */}
-        <div className="flex-1 overflow-auto p-2 sm:p-4 bg-slate-100 relative">
-          <div className="flex gap-3 w-full min-w-full items-start relative">
-            
-            <div className="w-[72px] sm:w-[84px] shrink-0 sticky left-0 z-30 flex flex-col bg-slate-100 pr-3">
-              <div className="bg-white rounded-2xl border-2 border-slate-300 shadow-md flex flex-col overflow-hidden mb-2">
-                <div className="h-[88px] bg-slate-900 text-[#00FF9D] font-black text-xs uppercase flex items-center justify-center border-b-4 border-[#00FF9D] shrink-0">
-                  HORA
-                </div>
-                
-                <div className="flex flex-col">
-                  {bloquesHorarios.map((bloque, idx) => (
-                    <div key={idx} className="h-24 flex flex-col items-center justify-center p-1 text-center border-b border-slate-100 last:border-b-0">
-                      <span className="text-[11px] sm:text-xs font-black text-slate-900">{bloque.etiqueta.split(" ")[0]}</span>
-                      <span className="text-[9px] sm:text-[10px] font-extrabold text-slate-500 uppercase">{bloque.etiqueta.split(" ")[1]}</span>
-                    </div>
-                  ))}
-                </div>
+        {/* CONTENEDOR DE DÍAS Y VISTAS */}
+        <div className="flex-1 overflow-auto p-4 sm:p-6 bg-slate-50 relative space-y-6">
+          {bloquesPorDia.map((bloqueDia) => (
+            <div key={bloqueDia.diaIdx} className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden mb-6">
+              <div className="flex justify-between items-center bg-slate-900 text-white p-3 sm:p-4 border-b-4 border-[#00FF9D]">
+                 <h3 className="text-sm sm:text-base font-black uppercase tracking-widest text-[#00FF9D]">
+                   {bloqueDia.nombreDiaLargoMayus}
+                 </h3>
+                 <span className="text-[10px] font-bold text-slate-400 bg-slate-800 px-3 py-1 rounded-full">
+                   {canchasFiltradas.length} Canchas Activas
+                 </span>
               </div>
-            </div>
 
-            <div className="flex-1 flex gap-3 min-w-0 w-full relative z-0">
-              {bloquesPorDia.map((bloqueDia) => (
-                <div
-                  key={bloqueDia.diaIdx}
-                  className={`bg-white rounded-2xl border-2 border-slate-300 shadow-md flex flex-col overflow-hidden mb-2 ${
-                    vistaCalendario === "dia" ? "w-full flex-1" : "shrink-0 w-auto"
-                  }`}
-                >
-                  
-                  <div className="h-12 bg-slate-900 text-white px-3 flex items-center justify-center border-b-4 border-[#00FF9D]">
-                    <h3 className="text-xs sm:text-sm font-black tracking-wider uppercase text-[#00FF9D] truncate">
-                      {bloqueDia.nombreDiaLargoMayus}
-                    </h3>
-                  </div>
+              {/* VISTA MÓVIL */}
+              <div className="block lg:hidden p-4 space-y-6">
+                 {canchasFiltradas.map((cancha) => {
+                   const itemsMobile = generarItemsAgendaMobile(cancha.id, bloqueDia.diaObj, partidosPeriodo, bloqueosActivos, clubInfo);
+                   return (
+                     <div key={cancha.id} className="space-y-3">
+                        <h4 className="font-black text-slate-800 uppercase text-xs border-b border-slate-200 pb-1">
+                          {cancha.sport_type === 'futbol' ? '⚽' : '🎾'} {cancha.name}
+                        </h4>
+                        <div className="space-y-2">
+                          {itemsMobile.length === 0 ? (
+                            <p className="text-xs text-slate-400 font-bold italic">No hay turnos disponibles.</p>
+                          ) : (
+                            itemsMobile.map((item, idx) => {
+                              if (item.tipo === "partido") {
+                                const match = item.partido;
+                                const isApproved = match.payment_status === "aprobado" || match.payment_status === "pagado" || match.payment_status === "completado";
+                                const isLiquidado = match.payment_status === "liquidado";
+                                const isPending = !isApproved && !isLiquidado && match.status !== "cancelado_pendiente_reembolso";
 
-                  <div className="h-10 flex border-b border-slate-200 bg-slate-100/80 items-center">
-                    {bloqueDia.canchas.map((col) => (
-                      <div
-                        key={col.keyCol}
-                        className={`p-2 text-center uppercase tracking-tight border-r border-slate-200 last:border-r-0 truncate ${
-                          vistaCalendario === "dia" ? "flex-1 min-w-[140px]" : "w-[160px] shrink-0"
-                        }`}
-                      >
-                        <span className="text-slate-900 text-[10px] sm:text-[11px] font-black flex items-center justify-center gap-1">
-                          <span>{col.cancha.sport_type === "futbol" ? "⚽" : "🎾"}</span>
-                          <span className="truncate">{col.cancha.name}</span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                                const bgClass = isPending ? "bg-amber-100 border-amber-300 text-amber-950" : "bg-emerald-100 border-emerald-300 text-emerald-950";
+                                const badgeClass = isPending ? "bg-amber-200 text-amber-950" : "bg-emerald-200 text-emerald-950";
+                                const statusText = isPending ? "⏳ Pago Pendiente" : "✅ Confirmada";
+                                const clienteNom = obtenerNombreCliente(match);
 
-                  <div className="flex flex-col">
-                    {bloquesHorarios.map((bloque, idx) => {
-                      const esFilaPar = idx % 2 === 0;
-
-                      return (
-                        <div key={idx} className={`flex h-24 border-b border-slate-100 last:border-b-0 ${esFilaPar ? "bg-white" : "bg-slate-50/50"}`}>
-                          {bloqueDia.canchas.map((col) => {
-                            
-                            const slotFechaStr = formatearFechaISOVET(bloqueDia.diaObj);
-                            const hStr = String(bloque.horaInt).padStart(2, '0');
-                            const mStr = String(bloque.minutosInt).padStart(2, '0');
-                            const fechaHoraBDSlot = `${slotFechaStr}T${hStr}:${mStr}:00-04:00`;
-                            
-                            const targetTime = obtenerEpoch(fechaHoraBDSlot);
-                            const bloqueVencido = targetTime <= Date.now();
-
-                            const partidoOcupado = partidosPeriodo.find((m) => {
-                              if (m.court_id !== col.cancha.id) return false;
-                              return Math.abs(obtenerEpoch(m.scheduled_at) - targetTime) < 5000;
-                            });
-
-                            const lockOcupado = bloqueosActivos.find((l) => {
-                              if (l.court_id !== col.cancha.id) return false;
-                              return Math.abs(obtenerEpoch(l.scheduled_at) - targetTime) < 5000;
-                            });
-
-                            const { precio: precioOriginal } = calcularPrecioPorBloque(col.cancha, bloqueDia.diaObj);
-                            
-                            let precioUSD = precioOriginal;
-                            let esPromoAplicada = false;
-
-                            if (promocionHoy) {
-                              const hasBlocks = promocionHoy.time_blocks && promocionHoy.time_blocks.length > 0;
-                              if (hasBlocks) {
-                                const horaBotonStr = `${hStr}:${mStr}`;
-                                const bloqueAplicable = promocionHoy.time_blocks.find(b => {
-                                  return horaBotonStr >= (b.start_time || "00:00") && horaBotonStr < (b.end_time || "23:59");
-                                });
-                                
-                                if (bloqueAplicable && !isNaN(parseFloat(bloqueAplicable.price))) {
-                                  precioUSD = parseFloat(bloqueAplicable.price); 
-                                  esPromoAplicada = true;
-                                }
-                              } else {
-                                const promoPrice = parseFloat(promocionHoy.price_normal);
-                                precioUSD = isNaN(promoPrice) ? precioOriginal : promoPrice;
-                                esPromoAplicada = true;
-                              }
-                            }
-
-                            if (partidoOcupado) {
-                              const esReembolsoPendiente = partidoOcupado.status === "cancelado_pendiente_reembolso" || partidoOcupado.payment_status === "reembolso_pendiente";
-                              const isLiquidado = partidoOcupado.payment_status === "liquidado";
-                              const precioCanchaBaseFee = (partidoOcupado.total_price || 15) + (partidoOcupado.app_fee || 1.50);
-                              const totalAbonado = (Array.isArray(partidoOcupado.payments_history) ? partidoOcupado.payments_history : [])
-                                .filter((a) => a.status === "aprobado")
-                                .reduce((sum, a) => sum + (parseFloat(a.amount) || 0), 0);
-                              const totalExtras = (Array.isArray(partidoOcupado.extra_items) ? partidoOcupado.extra_items : [])
-                                .reduce((sum, ex) => sum + (parseFloat(ex.price) || 0), 0);
-                              const totalGranEsperado = precioCanchaBaseFee + totalExtras;
-
-                              const canchaCubierta = totalAbonado >= (precioCanchaBaseFee - 0.05);
-                              const todoPagado = totalAbonado >= (totalGranEsperado - 0.05);
-                              const esAbierto = partidoOcupado.match_type === "abierto" && !partidoOcupado.is_private;
-
-                              let cardStyle = "";
-                              let badgeText = "";
-                              let badgeStyle = "";
-
-                              if (esReembolsoPendiente) {
-                                cardStyle = "bg-sky-100/90 text-sky-950 border-sky-400 hover:bg-sky-200/90 shadow-sm animate-pulse";
-                                badgeText = "🔵 REEMBOLSO (+6H)";
-                                badgeStyle = "bg-sky-600 text-white font-black";
-                              } else if (isLiquidado) {
-                                cardStyle = "bg-emerald-100/90 text-emerald-950 border-emerald-400 hover:bg-emerald-200/90 shadow-sm";
-                                badgeText = "✅ LIQUIDADA";
-                                badgeStyle = "bg-emerald-600 text-white font-black";
-                              } else if (todoPagado) {
-                                cardStyle = "bg-slate-950 text-white border-slate-800 hover:border-emerald-400";
-                                badgeText = "✅ PAGADA";
-                                badgeStyle = "bg-emerald-500/20 text-[#00FF9D] font-black";
-                              } else if (canchaCubierta) {
-                                cardStyle = "bg-amber-400/90 text-slate-950 border-amber-500 animate-pulse hover:bg-amber-400";
-                                badgeText = "⚠️ EXTRAS PENDIENTES";
-                                badgeStyle = "bg-slate-950 text-amber-300 font-black";
-                              } else {
-                                cardStyle = "bg-rose-500/90 text-white border-rose-600 animate-pulse hover:bg-rose-500";
-                                badgeText = "🚨 PENDIENTE CONFIRMACIÓN";
-                                badgeStyle = "bg-slate-950 text-rose-300 font-black";
-                              }
-
-                              return (
-                                <div key={col.keyCol} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                  <button
-                                    onClick={() => abrirModalDetalle(partidoOcupado)}
-                                    className={`h-full w-full rounded-xl p-1.5 flex flex-col justify-between text-left transition-all shadow-xs border-2 overflow-hidden cursor-pointer ${cardStyle}`}
-                                  >
-                                    <div className="flex justify-between items-center w-full gap-1">
-                                      <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full truncate ${badgeStyle}`}>
-                                        {badgeText}
-                                      </span>
-                                      {esAbierto && (
-                                        <span className="text-[9px] font-black px-1 py-0.5 bg-slate-900/20 rounded shrink-0">
-                                          {partidoOcupado.players?.length || 1}/4
+                                return (
+                                  <div key={`match-${match.id}-${idx}`}>
+                                    <button onClick={() => abrirModalDetalle(match)} className={`w-full p-3.5 rounded-2xl border flex flex-col justify-between gap-2 transition-all shadow-sm cursor-pointer hover:scale-[1.01] ${bgClass}`}>
+                                      <div className="flex items-center justify-between w-full">
+                                        <span className={`text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full ${badgeClass}`}>
+                                          RESERVADO ({item.duracion}M)
                                         </span>
-                                      )}
-                                    </div>
-                                    <div className="my-0.5">
-                                      <p className="text-[10px] sm:text-[11px] font-black truncate leading-tight">{obtenerNombreCliente(partidoOcupado)}</p>
-                                    </div>
-
-                                    {!isLiquidado && (
-                                      <div className="pt-1 border-t border-black/10 flex justify-between items-center text-[8px] font-black uppercase tracking-wider opacity-90">
-                                        <span>⚙️ Gestionar</span>
-                                        <span>→</span>
+                                        <span className="text-[10px] font-bold">{statusText}</span>
                                       </div>
-                                    )}
-                                  </button>
-                                </div>
-                              );
-                            }
+                                      <div className="text-left w-full">
+                                        <p className="text-sm font-black">{item.rangoTexto}</p>
+                                        <p className="text-[11px] font-bold opacity-80 flex items-center gap-1 mt-0.5">👤 {clienteNom}</p>
+                                      </div>
+                                    </button>
+                                  </div>
+                                );
+                              }
 
-                            if (lockOcupado) {
-                              const esMiBloqueo = user && lockOcupado.user_id === user.id;
+                              if (item.tipo === "bloqueo") {
+                                const lock = item.lock;
+                                return (
+                                  <div key={`lock-${lock.id || idx}-${idx}`} className="w-full p-3.5 rounded-2xl border border-dashed border-orange-300 bg-orange-50 flex flex-col gap-2 shadow-sm text-left">
+                                    <div className="flex items-center justify-between w-full">
+                                      <span className="text-[9px] font-black uppercase bg-orange-200 text-orange-900 px-2.5 py-0.5 rounded-full">
+                                        ⏳ EN PROCESO ({item.duracion}M)
+                                      </span>
+                                      <span className="text-[10px] font-bold text-orange-800">Reservando...</span>
+                                    </div>
+                                    <p className="text-sm font-black text-orange-950">{item.rangoTexto}</p>
+                                  </div>
+                                );
+                              }
+
+                              const { precio: precioOriginal } = calcularPrecioPorBloque(cancha, item.startObj);
+
+                              if (item.vencido) {
+                                return (
+                                  <div key={`free-${idx}`} className="w-full p-3.5 rounded-2xl bg-slate-50 text-slate-400 border border-slate-200 opacity-60 flex justify-between items-center text-xs font-bold cursor-not-allowed">
+                                    <span>⏰ {item.etiqueta}</span>
+                                    <span className="text-[10px] uppercase font-black text-slate-400">Finalizado</span>
+                                  </div>
+                                );
+                              }
 
                               return (
-                                <div key={col.keyCol} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                  <div className="h-full w-full rounded-xl p-1.5 flex flex-col items-center justify-center shadow-xs border-2 border-dashed border-amber-400 bg-amber-50/50 text-center cursor-not-allowed">
-                                    <span className="text-lg animate-pulse">⏳</span>
-                                    <p className="text-[10px] sm:text-[11px] font-black text-amber-700 mt-0.5 leading-tight">En proceso...</p>
-                                    <p className="text-[8px] font-bold text-amber-800/80 mt-0.5">
-                                      {esMiBloqueo ? "Tu reserva POS" : "Usuario reservando"}
-                                    </p>
+                                <button
+                                  key={`free-${idx}`}
+                                  type="button"
+                                  onClick={() => abrirModalAgendarPOS(cancha, `${formatearFechaISOVET(item.startObj)}T${String(item.horaInt).padStart(2,"0")}:${String(item.minutosInt).padStart(2,"0")}:00-04:00`, item.etiqueta, precioOriginal)}
+                                  className="w-full p-3 rounded-2xl bg-white border border-slate-200 hover:border-emerald-300 hover:shadow-sm flex justify-between items-center transition-all cursor-pointer active:scale-[0.98] shadow-2xs"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="bg-slate-100 text-slate-900 text-xs font-black px-3 py-1.5 rounded-xl border border-slate-200">
+                                      {item.etiqueta}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-slate-400">Disponible</span>
                                   </div>
-                                </div>
+                                  <div className="px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 font-black text-[10px] uppercase tracking-wider rounded-xl transition-all shadow-xs">
+                                    Reservar ${precioOriginal.toFixed(2)} →
+                                  </div>
+                                </button>
                               );
-                            }
+                            })
+                          )}
+                        </div>
+                     </div>
+                   );
+                 })}
+              </div>
 
-                            if (bloqueVencido) {
-                              return (
-                                <div key={col.keyCol} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                  <div className="h-full w-full rounded-xl p-1.5 flex flex-col items-center justify-center border-2 border-slate-200 bg-slate-100 text-center cursor-not-allowed opacity-80">
-                                    <span className="text-lg">⏰</span>
-                                    <p className="text-[10px] sm:text-[11px] font-black text-slate-500 mt-0.5 leading-tight">
-                                      Horario finalizado
-                                    </p>
-                                    <p className="text-[8px] font-bold text-slate-400 mt-0.5">
-                                      Ya no disponible
-                                    </p>
-                                  </div>
-                                </div>
-                              );
-                            }
+              {/* VISTA DESKTOP HORIZONTAL (POR DÍA) */}
+              <div className="hidden lg:block w-full overflow-x-auto relative">
+                 {(() => {
+                   const bloquesHorariosDesktopDia = generarBloquesHorariosDesktop(bloqueDia.diaObj, clubInfo);
+                   if (!bloquesHorariosDesktopDia || bloquesHorariosDesktopDia.length === 0) {
+                     return <div className="p-8 text-center text-xs font-bold text-slate-400">Configura el horario del club para ver la agenda.</div>;
+                   }
+
+                   return (
+                     <div className="w-max pb-4">
+                        {/* CABECERA HORARIA */}
+                        <div className="flex border-b border-slate-200 bg-slate-100 sticky top-0 z-30">
+                           <div className="w-32 shrink-0 sticky left-0 z-40 bg-slate-100 border-r border-slate-200 p-2 flex items-center justify-center">
+                              <span className="text-[10px] font-black uppercase text-slate-500">Canchas</span>
+                           </div>
+                           {bloquesHorariosDesktopDia.map((b, i) => (
+                              <div key={i} className="w-28 shrink-0 py-2 border-r border-slate-200 text-center flex flex-col justify-center">
+                                 <span className="text-xs font-black text-slate-800">{b.etiqueta.split(" ")[0]}</span>
+                                 <span className="text-[8px] font-bold text-slate-500">{b.etiqueta.split(" ")[1]}</span>
+                              </div>
+                           ))}
+                        </div>
+
+                        {/* FILAS DE CANCHAS */}
+                        {canchasFiltradas.length === 0 ? (
+                          <div className="p-8 text-center text-xs font-bold text-slate-400">No hay canchas configuradas o coincidiendo con el filtro.</div>
+                        ) : (
+                          canchasFiltradas.map((cancha) => {
+                            const gridStart = bloquesHorariosDesktopDia[0]?.dateObj0.getTime() || 0;
+                            const lastBlock = bloquesHorariosDesktopDia[bloquesHorariosDesktopDia.length - 1];
+                            const gridEnd = lastBlock ? lastBlock.dateObj30.getTime() + 30 * 60000 : 0;
 
                             return (
-                              <div key={col.keyCol} className="flex-1 min-w-[140px] sm:min-w-[180px] p-1 border-l border-slate-200">
-                                <button
-                                  type="button"
-                                  onClick={() => abrirModalAgendarPOS(
-                                    col.cancha,
-                                    fechaHoraBDSlot,
-                                    bloque.etiqueta,
-                                    precioUSD
-                                  )}
-                                  className="h-full w-full bg-slate-50/70 hover:bg-emerald-50/80 text-emerald-800 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-emerald-500 transition-all group shadow-2xs relative cursor-pointer"
-                                >
-                                  {esPromoAplicada && (
-                                    <span className="absolute top-1 left-1 text-[7px] sm:text-[8px] font-black uppercase bg-rose-100 text-rose-600 px-1 py-0.2 rounded">
-                                      Promo
-                                    </span>
-                                  )}
+                              <div key={cancha.id} className="flex border-b border-slate-100 relative h-16 group">
+                                 {/* Etiqueta Cancha (Sticky) */}
+                                 <div className="w-32 shrink-0 sticky left-0 z-30 bg-white border-r border-slate-200 p-2 flex flex-col justify-center items-center group-hover:bg-slate-50 transition-colors shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
+                                    <span className="text-xs font-black text-slate-800 text-center leading-tight truncate px-1 w-full">{cancha.name}</span>
+                                    <span className="text-[8px] font-bold text-slate-400 mt-0.5">({cancha.capacity} Jug.)</span>
+                                 </div>
 
-                                  <span className="text-[10px] sm:text-xs font-black text-emerald-700 group-hover:scale-105 transition-transform">
-                                    + Agendar
-                                  </span>
+                                 {/* Celdas clickeables con unificación de 1 hora libre */}
+                                 <div className="flex relative">
+                                    {bloquesHorariosDesktopDia.map((b, i) => {
+                                       const isOcupado0 = partidosPeriodo.some((m) => m.court_id === cancha.id && haySolapamiento(b.dateObj0, 30, m.scheduled_at, m.duration_minutes)) ||
+                                                          bloqueosActivos.some((l) => l.court_id === cancha.id && haySolapamiento(b.dateObj0, 30, l.scheduled_at, l.duration_minutes));
 
-                                  {esPromoAplicada ? (
-                                    <div className="flex items-center gap-1">
-                                      <span className="text-[8px] font-bold text-slate-400 line-through">${precioOriginal.toFixed(2)}</span>
-                                      <span className="text-[9px] sm:text-[10px] font-black text-rose-500">${precioUSD.toFixed(2)}</span>
-                                    </div>
-                                  ) : (
-                                    <span className="text-[8px] sm:text-[10px] font-bold text-slate-500 mt-0.5">${precioUSD.toFixed(2)}</span>
-                                  )}
-                                </button>
+                                       const isOcupado30 = partidosPeriodo.some((m) => m.court_id === cancha.id && haySolapamiento(b.dateObj30, 30, m.scheduled_at, m.duration_minutes)) ||
+                                                           bloqueosActivos.some((l) => l.court_id === cancha.id && haySolapamiento(b.dateObj30, 30, l.scheduled_at, l.duration_minutes));
+
+                                       const vencido0 = horarioYaPaso(b.dateObj0);
+                                       const vencido30 = horarioYaPaso(b.dateObj30);
+
+                                       const { precio: precio0 } = calcularPrecioPorBloque(cancha, b.dateObj0);
+
+                                       // Si la hora ENTERA (:00 a :00 siguiente) está completamente libre y no vencida:
+                                       if (!isOcupado0 && !isOcupado30 && !vencido0) {
+                                         const fechaHoraBDSlot = `${formatearFechaISOVET(b.dateObj0)}T${String(b.dateObj0.getHours()).padStart(2, "0")}:00:00-04:00`;
+                                         return (
+                                           <div key={i} className="w-28 shrink-0 border-r border-slate-100 h-full relative p-1">
+                                             <button
+                                               onClick={() => abrirModalAgendarPOS(cancha, fechaHoraBDSlot, b.etiqueta, precio0)}
+                                               className="w-full h-full rounded-xl bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200 hover:border-emerald-400 flex flex-col items-center justify-center transition-all shadow-2xs group cursor-pointer active:scale-95"
+                                             >
+                                               <span className="text-[10px] font-black text-emerald-800 uppercase leading-none">+ Agendar</span>
+                                               <span className="text-[10px] font-black text-emerald-600 mt-0.5">${precio0.toFixed(2)}</span>
+                                             </button>
+                                           </div>
+                                         );
+                                       }
+
+                                       // De lo contrario (hora dividida / parcialmente ocupada o vencida), renderizamos 2 celdas de 30 min (w-14 cada una)
+                                       const slots = [
+                                         { dateObj: b.dateObj0, min: 0, isOcupado: isOcupado0, vencido: vencido0 },
+                                         { dateObj: b.dateObj30, min: 30, isOcupado: isOcupado30, vencido: vencido30 },
+                                       ];
+
+                                       return slots.map((s, sIdx) => {
+                                         const { precio: precioSlot } = calcularPrecioPorBloque(cancha, s.dateObj);
+                                         const fechaHoraBDSlot = `${formatearFechaISOVET(s.dateObj)}T${String(s.dateObj.getHours()).padStart(2, "0")}:${String(s.min).padStart(2, "0")}:00-04:00`;
+
+                                         return (
+                                           <div key={`${i}-${sIdx}`} className="w-14 shrink-0 border-r border-slate-100 h-full relative p-1">
+                                             {!s.isOcupado && !s.vencido ? (
+                                               <button
+                                                 onClick={() => abrirModalAgendarPOS(cancha, fechaHoraBDSlot, s.dateObj.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Caracas" }), precioSlot)}
+                                                 className="w-full h-full rounded-lg bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200 hover:border-emerald-400 flex flex-col items-center justify-center transition-all shadow-2xs group cursor-pointer active:scale-[0.96]"
+                                               >
+                                                 <span className="text-[8px] font-black text-emerald-800 uppercase leading-none">+</span>
+                                                 <span className="text-[9px] font-black text-emerald-600 mt-0.5">${precioSlot.toFixed(0)}</span>
+                                               </button>
+                                             ) : s.vencido && !s.isOcupado ? (
+                                               <div className="w-full h-full rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center opacity-50">
+                                                 <span className="text-[8px] font-bold text-slate-300">⏰</span>
+                                               </div>
+                                             ) : null}
+                                           </div>
+                                         );
+                                       });
+                                    })}
+
+                                    {/* Overlays de Partidos acotados a límites exactos */}
+                                    {partidosPeriodo.filter(m => m.court_id === cancha.id).map(match => {
+                                        const startEpoch = obtenerEpoch(match.scheduled_at);
+                                        if (startEpoch < gridStart || startEpoch >= gridEnd) return null;
+
+                                        const offsetMin = (startEpoch - gridStart) / 60000;
+                                        const leftPx = (offsetMin / 30) * 56; // w-14 = 3.5rem = 56px
+
+                                        const dur = match.duration_minutes || 60;
+                                        const maxDur = (gridEnd - startEpoch) / 60000;
+                                        const effectiveDur = Math.min(dur, maxDur);
+                                        const widthPx = (effectiveDur / 30) * 56 - 2; // -2px for padding/gap
+                                        
+                                        const esReembolsoPendiente = match.status === "cancelado_pendiente_reembolso" || match.payment_status === "reembolso_pendiente";
+                                        const esLiquidado = match.payment_status === "liquidado";
+                                        const isApproved = match.payment_status === "aprobado" || match.payment_status === "pagado" || match.payment_status === "completado";
+                                        const isPending = !isApproved && !esLiquidado && !esReembolsoPendiente;
+
+                                        let bgClass = "";
+                                        let badgeClass = "";
+                                        let icon = "";
+                                        let textStatus = "";
+
+                                        if (esReembolsoPendiente) {
+                                           bgClass = "bg-sky-100 border-sky-300 text-sky-950";
+                                           badgeClass = "bg-sky-200 text-sky-950";
+                                           icon = "🔵";
+                                           textStatus = "Reembolso";
+                                        } else if (esLiquidado) {
+                                           bgClass = "bg-slate-200 border-slate-300 text-slate-800";
+                                           badgeClass = "bg-slate-300 text-slate-900";
+                                           icon = "🔒";
+                                           textStatus = "Liquidada";
+                                        } else if (isPending) {
+                                           bgClass = "bg-amber-100 border-amber-300 text-amber-950";
+                                           badgeClass = "bg-amber-200 text-amber-950";
+                                           icon = "⏳";
+                                           textStatus = "Pendiente";
+                                        } else {
+                                           bgClass = "bg-emerald-100 border-emerald-300 text-emerald-950";
+                                           badgeClass = "bg-emerald-200 text-emerald-950";
+                                           icon = "✅";
+                                           textStatus = "Confirmada";
+                                        }
+
+                                        const clienteNom = obtenerNombreCliente(match);
+
+                                        return (
+                                          <div key={match.id} style={{ left: `${leftPx}px`, width: `${widthPx}px` }} className="absolute top-0 h-full p-0.5 z-20">
+                                              <button 
+                                                onClick={() => abrirModalDetalle(match)} 
+                                                className={`h-full w-full rounded-xl border flex flex-col justify-center px-2 py-1 shadow-sm transition-all hover:scale-[1.01] ${bgClass} overflow-hidden whitespace-nowrap text-left cursor-pointer`}
+                                              >
+                                                 <div className="flex items-center gap-1 mb-0.5">
+                                                   <span className="text-[9px] font-black">{formatRangoHorarioExacto(match.scheduled_at, match.duration_minutes)}</span>
+                                                   <span className={`text-[7px] uppercase font-black px-1 rounded ${badgeClass}`}>{textStatus}</span>
+                                                 </div>
+                                                 <span className="text-[10px] font-bold truncate flex items-center gap-1">{icon} {clienteNom}</span>
+                                              </button>
+                                          </div>
+                                        );
+                                    })}
+
+                                    {/* Overlays de Bloqueos acotados a límites exactos */}
+                                    {bloqueosActivos.filter(l => l.court_id === cancha.id).map(lock => {
+                                        const startEpoch = obtenerEpoch(lock.scheduled_at);
+                                        if (startEpoch < gridStart || startEpoch >= gridEnd) return null;
+
+                                        const offsetMin = (startEpoch - gridStart) / 60000;
+                                        const leftPx = (offsetMin / 30) * 56;
+
+                                        const dur = lock.duration_minutes || 60;
+                                        const maxDur = (gridEnd - startEpoch) / 60000;
+                                        const effectiveDur = Math.min(dur, maxDur);
+                                        const widthPx = (effectiveDur / 30) * 56 - 2;
+
+                                        return (
+                                          <div key={lock.id || lock.scheduled_at} style={{ left: `${leftPx}px`, width: `${widthPx}px` }} className="absolute top-0 h-full p-0.5 z-20 pointer-events-none">
+                                              <div className="h-full w-full rounded-xl border border-dashed border-orange-300 bg-orange-50 flex flex-col justify-center px-2 py-1 shadow-sm overflow-hidden whitespace-nowrap">
+                                                 <span className="text-[9px] font-black text-orange-800">{formatRangoHorarioExacto(lock.scheduled_at, lock.duration_minutes)}</span>
+                                                 <span className="text-[10px] font-medium text-orange-600 truncate">Procesando...</span>
+                                              </div>
+                                          </div>
+                                        );
+                                    })}
+                                 </div>
                               </div>
                             );
-                          })}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+                          })
+                        )}
+                     </div>
+                   );
+                 })()}
+              </div>
 
-          </div>
+            </div>
+          ))}
         </div>
+
       </div>
 
       {/* MODAL VENTA DIRECTA TIENDA */}
@@ -2320,7 +2494,7 @@ export default function RecepcionElite() {
                         <input
                           type="text"
                           required
-                          placeholder="N° Referencia / ID * "
+                          placeholder="N° Referencia / ID *"
                           value={formVentaTienda.numReferencia}
                           onChange={(e) => setFormVentaTienda({ ...formVentaTienda, numReferencia: e.target.value })}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold outline-none"

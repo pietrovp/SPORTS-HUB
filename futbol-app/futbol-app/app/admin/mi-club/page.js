@@ -63,8 +63,9 @@ export default function MiClubConfigPage() {
     court_type: "indoor",
     has_lighting: true,
     pricing_blocks: [
-      { start_time: "07:00", end_time: "12:00", price: 10 },
-      { start_time: "12:00", end_time: "17:00", price: 15 },
+      { start_time: "07:00", end_time: "12:00", price_60: 10, price_90: 14, price_120: 18 },
+      { start_time: "12:00", end_time: "17:00", price_60: 15, price_90: 20, price_120: 25 },
+      { start_time: "17:00", end_time: "23:00", price_60: 20, price_90: 27, price_120: 34 },
     ],
   };
 
@@ -277,12 +278,15 @@ export default function MiClubConfigPage() {
   function abrirModalEditarCancha(cancha) {
     setEditingCanchaId(cancha.id);
 
-    const bloquesPorDefecto = cancha.pricing_blocks && cancha.pricing_blocks.length > 0 
-      ? cancha.pricing_blocks 
-      : [
-          { start_time: "07:00", end_time: "17:00", price: cancha.price_normal || 12 },
-          { start_time: "17:00", end_time: "23:00", price: cancha.price_peak || 20 }
-        ];
+    const bloquesNormalizados = Array.isArray(cancha.pricing_blocks) && cancha.pricing_blocks.length > 0
+      ? cancha.pricing_blocks.map(b => ({
+          start_time: b.start_time || "07:00",
+          end_time: b.end_time || "12:00",
+          price_60: parseFloat(b.price_60 ?? b.price ?? 10),
+          price_90: parseFloat(b.price_90 ?? (b.price ? b.price * 1.3 : 14)),
+          price_120: parseFloat(b.price_120 ?? (b.price ? b.price * 1.8 : 18)),
+        }))
+      : defaultCanchaForm.pricing_blocks;
 
     setFormCancha({
       name: cancha.name,
@@ -292,7 +296,7 @@ export default function MiClubConfigPage() {
       surface_type: cancha.surface_type || "Cristal",
       court_type: cancha.court_type || "outdoor",
       has_lighting: cancha.has_lighting ?? true,
-      pricing_blocks: bloquesPorDefecto
+      pricing_blocks: bloquesNormalizados,
     });
     setModalCanchaOpen(true);
   }
@@ -300,13 +304,16 @@ export default function MiClubConfigPage() {
   function agregarBloque() {
     setFormCancha(prev => ({
       ...prev,
-      pricing_blocks: [...prev.pricing_blocks, { start_time: "", end_time: "", price: 0 }]
+      pricing_blocks: [
+        ...prev.pricing_blocks,
+        { start_time: "17:00", end_time: "23:00", price_60: 15, price_90: 21, price_120: 27 }
+      ]
     }));
   }
 
   function actualizarBloque(index, campo, valor) {
     const nuevosBloques = [...formCancha.pricing_blocks];
-    nuevosBloques[index][campo] = valor;
+    nuevosBloques[index][campo] = campo.startsWith("price") ? parseFloat(valor) || 0 : valor;
     setFormCancha({ ...formCancha, pricing_blocks: nuevosBloques });
   }
 
@@ -323,7 +330,7 @@ export default function MiClubConfigPage() {
     }
     
     if (formCancha.pricing_blocks.length === 0) {
-      alert("Debes agregar al menos un bloque de precios.");
+      alert("Debes agregar al menos una franja horaria de precios.");
       return;
     }
 
@@ -332,6 +339,8 @@ export default function MiClubConfigPage() {
       const capFinal = formCancha.sport_type === "futbol" 
         ? Number(formCancha.capacity) || 10 
         : 4;
+
+      const primerBloque = formCancha.pricing_blocks[0];
 
       const payload = {
         club_id: club.id,
@@ -343,27 +352,27 @@ export default function MiClubConfigPage() {
         court_type: formCancha.court_type,
         has_lighting: formCancha.has_lighting,
         pricing_blocks: formCancha.pricing_blocks,
-        price_normal: parseFloat(formCancha.pricing_blocks[0].price) || 12,
-        price_peak: parseFloat(formCancha.pricing_blocks[0].price) || 20,
-        price_credits: parseFloat(formCancha.pricing_blocks[0].price) || 12, 
+        price_normal: primerBloque.price_60 || 10,
+        price_peak: formCancha.pricing_blocks[formCancha.pricing_blocks.length - 1].price_60 || 15,
+        price_credits: primerBloque.price_60 || 10, 
         is_active: true,
       };
 
       if (editingCanchaId) {
         const { error } = await supabase.from("courts").update(payload).eq("id", editingCanchaId);
         if (error) throw error;
-        setMensaje(`✅ Pista ${payload.name} actualizada correctamente.`);
+        setMensaje(`✅ Cancha/Pista ${payload.name} actualizada correctamente.`);
       } else {
         const { error } = await supabase.from("courts").insert(payload);
         if (error) throw error;
-        setMensaje(`✅ Nueva Pista ${payload.name} agregada correctamente.`);
+        setMensaje(`✅ Nueva Cancha/Pista ${payload.name} agregada correctamente.`);
       }
 
       setModalCanchaOpen(false);
       await cargarDatos(); 
     } catch (err) {
       console.error(err);
-      alert("Error guardando pista: " + err.message);
+      alert("Error guardando cancha: " + err.message);
     } finally {
       setSaving(false);
     }
@@ -373,7 +382,7 @@ export default function MiClubConfigPage() {
     if (!confirm("🚨 ATENCIÓN: Borrar esta cancha eliminará su historial en el sistema.\n¿Estás completamente seguro de eliminarla?")) return;
     try {
       await supabase.from("courts").delete().eq("id", canchaId);
-      setMensaje("🗑️ Pista eliminada.");
+      setMensaje("🗑️ Cancha/Pista eliminada.");
       await cargarDatos();
     } catch (err) {
       alert("Error eliminando pista. Puede que tenga reservas asociadas.");
@@ -387,7 +396,7 @@ export default function MiClubConfigPage() {
   const esOnboardingInicial = !club;
 
   return (
-    <div className="p-6 bg-slate-50 min-h-screen">
+    <div className="p-6 bg-slate-50 min-h-screen font-sans">
       <div className="max-w-5xl mx-auto space-y-6">
 
         <div className={`p-6 rounded-3xl border shadow-sm flex flex-col md:flex-row justify-between md:items-end gap-4 ${
@@ -403,7 +412,7 @@ export default function MiClubConfigPage() {
               {esOnboardingInicial ? "Registra tu Complejo Deportivo" : "🏟️ Mi Complejo Deportivo"}
             </h1>
             <p className={`text-xs font-medium mt-1 ${esOnboardingInicial ? "text-slate-300" : "text-slate-500"}`}>
-              Configura la ficha pública de tu club: deportes, amenidades, horarios y canchas registradas.
+              Configura la ficha pública de tu club: deportes, amenidades, horarios y tarifas por duración dentro de cada franja.
             </p>
           </div>
 
@@ -462,7 +471,7 @@ export default function MiClubConfigPage() {
 
             <div>
               <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
-                Duración de los Turnos (Bloques)
+                Duración Base de los Turnos en la Grilla
               </label>
               <select
                 value={formClub.slot_duration_minutes}
@@ -532,7 +541,7 @@ export default function MiClubConfigPage() {
                     key={dep.id}
                     type="button"
                     onClick={() => toggleSport(dep.id)}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-xs font-black transition-all ${
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-xs font-black transition-all cursor-pointer ${
                       checked
                         ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-md"
                         : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
@@ -549,7 +558,7 @@ export default function MiClubConfigPage() {
           <button
             type="submit"
             disabled={saving}
-            className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md transition-colors"
+            className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-2xl shadow-md transition-colors cursor-pointer"
           >
             {saving ? "Guardando..." : "💾 Guardar Información del Complejo"}
           </button>
@@ -560,14 +569,14 @@ export default function MiClubConfigPage() {
             <div className="flex justify-between items-center border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-lg font-black text-slate-900">2. Pistas y Canchas Registradas</h2>
-                <p className="text-xs text-slate-400 font-bold">Configura el deporte, tipo y precios por bloque de cada pista.</p>
+                <p className="text-xs text-slate-400 font-bold">Configura el deporte, capacidad y tarifas por franja horaria.</p>
               </div>
               <button
                 type="button"
                 onClick={abrirModalNuevaCancha}
-                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-sm"
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-sm cursor-pointer"
               >
-                + Añadir Pista
+                + Añadir Pista / Cancha
               </button>
             </div>
 
@@ -581,8 +590,9 @@ export default function MiClubConfigPage() {
                 {canchas.map((c) => {
                   const cap = c.capacity || (c.sport_type === "futbol" ? 10 : 4);
                   const vs = Math.floor(cap / 2);
+
                   return (
-                    <div key={c.id} className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex flex-col justify-between space-y-3 relative overflow-hidden">
+                    <div key={c.id} className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex flex-col justify-between space-y-3 relative overflow-hidden shadow-2xs">
                       <div className="flex justify-between items-start">
                         <div>
                           <div className="flex items-center gap-1.5 mb-1">
@@ -592,7 +602,7 @@ export default function MiClubConfigPage() {
                             </span>
                           </div>
                           <h4 className="font-black text-slate-900 text-sm">{c.name}</h4>
-                          <span className="text-[10px] font-bold text-emerald-600 uppercase">
+                          <span className="text-[10px] font-bold text-emerald-600 uppercase block mt-0.5">
                             {c.sport_type === "futbol" 
                               ? `⚽ Fútbol (${vs} vs ${vs} — ${cap} Jugadores)` 
                               : `${c.court_type} • ${c.surface_type}`}
@@ -601,33 +611,39 @@ export default function MiClubConfigPage() {
                         
                         <button 
                           onClick={() => abrirModalEditarCancha(c)} 
-                          className="w-8 h-8 rounded-full bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center shadow-xs transition-colors"
+                          className="w-8 h-8 rounded-full bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 flex items-center justify-center shadow-2xs transition-colors cursor-pointer"
                           title="Editar cancha"
                         >
                           ✏️
                         </button>
                       </div>
                       
-                      <div className="mt-2 bg-white p-2 rounded-xl border border-slate-100 shadow-xs flex flex-col gap-1 max-h-32 overflow-y-auto">
-                        <p className="text-[8px] font-black text-slate-400 uppercase border-b border-slate-50 pb-1">Precios por Bloques</p>
+                      <div className="mt-2 bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs flex flex-col gap-1 max-h-40 overflow-y-auto">
+                        <p className="text-[8px] font-black text-slate-400 uppercase border-b border-slate-100 pb-1">
+                          Tarifas por Franja (1h / 1.5h / 2h)
+                        </p>
                         {(c.pricing_blocks && c.pricing_blocks.length > 0) ? (
                           c.pricing_blocks.map((b, i) => (
-                            <div key={i} className="flex justify-between items-center text-[10px] font-bold py-0.5">
-                              <span className="text-slate-500">{b.start_time} - {b.end_time}</span>
-                              <span className="text-emerald-600 font-black">${b.price}</span>
+                            <div key={i} className="border-b border-slate-100 last:border-b-0 py-1 space-y-0.5">
+                              <span className="text-slate-800 text-[10px] font-black block">{b.start_time} a {b.end_time}</span>
+                              <div className="flex justify-between items-center text-[9px] font-bold text-slate-500">
+                                <span>1h: <strong className="text-emerald-600">${parseFloat(b.price_60 || b.price || 10).toFixed(2)}</strong></span>
+                                <span>1.5h: <strong className="text-emerald-600">${parseFloat(b.price_90 || (b.price ? b.price * 1.3 : 14)).toFixed(2)}</strong></span>
+                                <span>2h: <strong className="text-emerald-600">${parseFloat(b.price_120 || (b.price ? b.price * 1.8 : 18)).toFixed(2)}</strong></span>
+                              </div>
                             </div>
                           ))
                         ) : (
                           <div className="flex justify-between items-center text-[10px] font-bold py-0.5">
                             <span className="text-slate-500">Precio Fijo</span>
-                            <span className="text-emerald-600 font-black">${c.price_normal}</span>
+                            <span className="text-emerald-600 font-black">${parseFloat(c.price_normal || 10).toFixed(2)}</span>
                           </div>
                         )}
                       </div>
 
                       <div className="flex justify-between items-center text-[10px] text-slate-500 border-t border-slate-200 pt-2 font-bold">
                         <span>Iluminación: {c.has_lighting ? "Sí 💡" : "No"}</span>
-                        <button onClick={() => eliminarCancha(c.id)} className="text-rose-500 hover:underline">
+                        <button onClick={() => eliminarCancha(c.id)} className="text-rose-500 hover:underline cursor-pointer">
                           Eliminar
                         </button>
                       </div>
@@ -641,17 +657,18 @@ export default function MiClubConfigPage() {
 
       </div>
 
+      {/* MODAL CONFIGURACIÓN DE CANCHA / PISTA */}
       {modalCanchaOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4" onClick={() => setModalCanchaOpen(false)}>
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center border-b pb-3">
               <h3 className="text-base font-black text-slate-900">
-                {editingCanchaId ? "✏️ Editar Pista" : "Registrar Nueva Pista"}
+                {editingCanchaId ? "✏️ Editar Cancha / Pista" : "Registrar Nueva Cancha"}
               </h3>
-              <button onClick={() => setModalCanchaOpen(false)} className="text-slate-400 font-bold hover:text-slate-700">✕</button>
+              <button onClick={() => setModalCanchaOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
             </div>
 
-            <form onSubmit={guardarCancha} className="space-y-3 text-xs font-bold text-slate-700">
+            <form onSubmit={guardarCancha} className="space-y-4 text-xs font-bold text-slate-700">
               <div>
                 <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Deporte Asignado</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -667,7 +684,7 @@ export default function MiClubConfigPage() {
                         sport_type: dep.id, 
                         capacity: dep.id === "futbol" ? (formCancha.capacity >= 6 ? formCancha.capacity : 10) : 4 
                       })}
-                      className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase border transition-all ${
+                      className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase border transition-all cursor-pointer ${
                         formCancha.sport_type === dep.id
                           ? "bg-slate-900 text-[#00FF9D] border-slate-900 shadow-sm"
                           : "bg-slate-50 text-slate-600 border-slate-200"
@@ -680,18 +697,18 @@ export default function MiClubConfigPage() {
               </div>
 
               <div>
-                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Nombre de la Pista</label>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Nombre de la Pista / Cancha</label>
                 <input
                   type="text"
                   required
-                  placeholder="Ej. Cancha 1 / Pista Central"
+                  placeholder="Ej. Cancha Sintética 1 / Pista Central"
                   value={formCancha.name}
                   onChange={(e) => setFormCancha({ ...formCancha, name: e.target.value })}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold outline-none"
                 />
               </div>
 
-              {/* SELECCIÓN DE CAPACIDAD DE FÚTBOL */}
+              {/* OPCIONES SEGÚN EL DEPORTE */}
               {formCancha.sport_type === "futbol" ? (
                 <div>
                   <label className="block text-[10px] font-black uppercase text-emerald-600 mb-1">
@@ -742,76 +759,130 @@ export default function MiClubConfigPage() {
                 </div>
               )}
 
-              {/* BLOQUES DE PRECIO */}
-              <div className="space-y-2 pt-2 border-t border-slate-100">
+              {/* SECCIÓN CONFIGURACIÓN FRANJAS Y PRECIOS DENTRO DE CADA FRANJA */}
+              <div className="space-y-3 pt-3 border-t border-slate-100">
                 <div className="flex justify-between items-center">
-                  <label className="block text-[10px] font-black uppercase text-slate-400">Bloques de Precios ($ USD)</label>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-slate-800">
+                      Franjas Horarias y Precios por Duración ($ USD)
+                    </label>
+                    <span className="text-[9px] font-bold text-slate-400 block">
+                      Ajusta los precios fijos de 1h, 1.5h y 2h para cada horario.
+                    </span>
+                  </div>
                   <button 
                     type="button" 
                     onClick={agregarBloque} 
-                    className="text-[10px] font-black text-blue-600 bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                    className="text-[10px] font-black text-blue-600 bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0"
                   >
-                    + Añadir Bloque
+                    + Añadir Franja
                   </button>
                 </div>
                 
-                <div className="max-h-48 overflow-y-auto pr-1 space-y-2">
+                <div className="max-h-60 overflow-y-auto pr-1 space-y-3">
                   {formCancha.pricing_blocks.map((bloque, i) => (
-                    <div key={i} className="flex items-center gap-1.5 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                      <div className="flex flex-col flex-1">
-                        <label className="text-[8px] uppercase text-slate-400 mb-0.5">Desde</label>
-                        <input 
-                          type="time" 
-                          required
-                          value={bloque.start_time}
-                          onChange={(e) => actualizarBloque(i, "start_time", e.target.value)}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold outline-none"
-                        />
+                    <div key={i} className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
+                      <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                        <div className="flex items-center gap-2 flex-1">
+                          <div className="flex flex-col flex-1">
+                            <label className="text-[8px] uppercase font-black text-slate-400 mb-0.5">Desde</label>
+                            <input 
+                              type="time" 
+                              required
+                              value={bloque.start_time}
+                              onChange={(e) => actualizarBloque(i, "start_time", e.target.value)}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold outline-none"
+                            />
+                          </div>
+                          
+                          <div className="flex flex-col flex-1">
+                            <label className="text-[8px] uppercase font-black text-slate-400 mb-0.5">Hasta</label>
+                            <input 
+                              type="time" 
+                              required
+                              value={bloque.end_time}
+                              onChange={(e) => actualizarBloque(i, "end_time", e.target.value)}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        {formCancha.pricing_blocks.length > 1 && (
+                          <button 
+                            type="button" 
+                            onClick={() => eliminarBloque(i)} 
+                            className="mt-3.5 w-6 h-6 flex items-center justify-center text-rose-500 hover:bg-rose-50 rounded-md transition-colors shrink-0 cursor-pointer"
+                            title="Eliminar franja"
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
-                      
-                      <div className="flex flex-col flex-1">
-                        <label className="text-[8px] uppercase text-slate-400 mb-0.5">Hasta</label>
-                        <input 
-                          type="time" 
-                          required
-                          value={bloque.end_time}
-                          onChange={(e) => actualizarBloque(i, "end_time", e.target.value)}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold outline-none"
-                        />
-                      </div>
-                      
-                      <div className="flex flex-col flex-1">
-                        <label className="text-[8px] uppercase text-emerald-600 mb-0.5">Precio</label>
-                        <div className="flex items-center bg-white border border-slate-200 rounded-lg px-2">
-                          <span className="text-slate-400 text-xs font-black">$</span>
-                          <input 
-                            type="number" 
-                            step="0.5"
-                            required
-                            min="0"
-                            placeholder="0"
-                            value={bloque.price}
-                            onChange={(e) => actualizarBloque(i, "price", e.target.value)}
-                            className="w-full p-1.5 text-xs font-black outline-none bg-transparent"
-                          />
+
+                      {/* INPUTS DE DURACIÓN DENTRO DE LA FRANJA */}
+                      <div className="grid grid-cols-3 gap-2 pt-1">
+                        <div>
+                          <label className="block text-[8px] font-black uppercase text-emerald-700 mb-0.5">60 Min (1h)</label>
+                          <div className="flex items-center bg-white border border-slate-200 rounded-lg px-1.5">
+                            <span className="text-slate-400 text-xs font-black">$</span>
+                            <input 
+                              type="number" 
+                              step="0.5"
+                              required
+                              min="0"
+                              placeholder="10"
+                              value={bloque.price_60}
+                              onChange={(e) => actualizarBloque(i, "price_60", e.target.value)}
+                              className="w-full p-1.5 text-xs font-black outline-none bg-transparent"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[8px] font-black uppercase text-emerald-700 mb-0.5">90 Min (1.5h)</label>
+                          <div className="flex items-center bg-white border border-slate-200 rounded-lg px-1.5">
+                            <span className="text-slate-400 text-xs font-black">$</span>
+                            <input 
+                              type="number" 
+                              step="0.5"
+                              required
+                              min="0"
+                              placeholder="14"
+                              value={bloque.price_90}
+                              onChange={(e) => actualizarBloque(i, "price_90", e.target.value)}
+                              className="w-full p-1.5 text-xs font-black outline-none bg-transparent"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[8px] font-black uppercase text-emerald-700 mb-0.5">120 Min (2h)</label>
+                          <div className="flex items-center bg-white border border-slate-200 rounded-lg px-1.5">
+                            <span className="text-slate-400 text-xs font-black">$</span>
+                            <input 
+                              type="number" 
+                              step="0.5"
+                              required
+                              min="0"
+                              placeholder="18"
+                              value={bloque.price_120}
+                              onChange={(e) => actualizarBloque(i, "price_120", e.target.value)}
+                              className="w-full p-1.5 text-xs font-black outline-none bg-transparent"
+                            />
+                          </div>
                         </div>
                       </div>
-                      
-                      <button 
-                        type="button" 
-                        onClick={() => eliminarBloque(i)} 
-                        className="mt-3.5 w-6 h-6 flex items-center justify-center text-rose-500 hover:bg-rose-50 rounded-md transition-colors shrink-0"
-                        title="Eliminar bloque"
-                      >
-                        ✕
-                      </button>
                     </div>
                   ))}
                 </div>
               </div>
 
-              <button type="submit" disabled={saving || formCancha.pricing_blocks.length === 0} className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md mt-2 transition-colors">
-                {saving ? "Guardando..." : (editingCanchaId ? "✓ Actualizar Pista" : "Guardar Pista")}
+              <button 
+                type="submit" 
+                disabled={saving || formCancha.pricing_blocks.length === 0} 
+                className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black uppercase tracking-wider rounded-2xl shadow-md mt-2 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {saving ? "Guardando..." : (editingCanchaId ? "✓ Actualizar Configuración" : "Guardar Cancha")}
               </button>
             </form>
           </div>
