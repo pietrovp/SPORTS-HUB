@@ -8,9 +8,6 @@ import { bonusLabel } from "@/lib/futbol/logros";
 import Link from "next/link";
 import Cropper from "react-easy-crop";
 
-// ==========================================
-// FUNCIONES AUXILIARES
-// ==========================================
 const createImage = (url) =>
   new Promise((resolve, reject) => {
     const image = new Image();
@@ -41,32 +38,77 @@ async function getCroppedImg(imageSrc, pixelCrop) {
   );
 
   return new Promise((resolve) => {
-    canvas.toBlob((file) => {
-      resolve(file);
-    }, "image/jpeg");
+    canvas.toBlob((file) => resolve(file), "image/jpeg");
   });
 }
 
 function formatFechaCorta(fechaStr) {
   if (!fechaStr) return "";
-  const d = new Date(fechaStr);
-  if (isNaN(d.getTime())) return "";
-  const meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-  return `${d.getDate()} ${meses[d.getMonth()]}`;
+
+  const fecha = new Date(fechaStr);
+  if (Number.isNaN(fecha.getTime())) return "";
+
+  const meses = [
+    "Ene",
+    "Feb",
+    "Mar",
+    "Abr",
+    "May",
+    "Jun",
+    "Jul",
+    "Ago",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dic",
+  ];
+
+  return `${fecha.getDate()} ${meses[fecha.getMonth()]}`;
 }
 
 function calcularEdad(fechaNacimiento) {
   if (!fechaNacimiento) return "--";
+
   const hoy = new Date();
   const fechaNac = new Date(fechaNacimiento);
-  if (isNaN(fechaNac.getTime())) return "--";
-  
+
+  if (Number.isNaN(fechaNac.getTime())) return "--";
+
   let edad = hoy.getFullYear() - fechaNac.getFullYear();
-  const m = hoy.getMonth() - fechaNac.getMonth();
-  if (m < 0 || (m === 0 && hoy.getDate() < fechaNac.getDate())) {
+  const diferenciaMes = hoy.getMonth() - fechaNac.getMonth();
+
+  if (
+    diferenciaMes < 0 ||
+    (diferenciaMes === 0 && hoy.getDate() < fechaNac.getDate())
+  ) {
     edad--;
   }
+
   return edad >= 0 ? edad : "--";
+}
+
+function numeroSeguro(valor, valorPorDefecto = 0) {
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : valorPorDefecto;
+}
+
+function obtenerMarcador(scoreText) {
+  if (!scoreText) return { g1: 0, g2: 0 };
+
+  const partes = String(scoreText)
+    .split("-")
+    .map((valor) => Number(valor.trim()));
+
+  return {
+    g1: Number.isFinite(partes[0]) ? partes[0] : 0,
+    g2: Number.isFinite(partes[1]) ? partes[1] : 0,
+  };
+}
+
+function estaFinalizado(status) {
+  return ["finalizado", "terminado", "jugado"].includes(
+    String(status || "").toLowerCase().trim()
+  );
 }
 
 export default function Perfil() {
@@ -74,113 +116,140 @@ export default function Perfil() {
   const [stats, setStats] = useState(null);
   const [logros, setLogros] = useState([]);
   const [logrosFiltro, setLogrosFiltro] = useState("todos");
-  
   const [proximosPartidos, setProximosPartidos] = useState([]);
   const [partidosJugados, setPartidosJugados] = useState([]);
-
-  // ESTADOS DE FILTRO Y PAGINACIÓN
   const [filtroHistorial, setFiltroHistorial] = useState("todos");
   const [cantidadVisible, setCantidadVisible] = useState(5);
   const [cargandoPartidos, setCargandoPartidos] = useState(true);
-
   const [cargando, setCargando] = useState(true);
   const [subiendoFoto, setSubiendoFoto] = useState(false);
   const [mensajeFoto, setMensajeFoto] = useState("");
   const [errorCarga, setErrorCarga] = useState("");
   const [userId, setUserId] = useState(null);
   const [conSesion, setConSesion] = useState(false);
-
-  // ESTADOS PARA EDITAR EL PERFIL DE FÚTBOL
   const [editandoPerfil, setEditandoPerfil] = useState(false);
   const [guardandoPerfil, setGuardandoPerfil] = useState(false);
   const [editNacionalidad, setEditNacionalidad] = useState("VE");
   const [editPosicion, setEditPosicion] = useState("MED");
   const [editPierna, setEditPierna] = useState("Derecha");
-  
-  // FECHA DE NACIMIENTO EN TRES ESTADOS
   const [editDia, setEditDia] = useState("");
   const [editMes, setEditMes] = useState("");
   const [editAno, setEditAno] = useState("");
-
-  // ESTADOS DEL CROPPER DE FOTO DE PERFIL
   const [imageSrc, setImageSrc] = useState(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
-
-  // Onboarding
   const [creandoPerfil, setCreandoPerfil] = useState(false);
   const [nacionalidadNueva, setNacionalidadNueva] = useState("VE");
   const [posicionNueva, setPosicionNueva] = useState("MED");
   const [piernaNueva, setPiernaNueva] = useState("Derecha");
 
   useEffect(() => {
+    let activo = true;
+
     async function cargar() {
       try {
         if (!supabase) {
-          setErrorCarga("Supabase no está disponible.");
+          if (activo) {
+            setErrorCarga("Supabase no está disponible.");
+            setCargando(false);
+            setCargandoPartidos(false);
+          }
           return;
         }
 
-        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (!activo) return;
 
         if (userError || !user) {
           setCargando(false);
+          setCargandoPartidos(false);
           return;
         }
 
         setUserId(user.id);
         setConSesion(true);
 
-        // 1. CARGA DE DATOS BÁSICOS
         const [
           { data: fProfile, error: perfilError },
-          { data: logrosCatalogo },
-          { data: logrosUsuario },
-          { data: misInscripciones }
+          { data: logrosCatalogo, error: logrosError },
+          { data: logrosUsuario, error: userLogrosError },
+          { data: misInscripciones, error: inscripcionesError },
         ] = await Promise.all([
           supabase
             .from("futbol_profiles")
-            .select("id, posicion, pierna_buena, rating, partidos_jugados, goles, victorias, derrotas, ritmo, tiro, pase, regate, defensa, fisico, profiles(nombre, apellido, telefono, pais, avatar_url, fecha_nacimiento)")
+            .select(
+              "id, posicion, pierna_buena, rating, partidos_jugados, goles, victorias, derrotas, ritmo, tiro, pase, regate, defensa, fisico, profiles(nombre, apellido, telefono, pais, avatar_url, fecha_nacimiento)"
+            )
             .eq("id", user.id)
             .maybeSingle(),
-          supabase.from("logros").select("id, titulo, descripcion, stat_mejora, valor_mejora"),
-          supabase.from("user_logros").select("logro_id").eq("user_id", user.id),
-          supabase.from("match_players").select("id, match_id, team, goals").eq("user_id", user.id)
+          supabase
+            .from("logros")
+            .select("id, titulo, descripcion, stat_mejora, valor_mejora, activo")
+            .eq("activo", true),
+          supabase
+            .from("user_logros")
+            .select("logro_id")
+            .eq("user_id", user.id),
+          supabase
+            .from("match_players")
+            .select("id, match_id, team, goals")
+            .eq("user_id", user.id),
         ]);
 
-        if (perfilError) {
-          setErrorCarga(perfilError.message || "No se pudo cargar el perfil.");
-          setCargando(false);
-          return;
-        }
+        if (perfilError) throw perfilError;
+        if (logrosError) throw logrosError;
+        if (userLogrosError) throw userLogrosError;
+        if (inscripcionesError) throw inscripcionesError;
+        if (!activo) return;
 
-        // PROCESAMIENTO DEL PERFIL
+        const idsDesbloqueados = new Set(
+          (logrosUsuario || []).map((item) => String(item.logro_id))
+        );
+
+        setLogros(
+          (logrosCatalogo || []).map((logro) => ({
+            ...logro,
+            nombre: logro.titulo || "Logro",
+            desbloqueado: idsDesbloqueados.has(String(logro.id)),
+          }))
+        );
+
         if (fProfile) {
-          const userData = Array.isArray(fProfile.profiles) ? fProfile.profiles[0] : (fProfile.profiles || {});
+          const userData = Array.isArray(fProfile.profiles)
+            ? fProfile.profiles[0] || {}
+            : fProfile.profiles || {};
 
-          const p = {
+          const perfilMapeado = {
             ...fProfile,
-            nombre: userData.nombre,
-            apellido: userData.apellido,
-            telefono: userData.telefono,
-            nacionalidad: userData.pais,
-            avatar_url: userData.avatar_url,
-            fecha_nacimiento: userData.fecha_nacimiento,
+            nombre: userData.nombre || "",
+            apellido: userData.apellido || "",
+            telefono: userData.telefono || "",
+            nacionalidad: userData.pais || null,
+            avatar_url: userData.avatar_url || null,
+            fecha_nacimiento: userData.fecha_nacimiento || null,
             edad: calcularEdad(userData.fecha_nacimiento),
-            posicion_preferida: fProfile.posicion,
+            posicion_preferida: fProfile.posicion || "MED",
             pierna_buena: fProfile.pierna_buena || "Derecha",
-            goles_total: fProfile.goles || 0,
+            goles_total: numeroSeguro(fProfile.goles, 0),
           };
 
-          setPerfil(p);
-          
-          setEditNacionalidad(p.nacionalidad || "VE");
-          setEditPosicion(p.posicion_preferida || "MED");
-          setEditPierna(p.pierna_buena || "Derecha");
-          
-          if (p.fecha_nacimiento) {
-            const partes = p.fecha_nacimiento.split("-");
+          const partidos = numeroSeguro(fProfile.partidos_jugados, 0);
+          const goles = numeroSeguro(fProfile.goles, 0);
+          const victorias = numeroSeguro(fProfile.victorias, 0);
+          const derrotas = numeroSeguro(fProfile.derrotas, 0);
+
+          setPerfil(perfilMapeado);
+          setEditNacionalidad(perfilMapeado.nacionalidad || "VE");
+          setEditPosicion(perfilMapeado.posicion_preferida || "MED");
+          setEditPierna(perfilMapeado.pierna_buena || "Derecha");
+
+          if (perfilMapeado.fecha_nacimiento) {
+            const partes = perfilMapeado.fecha_nacimiento.split("-");
             if (partes.length === 3) {
               setEditAno(partes[0]);
               setEditMes(partes[1]);
@@ -188,173 +257,206 @@ export default function Perfil() {
             }
           }
 
-          const partidos_jugados = p.partidos_jugados ?? 0;
-          const goles_total = p.goles_total ?? 0;
-          const victorias = p.victorias ?? 0;
-          const derrotas = p.derrotas ?? 0;
-
-          const win_rate = partidos_jugados > 0 
-            ? `${Math.round((victorias / partidos_jugados) * 100)}%` 
-            : "0%";
-
           setStats({
-            partidos_jugados,
-            goles_total,
-            media_general: p.rating || 64,
-            ritmo: p.ritmo || 64,
-            tiro: p.tiro || 64,
-            pase: p.pase || 64,
-            regate: p.regate || 64,
-            defensa: p.defensa || 64,
-            fisico: p.fisico || 64,
+            partidos_jugados: partidos,
+            goles_total: goles,
+            media_general: Number.isFinite(Number(fProfile.rating))
+              ? Math.round(Number(fProfile.rating))
+              : 64,
+            ritmo: Number.isFinite(Number(fProfile.ritmo))
+              ? Math.round(Number(fProfile.ritmo))
+              : 64,
+            tiro: Number.isFinite(Number(fProfile.tiro))
+              ? Math.round(Number(fProfile.tiro))
+              : 64,
+            pase: Number.isFinite(Number(fProfile.pase))
+              ? Math.round(Number(fProfile.pase))
+              : 64,
+            regate: Number.isFinite(Number(fProfile.regate))
+              ? Math.round(Number(fProfile.regate))
+              : 64,
+            defensa: Number.isFinite(Number(fProfile.defensa))
+              ? Math.round(Number(fProfile.defensa))
+              : 64,
+            fisico: Number.isFinite(Number(fProfile.fisico))
+              ? Math.round(Number(fProfile.fisico))
+              : 64,
             victorias,
             derrotas,
-            promedio_goles: partidos_jugados > 0 ? (goles_total / partidos_jugados).toFixed(2) : "0.00",
-            win_rate,
+            promedio_goles: partidos > 0 ? (goles / partidos).toFixed(2) : "0.00",
+            win_rate: partidos > 0 ? `${Math.round((victorias / partidos) * 100)}%` : "0%",
           });
         }
 
-        // PROCESAMIENTO DE LOGROS
-        const idsDesbloqueados = new Set((logrosUsuario || []).map((d) => d.logro_id));
-        setLogros(
-          (logrosCatalogo || []).map((l) => ({
-            ...l,
-            nombre: l.titulo,
-            desbloqueado: idsDesbloqueados.has(l.id),
-          }))
+        setCargando(false);
+
+        const idsPartidos = (misInscripciones || [])
+          .map((item) => item.match_id)
+          .filter(Boolean);
+
+        if (idsPartidos.length === 0) {
+          setProximosPartidos([]);
+          setPartidosJugados([]);
+          setCargandoPartidos(false);
+          return;
+        }
+
+        const [
+          { data: partidosData, error: partidosError },
+          { data: ocupacionData, error: ocupacionError },
+        ] = await Promise.all([
+          supabase
+            .from("matches")
+            .select(
+              "id, scheduled_at, status, score_text, winner_team, is_private, club:clubs(name, city, address, image_url), court:courts!inner(name, sport_type)"
+            )
+            .in("id", idsPartidos)
+            .eq("court.sport_type", "futbol"),
+          supabase
+            .from("match_players")
+            .select("match_id")
+            .in("match_id", idsPartidos),
+        ]);
+
+        if (partidosError) throw partidosError;
+        if (ocupacionError) throw ocupacionError;
+        if (!activo) return;
+
+        const conteoPorPartido = {};
+        (ocupacionData || []).forEach((row) => {
+          conteoPorPartido[row.match_id] =
+            (conteoPorPartido[row.match_id] || 0) + 1;
+        });
+
+        const proximos = [];
+        const jugados = [];
+        const ahora = new Date();
+
+        (partidosData || []).forEach((partido) => {
+          const inscripcion = (misInscripciones || []).find(
+            (item) => String(item.match_id) === String(partido.id)
+          );
+
+          if (!inscripcion) return;
+
+          const estado = String(partido.status || "").toLowerCase().trim();
+          if (estado === "cancelado" || estado === "cancelada") return;
+
+          const partidoObj = {
+            ...partido,
+            mi_equipo:
+              String(inscripcion.team || "").toUpperCase() === "B" ? 2 : 1,
+            mis_goles: numeroSeguro(inscripcion.goals, 0),
+            cancha:
+              partido.court?.name ||
+              partido.club?.name ||
+              "Cancha de Fútbol",
+            club_nombre: partido.club?.name || "Complejo",
+            cupos_ocupados: conteoPorPartido[partido.id] || 0,
+          };
+
+          const esPasado = new Date(partido.scheduled_at) < ahora;
+
+          if (estaFinalizado(estado) || esPasado) {
+            jugados.push(partidoObj);
+          } else {
+            proximos.push(partidoObj);
+          }
+        });
+
+        proximos.sort(
+          (a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)
+        );
+        jugados.sort(
+          (a, b) => new Date(b.scheduled_at) - new Date(a.scheduled_at)
         );
 
-        setCargando(false);
-
-        // 2. CARGA DE PARTIDOS (USANDO LAS NUEVAS TABLAS 'matches', 'clubs', 'courts', 'match_players')
-        if (misInscripciones && misInscripciones.length > 0) {
-          const misPartidoIds = misInscripciones.map(i => i.match_id).filter(Boolean);
-
-          if (misPartidoIds.length > 0) {
-            const [{ data: partidosData }, { data: ocupacionData }] = await Promise.all([
-              supabase
-                .from("matches")
-                .select(`
-                  id, scheduled_at, status, score_text, winner_team, is_private,
-                  club:clubs(name, city, address, image_url),
-                  court:courts!inner(name, sport_type)
-                `)
-                .in("id", misPartidoIds)
-                .eq("court.sport_type", "futbol"),
-              supabase
-                .from("match_players")
-                .select("match_id")
-                .in("match_id", misPartidoIds)
-            ]);
-
-            const conteoPorPartido = {};
-            (ocupacionData || []).forEach(row => {
-               conteoPorPartido[row.match_id] = (conteoPorPartido[row.match_id] || 0) + 1;
-            });
-
-            if (partidosData) {
-              const proximos = [];
-              const jugados = [];
-              const ahora = new Date();
-
-              partidosData.forEach((partido) => {
-                const inscripcion = misInscripciones.find(i => String(i.match_id) === String(partido.id));
-                if (!inscripcion) return;
-
-                const est = (partido.status || "").toLowerCase().trim();
-                if (est === "cancelado" || est === "cancelada") return;
-
-                const partidoObj = {
-                  ...partido,
-                  mi_equipo: inscripcion.team === "B" ? 2 : 1,
-                  mis_goles: Number(inscripcion.goals) || 0,
-                  cancha: partido.court?.name || partido.club?.name || "Cancha de Fútbol",
-                  club_nombre: partido.club?.name || "Complejo",
-                  cupos_ocupados: conteoPorPartido[partido.id] || 0
-                };
-
-                const fechaHoraPartido = new Date(partido.scheduled_at);
-                const esPasado = fechaHoraPartido < ahora;
-
-                if (est === "finalizado" || est === "terminado" || est === "jugado" || esPasado) {
-                  jugados.push(partidoObj);
-                } else {
-                  proximos.push(partidoObj);
-                }
-              });
-
-              proximos.sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
-              jugados.sort((a, b) => new Date(b.scheduled_at) - new Date(a.scheduled_at));
-
-              setProximosPartidos(proximos);
-              setPartidosJugados(jugados);
-            }
-          }
-        }
-        
+        setProximosPartidos(proximos);
+        setPartidosJugados(jugados);
         setCargandoPartidos(false);
-
       } catch (error) {
         console.error("Error general perfil:", error);
-        setErrorCarga("Ocurrió un error cargando el perfil.");
-        setCargando(false);
-        setCargandoPartidos(false);
+
+        if (activo) {
+          setErrorCarga(error.message || "Ocurrió un error cargando el perfil.");
+          setCargando(false);
+          setCargandoPartidos(false);
+        }
       }
     }
 
     cargar();
+
+    return () => {
+      activo = false;
+    };
   }, []);
 
-  const onFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      if (!file.type.startsWith("image/")) {
-        setMensajeFoto("Solo puedes subir imágenes.");
-        return;
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        setMensajeFoto("La imagen no puede pesar más de 5MB.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.addEventListener("load", () => setImageSrc(reader.result));
-      reader.readAsDataURL(file);
+  const onFileChange = (event) => {
+    if (!event.target.files || event.target.files.length === 0) return;
+
+    const file = event.target.files[0];
+
+    if (!file.type.startsWith("image/")) {
+      setMensajeFoto("Solo puedes subir imágenes.");
+      return;
     }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setMensajeFoto("La imagen no puede pesar más de 5MB.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.addEventListener("load", () => setImageSrc(reader.result));
+    reader.readAsDataURL(file);
   };
 
-  const onCropComplete = useCallback((croppedArea, croppedAreaPixels) => {
-    setCroppedAreaPixels(croppedAreaPixels);
+  const onCropComplete = useCallback((_, areaPixels) => {
+    setCroppedAreaPixels(areaPixels);
   }, []);
 
   const guardarFotoRecortada = async () => {
+    if (!supabase || !userId || !imageSrc || !croppedAreaPixels) return;
+
     try {
       setSubiendoFoto(true);
       setMensajeFoto("");
 
       const croppedImageBlob = await getCroppedImg(imageSrc, croppedAreaPixels);
-      setImageSrc(null);
-
       const filePath = `${userId}/avatar-${Date.now()}.jpg`;
 
       const { error: uploadError } = await supabase.storage
         .from("avatars")
-        .upload(filePath, croppedImageBlob, { cacheControl: "3600", upsert: true });
+        .upload(filePath, croppedImageBlob, {
+          cacheControl: "3600",
+          upsert: true,
+        });
 
       if (uploadError) throw uploadError;
 
-      const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(filePath);
+      const { data: publicUrlData } = supabase.storage
+        .from("avatars")
+        .getPublicUrl(filePath);
+
       const avatar_url = publicUrlData.publicUrl;
 
-      const { error: updateError } = await supabase.from("profiles").update({ avatar_url }).eq("id", userId);
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update({ avatar_url })
+        .eq("id", userId);
 
       if (updateError) throw updateError;
 
       setPerfil((prev) => ({ ...prev, avatar_url }));
+      setImageSrc(null);
       setMensajeFoto("¡Foto de perfil actualizada!");
       setTimeout(() => setMensajeFoto(""), 3000);
     } catch (error) {
       console.error("Error al recortar/subir foto:", error);
-      setMensajeFoto(`Error: ${error.message || "Verifica políticas RLS del bucket avatars"}`);
+      setMensajeFoto(
+        `Error: ${error.message || "Verifica políticas RLS del bucket avatars."}`
+      );
     } finally {
       setSubiendoFoto(false);
     }
@@ -362,42 +464,51 @@ export default function Perfil() {
 
   async function crearPerfilFutbol() {
     if (!supabase || !userId) return;
+
     setCreandoPerfil(true);
     setErrorCarga("");
-
-    await supabase.from("profiles").update({ pais: nacionalidadNueva }).eq("id", userId);
-
-    const { error } = await supabase.from("futbol_profiles").upsert({
-      id: userId,
-      posicion: posicionNueva,
-      pierna_buena: piernaNueva,
-    });
-
-    setCreandoPerfil(false);
-
-    if (error) {
-      console.error("Error creando perfil de fútbol:", error);
-      setErrorCarga(error.message || "No se pudo crear el perfil de fútbol.");
-      return;
-    }
-    window.location.reload();
-  }
-
-  async function actualizarPerfilFutbol() {
-    if (!supabase || !userId) return;
-    setGuardandoPerfil(true);
-
-    let fechaNacCombinada = null;
-    if (editAno && editMes && editDia) {
-      fechaNacCombinada = `${editAno}-${editMes}-${editDia}`;
-    }
 
     try {
       const { error: errorProfile } = await supabase
         .from("profiles")
-        .update({ 
+        .update({ pais: nacionalidadNueva })
+        .eq("id", userId);
+
+      if (errorProfile) throw errorProfile;
+
+      const { error } = await supabase.from("futbol_profiles").upsert({
+        id: userId,
+        posicion: posicionNueva,
+        pierna_buena: piernaNueva,
+      });
+
+      if (error) throw error;
+
+      window.location.reload();
+    } catch (error) {
+      console.error("Error creando perfil de fútbol:", error);
+      setErrorCarga(error.message || "No se pudo crear el perfil de fútbol.");
+    } finally {
+      setCreandoPerfil(false);
+    }
+  }
+
+  async function actualizarPerfilFutbol() {
+    if (!supabase || !userId) return;
+
+    setGuardandoPerfil(true);
+
+    const fechaNacCombinada =
+      editAno && editMes && editDia
+        ? `${editAno}-${editMes}-${editDia}`
+        : null;
+
+    try {
+      const { error: errorProfile } = await supabase
+        .from("profiles")
+        .update({
           pais: editNacionalidad,
-          fecha_nacimiento: fechaNacCombinada
+          fecha_nacimiento: fechaNacCombinada,
         })
         .eq("id", userId);
 
@@ -405,27 +516,24 @@ export default function Perfil() {
 
       const { error: errorFutbol } = await supabase
         .from("futbol_profiles")
-        .update({ 
+        .update({
           posicion: editPosicion,
-          pierna_buena: editPierna 
+          pierna_buena: editPierna,
         })
         .eq("id", userId);
 
       if (errorFutbol) throw errorFutbol;
 
-      const nuevaEdad = calcularEdad(fechaNacCombinada);
-
-      setPerfil((prev) => ({ 
-        ...prev, 
-        nacionalidad: editNacionalidad, 
+      setPerfil((prev) => ({
+        ...prev,
+        nacionalidad: editNacionalidad,
         posicion_preferida: editPosicion,
         pierna_buena: editPierna,
         fecha_nacimiento: fechaNacCombinada,
-        edad: nuevaEdad
+        edad: calcularEdad(fechaNacCombinada),
       }));
 
       setEditandoPerfil(false);
-
     } catch (error) {
       console.error("Error actualizando perfil:", error);
       alert("Hubo un error al actualizar los datos.");
@@ -435,30 +543,28 @@ export default function Perfil() {
   }
 
   const partidosHistorialProcesados = partidosJugados.map((partido) => {
-    let g1 = 0;
-    let g2 = 0;
+    const { g1, g2 } = obtenerMarcador(partido.score_text);
+    const ganador = String(partido.winner_team || "").toUpperCase();
+    const esEmpate = ganador === "EMPATE" || g1 === g2;
 
-    if (partido.score_text && partido.score_text.includes("-")) {
-      const partes = partido.score_text.split("-");
-      g1 = Number(partes[0].trim()) || 0;
-      g2 = Number(partes[1].trim()) || 0;
-    }
+    const esVictoria =
+      !esEmpate &&
+      ((partido.mi_equipo === 1 && (ganador === "A" || g1 > g2)) ||
+        (partido.mi_equipo === 2 && (ganador === "B" || g2 > g1)));
 
-    const eq = partido.mi_equipo;
-    let esVictoria = false;
-    let esEmpate = partido.winner_team === "EMPATE" || g1 === g2;
-
-    if (eq === 1 && (partido.winner_team === "A" || g1 > g2)) esVictoria = true;
-    if (eq === 2 && (partido.winner_team === "B" || g2 > g1)) esVictoria = true;
-
-    const tipo = esEmpate ? "empate" : esVictoria ? "victoria" : "derrota";
-
-    return { ...partido, g1, g2, esVictoria, esEmpate, tipo };
+    return {
+      ...partido,
+      g1,
+      g2,
+      esVictoria,
+      esEmpate,
+      tipo: esEmpate ? "empate" : esVictoria ? "victoria" : "derrota",
+    };
   });
 
-  const historialFiltrado = partidosHistorialProcesados.filter(p => {
+  const historialFiltrado = partidosHistorialProcesados.filter((partido) => {
     if (filtroHistorial === "todos") return true;
-    return p.tipo === filtroHistorial;
+    return partido.tipo === filtroHistorial;
   });
 
   const historialVisible = historialFiltrado.slice(0, cantidadVisible);
@@ -466,7 +572,7 @@ export default function Perfil() {
   if (cargando) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50/50">
-        <div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin"></div>
+        <div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -474,10 +580,17 @@ export default function Perfil() {
   if (!conSesion) {
     return (
       <div className="flex flex-col items-center gap-6 py-20 px-4 text-center">
-        <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center text-4xl mb-2">⚽</div>
+        <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center text-4xl mb-2">
+          ⚽
+        </div>
         <h1 className="text-2xl font-black text-gray-900">Accede a tu perfil</h1>
-        <p className="text-gray-500 text-sm max-w-sm font-medium">Inicia sesión para consultar tu carta de jugador, estadísticas y logros.</p>
-        <Link href="/login" className="px-8 py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest text-xs rounded-2xl hover:bg-gray-900 transition-colors shadow-lg">
+        <p className="text-gray-500 text-sm max-w-sm font-medium">
+          Inicia sesión para consultar tu carta de jugador, estadísticas y logros.
+        </p>
+        <Link
+          href="/login"
+          className="px-8 py-3.5 bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest text-xs rounded-2xl hover:bg-gray-900 transition-colors shadow-lg"
+        >
           Iniciar sesión
         </Link>
       </div>
@@ -485,7 +598,11 @@ export default function Perfil() {
   }
 
   if (errorCarga && !perfil) {
-    return <div className="max-w-xl mx-auto my-8 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 text-center text-sm font-bold">{errorCarga}</div>;
+    return (
+      <div className="max-w-xl mx-auto my-8 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 text-center text-sm font-bold">
+        {errorCarga}
+      </div>
+    );
   }
 
   if (!perfil) {
@@ -493,16 +610,22 @@ export default function Perfil() {
       <div className="max-w-md mx-auto flex flex-col gap-6 py-12 px-4">
         <div className="text-center">
           <span className="text-5xl">⚽</span>
-          <h1 className="text-2xl font-black text-gray-900 mt-3">Crea tu perfil de fútbol</h1>
-          <p className="text-sm text-gray-500 mt-2 font-medium">Tu cuenta está lista — activa tu ficha de jugador para generar tu carta digital.</p>
+          <h1 className="text-2xl font-black text-gray-900 mt-3">
+            Crea tu perfil de fútbol
+          </h1>
+          <p className="text-sm text-gray-500 mt-2 font-medium">
+            Tu cuenta está lista — activa tu ficha de jugador para generar tu carta digital.
+          </p>
         </div>
 
         <div className="bg-white rounded-3xl shadow-sm p-6 flex flex-col gap-5 border border-gray-100">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Nacionalidad</label>
-            <select 
-              value={nacionalidadNueva} 
-              onChange={(e) => setNacionalidadNueva(e.target.value)} 
+            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+              Nacionalidad
+            </label>
+            <select
+              value={nacionalidadNueva}
+              onChange={(event) => setNacionalidadNueva(event.target.value)}
               className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
             >
               <option value="VE">🇻🇪 Venezuela</option>
@@ -518,8 +641,14 @@ export default function Perfil() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Posición preferida</label>
-              <select value={posicionNueva} onChange={(e) => setPosicionNueva(e.target.value)} className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]">
+              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                Posición preferida
+              </label>
+              <select
+                value={posicionNueva}
+                onChange={(event) => setPosicionNueva(event.target.value)}
+                className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+              >
                 <option value="POR">POR</option>
                 <option value="DEF">DEF</option>
                 <option value="MED">MED</option>
@@ -528,8 +657,14 @@ export default function Perfil() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Pierna hábil</label>
-              <select value={piernaNueva} onChange={(e) => setPiernaNueva(e.target.value)} className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]">
+              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                Pierna hábil
+              </label>
+              <select
+                value={piernaNueva}
+                onChange={(event) => setPiernaNueva(event.target.value)}
+                className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
+              >
                 <option value="Derecha">Derecha</option>
                 <option value="Izquierda">Izquierda</option>
                 <option value="Ambidiestro">Ambidiestra</option>
@@ -537,7 +672,11 @@ export default function Perfil() {
             </div>
           </div>
 
-          <button onClick={crearPerfilFutbol} disabled={creandoPerfil} className="mt-2 py-4 rounded-2xl bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest text-xs hover:bg-gray-900 transition-colors disabled:opacity-50">
+          <button
+            onClick={crearPerfilFutbol}
+            disabled={creandoPerfil}
+            className="mt-2 py-4 rounded-2xl bg-[#0B0C15] text-[#00FF9D] font-black uppercase tracking-widest text-xs hover:bg-gray-900 transition-colors disabled:opacity-50"
+          >
             {creandoPerfil ? "Creando..." : "Crear mi perfil de fútbol"}
           </button>
         </div>
@@ -545,27 +684,32 @@ export default function Perfil() {
     );
   }
 
-  const logrosDesbloqueadosCount = logros.filter((l) => l.desbloqueado).length;
-  const logrosFiltrados = logros.filter((l) => {
-    if (logrosFiltro === "desbloqueados") return l.desbloqueado;
-    if (logrosFiltro === "bloqueados") return !l.desbloqueado;
+  const logrosDesbloqueadosCount = logros.filter(
+    (logro) => logro.desbloqueado
+  ).length;
+
+  const logrosFiltrados = logros.filter((logro) => {
+    if (logrosFiltro === "desbloqueados") return logro.desbloqueado;
+    if (logrosFiltro === "bloqueados") return !logro.desbloqueado;
     return true;
   });
 
   return (
     <div className="min-h-screen bg-gray-50/50 pb-24 pt-8 relative">
-
-      {/* MODAL ENGRANAJE: EDITAR FICHA */}
       {editandoPerfil && (
         <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm flex flex-col gap-4 shadow-2xl">
-            <h3 className="font-black text-xl text-gray-900 uppercase tracking-tight text-center">Editar Ficha</h3>
-            
+            <h3 className="font-black text-xl text-gray-900 uppercase tracking-tight text-center">
+              Editar ficha
+            </h3>
+
             <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Nacionalidad</label>
-              <select 
-                value={editNacionalidad} 
-                onChange={(e) => setEditNacionalidad(e.target.value)} 
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                Nacionalidad
+              </label>
+              <select
+                value={editNacionalidad}
+                onChange={(event) => setEditNacionalidad(event.target.value)}
                 className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
               >
                 <option value="VE">🇻🇪 Venezuela</option>
@@ -580,26 +724,36 @@ export default function Perfil() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Fecha de Nacimiento</label>
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                Fecha de nacimiento
+              </label>
               <div className="grid grid-cols-3 gap-2">
-                <select 
-                  value={editDia} 
-                  onChange={(e) => setEditDia(e.target.value)} 
+                <select
+                  value={editDia}
+                  onChange={(event) => setEditDia(event.target.value)}
                   className="border border-gray-200 rounded-xl px-2 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
                 >
-                  <option value="" disabled>Día</option>
-                  {Array.from({ length: 31 }, (_, i) => {
-                    const val = String(i + 1).padStart(2, "0");
-                    return <option key={val} value={val}>{i + 1}</option>;
+                  <option value="" disabled>
+                    Día
+                  </option>
+                  {Array.from({ length: 31 }, (_, index) => {
+                    const value = String(index + 1).padStart(2, "0");
+                    return (
+                      <option key={value} value={value}>
+                        {index + 1}
+                      </option>
+                    );
                   })}
                 </select>
 
-                <select 
-                  value={editMes} 
-                  onChange={(e) => setEditMes(e.target.value)} 
+                <select
+                  value={editMes}
+                  onChange={(event) => setEditMes(event.target.value)}
                   className="border border-gray-200 rounded-xl px-2 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
                 >
-                  <option value="" disabled>Mes</option>
+                  <option value="" disabled>
+                    Mes
+                  </option>
                   <option value="01">Ene</option>
                   <option value="02">Feb</option>
                   <option value="03">Mar</option>
@@ -614,15 +768,21 @@ export default function Perfil() {
                   <option value="12">Dic</option>
                 </select>
 
-                <select 
-                  value={editAno} 
-                  onChange={(e) => setEditAno(e.target.value)} 
+                <select
+                  value={editAno}
+                  onChange={(event) => setEditAno(event.target.value)}
                   className="border border-gray-200 rounded-xl px-2 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
                 >
-                  <option value="" disabled>Año</option>
-                  {Array.from({ length: 100 }, (_, i) => {
-                    const year = new Date().getFullYear() - 10 - i;
-                    return <option key={year} value={year}>{year}</option>;
+                  <option value="" disabled>
+                    Año
+                  </option>
+                  {Array.from({ length: 100 }, (_, index) => {
+                    const year = new Date().getFullYear() - 10 - index;
+                    return (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    );
                   })}
                 </select>
               </div>
@@ -630,10 +790,12 @@ export default function Perfil() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Posición</label>
-                <select 
-                  value={editPosicion} 
-                  onChange={(e) => setEditPosicion(e.target.value)} 
+                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                  Posición
+                </label>
+                <select
+                  value={editPosicion}
+                  onChange={(event) => setEditPosicion(event.target.value)}
                   className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
                 >
                   <option value="POR">POR</option>
@@ -644,10 +806,12 @@ export default function Perfil() {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Pierna Hábil</label>
-                <select 
-                  value={editPierna} 
-                  onChange={(e) => setEditPierna(e.target.value)} 
+                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                  Pierna hábil
+                </label>
+                <select
+                  value={editPierna}
+                  onChange={(event) => setEditPierna(event.target.value)}
                   className="border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 font-bold focus:outline-none focus:border-[#00FF9D]"
                 >
                   <option value="Derecha">Derecha</option>
@@ -658,15 +822,15 @@ export default function Perfil() {
             </div>
 
             <div className="flex gap-3 mt-2">
-              <button 
-                onClick={() => setEditandoPerfil(false)} 
+              <button
+                onClick={() => setEditandoPerfil(false)}
                 disabled={guardandoPerfil}
                 className="flex-1 py-3.5 font-bold text-gray-600 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors text-xs uppercase tracking-wider"
               >
                 Cancelar
               </button>
-              <button 
-                onClick={actualizarPerfilFutbol} 
+              <button
+                onClick={actualizarPerfilFutbol}
                 disabled={guardandoPerfil}
                 className="flex-1 py-3.5 font-black text-white bg-[#0B0C15] rounded-xl hover:bg-gray-900 transition-colors text-xs uppercase tracking-wider shadow-md disabled:opacity-50"
               >
@@ -677,7 +841,6 @@ export default function Perfil() {
         </div>
       )}
 
-      {/* MODAL DE RECORTE DE FOTO DE PERFIL */}
       {imageSrc && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex flex-col">
           <div className="relative flex-1">
@@ -693,23 +856,41 @@ export default function Perfil() {
               onZoomChange={setZoom}
             />
           </div>
+
           <div className="bg-white p-6 flex flex-col gap-4 pb-10">
             <div className="flex items-center justify-between text-xs font-bold text-gray-400 uppercase tracking-wider">
               <span>Zoom</span>
               <span>Ajusta tu encuadre</span>
             </div>
-            <input type="range" value={zoom} min={1} max={3} step={0.1} onChange={(e) => setZoom(e.target.value)} className="w-full accent-emerald-500" />
+            <input
+              type="range"
+              value={zoom}
+              min={1}
+              max={3}
+              step={0.1}
+              onChange={(event) => setZoom(Number(event.target.value))}
+              className="w-full accent-emerald-500"
+            />
             <div className="flex gap-3 mt-2">
-              <button onClick={() => setImageSrc(null)} className="flex-1 py-3.5 font-bold text-gray-600 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors text-xs uppercase tracking-wider">Cancelar</button>
-              <button onClick={guardarFotoRecortada} className="flex-1 py-3.5 font-black text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-colors text-xs uppercase tracking-wider shadow-md">Guardar Foto</button>
+              <button
+                onClick={() => setImageSrc(null)}
+                className="flex-1 py-3.5 font-bold text-gray-600 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors text-xs uppercase tracking-wider"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={guardarFotoRecortada}
+                disabled={subiendoFoto}
+                className="flex-1 py-3.5 font-black text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-colors text-xs uppercase tracking-wider shadow-md disabled:opacity-50"
+              >
+                {subiendoFoto ? "Guardando..." : "Guardar foto"}
+              </button>
             </div>
           </div>
         </div>
       )}
 
       <main className="max-w-5xl mx-auto px-4 space-y-10">
-
-        {/* ENCABEZADO */}
         <div className="border-b border-gray-200/80 pb-5">
           <h1 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
             Mi perfil de fútbol
@@ -719,28 +900,29 @@ export default function Perfil() {
           </p>
         </div>
 
-        {/* CARTA + DATOS PERSONALES */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
-          
-          {/* CARTA DIGITAL */}
           <div className="md:col-span-5 flex flex-col items-center">
             <div className="w-full flex items-center justify-between mb-3 px-1">
-              <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Carta Oficial</span>
-              <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">OVR {stats?.media_general || 64}</span>
+              <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                Carta oficial
+              </span>
+              <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
+                OVR {stats?.media_general ?? 64}
+              </span>
             </div>
 
             <PlayerCard
               nombre={perfil.nombre || "Jugador"}
               apellido={perfil.apellido || ""}
               posicion={perfil.posicion_preferida || perfil.posicion || "MED"}
-              media={stats?.media_general || 64}
+              media={stats?.media_general ?? 64}
               stats={{
-                ritmo: stats?.ritmo || 64,
-                tiro: stats?.tiro || 64,
-                pase: stats?.pase || 64,
-                regate: stats?.regate || 64,
-                defensa: stats?.defensa || 64,
-                fisico: stats?.fisico || 64,
+                ritmo: stats?.ritmo ?? 64,
+                tiro: stats?.tiro ?? 64,
+                pase: stats?.pase ?? 64,
+                regate: stats?.regate ?? 64,
+                defensa: stats?.defensa ?? 64,
+                fisico: stats?.fisico ?? 64,
               }}
               avatar={perfil.avatar_url || null}
               nacionalidad={perfil.nacionalidad || null}
@@ -748,144 +930,182 @@ export default function Perfil() {
             />
           </div>
 
-          {/* DATOS, AVATAR Y ESTADÍSTICAS */}
           <div className="md:col-span-7 flex flex-col gap-6">
-            
             <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 flex flex-col gap-6">
-              
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="relative group shrink-0">
                     <div className="w-16 h-16 rounded-full overflow-hidden bg-emerald-50 border-2 border-gray-200 flex items-center justify-center text-emerald-800 font-black text-xl shadow-sm">
                       {perfil.avatar_url ? (
-                        <img src={perfil.avatar_url} alt="Foto de perfil" className="w-full h-full object-cover" />
+                        <img
+                          src={perfil.avatar_url}
+                          alt="Foto de perfil"
+                          className="w-full h-full object-cover"
+                        />
                       ) : (
-                        perfil.nombre ? perfil.nombre.slice(0, 2).toUpperCase() : "?"
+                        perfil.nombre
+                          ? perfil.nombre.slice(0, 2).toUpperCase()
+                          : "?"
                       )}
                     </div>
-                    
                     <label className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
-                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h0.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><circle cx="12" cy="13" r="3" /></svg>
-                      <input type="file" accept="image/*" onChange={onFileChange} className="hidden" disabled={subiendoFoto} />
+                      <span className="text-white text-lg">📷</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={onFileChange}
+                        className="hidden"
+                        disabled={subiendoFoto}
+                      />
                     </label>
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <h2 className="text-xl font-black text-gray-900 leading-tight truncate">{perfil.nombre || "Sin nombre"} {perfil.apellido || ""}</h2>
-                    <p className="text-xs font-semibold text-gray-400 mt-0.5">{perfil.telefono || "Sin teléfono registrado"}</p>
-                    
+                    <h2 className="text-xl font-black text-gray-900 leading-tight truncate">
+                      {perfil.nombre || "Sin nombre"} {perfil.apellido || ""}
+                    </h2>
+                    <p className="text-xs font-semibold text-gray-400 mt-0.5">
+                      {perfil.telefono || "Sin teléfono registrado"}
+                    </p>
                     <label className="inline-flex items-center gap-1.5 mt-2 text-xs font-bold text-emerald-600 hover:text-emerald-700 cursor-pointer transition-colors">
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                      {subiendoFoto ? "Procesando..." : "Cambiar foto de perfil"}
-                      <input type="file" accept="image/*" onChange={onFileChange} className="hidden" disabled={subiendoFoto} />
+                      ✎ {subiendoFoto ? "Procesando..." : "Cambiar foto de perfil"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={onFileChange}
+                        className="hidden"
+                        disabled={subiendoFoto}
+                      />
                     </label>
                   </div>
                 </div>
 
-                <button 
-                  onClick={() => setEditandoPerfil(true)} 
+                <button
+                  onClick={() => setEditandoPerfil(true)}
                   className="w-10 h-10 rounded-2xl bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-[#0B0C15] hover:text-[#00FF9D] transition-all shadow-sm shrink-0"
-                  title="Editar Ficha"
+                  title="Editar ficha"
                 >
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd"></path>
-                  </svg>
+                  ⚙
                 </button>
               </div>
 
               {mensajeFoto && (
-                <div className={`p-3 rounded-xl text-xs font-bold text-center ${mensajeFoto.includes("Error") ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
+                <div
+                  className={`p-3 rounded-xl text-xs font-bold text-center ${
+                    mensajeFoto.includes("Error")
+                      ? "bg-red-50 text-red-600 border border-red-100"
+                      : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                  }`}
+                >
                   {mensajeFoto}
                 </div>
               )}
 
-              {/* GRILLA DE ESTADÍSTICAS */}
               <div className="grid grid-cols-2 gap-3">
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Partidos Jugados</p>
-                  <p className="font-black text-gray-900 text-xl mt-0.5">{stats?.partidos_jugados || 0}</p>
-                </div>
-
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Goles Totales</p>
-                  <p className="font-black text-emerald-600 text-xl mt-0.5">{stats?.goles_total || 0} ⚽</p>
-                </div>
-
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Promedio Goles</p>
-                  <p className="font-black text-gray-900 text-xl mt-0.5">{stats?.promedio_goles || "0.00"}</p>
-                </div>
-
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">% Victorias</p>
-                  <p className="font-black text-emerald-600 text-xl mt-0.5">{stats?.win_rate || "0%"}</p>
-                </div>
-
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Edad</p>
-                  <p className="font-black text-gray-900 text-xl mt-0.5">{perfil?.edad || "--"}</p>
-                </div>
-
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Pierna Hábil</p>
-                  <p className="font-black text-gray-900 text-xl mt-0.5">{perfil?.pierna_buena || "--"}</p>
-                </div>
+                <StatCard label="Partidos jugados" value={stats?.partidos_jugados ?? 0} />
+                <StatCard
+                  label="Goles totales"
+                  value={`${stats?.goles_total ?? 0} ⚽`}
+                  color="text-emerald-600"
+                />
+                <StatCard label="Promedio goles" value={stats?.promedio_goles ?? "0.00"} />
+                <StatCard
+                  label="% victorias"
+                  value={stats?.win_rate ?? "0%"}
+                  color="text-emerald-600"
+                />
+                <StatCard label="Edad" value={perfil.edad ?? "--"} />
+                <StatCard label="Pierna hábil" value={perfil.pierna_buena ?? "--"} />
 
                 <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5 col-span-2 flex items-center justify-between">
                   <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Récord de Carrera</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                      Récord de carrera
+                    </p>
                     <p className="font-black text-gray-900 text-sm mt-0.5">
-                      <span className="text-emerald-600">{stats?.victorias || 0} Victorias</span> · <span className="text-red-500">{stats?.derrotas || 0} Derrotas</span>
+                      <span className="text-emerald-600">
+                        {stats?.victorias ?? 0} Victorias
+                      </span>{" "}
+                      ·{" "}
+                      <span className="text-red-500">
+                        {stats?.derrotas ?? 0} Derrotas
+                      </span>
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Posición</p>
-                    <p className="font-black text-gray-900 text-sm mt-0.5">{perfil.posicion_preferida || perfil.posicion || "MED"}</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                      Posición
+                    </p>
+                    <p className="font-black text-gray-900 text-sm mt-0.5">
+                      {perfil.posicion_preferida || perfil.posicion || "MED"}
+                    </p>
                   </div>
                 </div>
               </div>
-
             </div>
           </div>
         </div>
 
-        {/* LOGROS */}
         <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 pb-4">
             <div>
-              <h2 className="text-lg font-black text-gray-900 uppercase tracking-tight">🏆 Mis Logros</h2>
-              <p className="text-xs text-gray-400 font-medium">Desbloquea objetivos para subir tu media y atributos de carta.</p>
+              <h2 className="text-lg font-black text-gray-900 uppercase tracking-tight">
+                🏆 Mis logros
+              </h2>
+              <p className="text-xs text-gray-400 font-medium">
+                Desbloquea objetivos para subir tu media y atributos de carta.
+              </p>
             </div>
-            
-            <div className="flex items-center gap-2">
-              <div className="flex bg-gray-100 p-1 rounded-xl text-xs font-bold shrink-0">
-                <button onClick={() => setLogrosFiltro("todos")} className={`px-3 py-1 rounded-lg transition-all ${logrosFiltro === "todos" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>
-                  Todos ({logros.length})
-                </button>
-                <button onClick={() => setLogrosFiltro("desbloqueados")} className={`px-3 py-1 rounded-lg transition-all ${logrosFiltro === "desbloqueados" ? "bg-white text-emerald-700 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>
-                  Completados ({logrosDesbloqueadosCount})
-                </button>
-              </div>
+
+            <div className="flex bg-gray-100 p-1 rounded-xl text-xs font-bold shrink-0">
+              <button
+                onClick={() => setLogrosFiltro("todos")}
+                className={`px-3 py-1 rounded-lg transition-all ${
+                  logrosFiltro === "todos"
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
+                Todos ({logros.length})
+              </button>
+              <button
+                onClick={() => setLogrosFiltro("desbloqueados")}
+                className={`px-3 py-1 rounded-lg transition-all ${
+                  logrosFiltro === "desbloqueados"
+                    ? "bg-white text-emerald-700 shadow-sm"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
+                Completados ({logrosDesbloqueadosCount})
+              </button>
             </div>
           </div>
 
           {logrosFiltrados.length === 0 ? (
-            <p className="text-sm font-bold text-gray-400 text-center py-6">No hay logros en esta categoría.</p>
+            <p className="text-sm font-bold text-gray-400 text-center py-6">
+              No hay logros en esta categoría.
+            </p>
           ) : (
             <div className="flex gap-3 overflow-x-auto pb-3 scrollbar-hide snap-x w-full">
-              {logrosFiltrados.map((l) => (
-                <div key={l.id} className="snap-start shrink-0 w-64 md:w-72">
-                  <LogroBadge label={l.nombre} desc={l.descripcion} bonus={bonusLabel(l)} desbloqueado={l.desbloqueado} />
+              {logrosFiltrados.map((logro) => (
+                <div key={logro.id} className="snap-start shrink-0 w-64 md:w-72">
+                  <LogroBadge
+                    label={logro.nombre}
+                    desc={logro.descripcion}
+                    bonus={bonusLabel(logro)}
+                    desbloqueado={logro.desbloqueado}
+                  />
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* PRÓXIMOS PARTIDOS */}
-        <div className="space-y-4">
+        <section className="space-y-4">
           <div className="flex items-center justify-between border-b border-gray-200/80 pb-3">
-            <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Próximos Partidos</h2>
+            <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">
+              Próximos partidos
+            </h2>
             {!cargandoPartidos && (
               <span className="text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1 rounded-full">
                 {proximosPartidos.length} Inscrito
@@ -894,12 +1114,17 @@ export default function Perfil() {
           </div>
 
           {cargandoPartidos ? (
-             <div className="flex justify-center py-8"><div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin"></div></div>
+            <Spinner />
           ) : proximosPartidos.length === 0 ? (
             <div className="bg-white rounded-3xl p-8 text-center border border-gray-100 shadow-sm">
-              <p className="text-gray-400 font-bold text-sm">No estás inscrito en ningún partido próximo.</p>
-              <Link href="/futbol" className="inline-block mt-3 px-5 py-2.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-xl hover:bg-gray-900 transition-colors">
-                Buscar Partidos
+              <p className="text-gray-400 font-bold text-sm">
+                No estás inscrito en ningún partido próximo.
+              </p>
+              <Link
+                href="/futbol"
+                className="inline-block mt-3 px-5 py-2.5 bg-[#0B0C15] text-[#00FF9D] font-black text-xs uppercase tracking-widest rounded-xl hover:bg-gray-900 transition-colors"
+              >
+                Buscar partidos
               </Link>
             </div>
           ) : (
@@ -911,91 +1136,108 @@ export default function Perfil() {
                   className="bg-white rounded-3xl p-5 border border-gray-100 shadow-sm flex items-center justify-between hover:border-gray-200 transition-all"
                 >
                   <div className="space-y-1 min-w-0 flex-1">
-                    <span className="text-[10px] font-black uppercase text-emerald-600 block">{partido.club_nombre}</span>
-                    <h3 className="font-black text-gray-900 text-base truncate">{partido.cancha}</h3>
-                    <p className="text-xs text-gray-500 font-bold">{formatFechaCorta(partido.scheduled_at)}</p>
+                    <span className="text-[10px] font-black uppercase text-emerald-600 block">
+                      {partido.club_nombre}
+                    </span>
+                    <h3 className="font-black text-gray-900 text-base truncate">
+                      {partido.cancha}
+                    </h3>
+                    <p className="text-xs text-gray-500 font-bold">
+                      {formatFechaCorta(partido.scheduled_at)}
+                    </p>
                   </div>
                   <span className="text-xs font-black bg-[#0B0C15] text-[#00FF9D] px-4 py-2.5 rounded-xl uppercase tracking-wider shrink-0 ml-3">
-                    Ver Partido →
+                    Ver partido →
                   </span>
                 </Link>
               ))}
             </div>
           )}
-        </div>
+        </section>
 
-        {/* HISTORIAL DE PARTIDOS JUGADOS */}
-        <div className="space-y-4">
+        <section className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-200/80 pb-3">
-            <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Historial de Partidos</h2>
-            
+            <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">
+              Historial de partidos
+            </h2>
+
             <div className="flex bg-gray-100 p-1 rounded-xl text-xs font-bold w-fit shrink-0">
-              <button onClick={() => {setFiltroHistorial("todos"); setCantidadVisible(5);}} className={`px-3 py-1 rounded-lg transition-all ${filtroHistorial === "todos" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>
+              <button
+                onClick={() => {
+                  setFiltroHistorial("todos");
+                  setCantidadVisible(5);
+                }}
+                className={`px-3 py-1 rounded-lg transition-all ${
+                  filtroHistorial === "todos"
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
                 Todos
               </button>
-              <button onClick={() => {setFiltroHistorial("victoria"); setCantidadVisible(5);}} className={`px-3 py-1 rounded-lg transition-all ${filtroHistorial === "victoria" ? "bg-white text-emerald-600 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>
+              <button
+                onClick={() => {
+                  setFiltroHistorial("victoria");
+                  setCantidadVisible(5);
+                }}
+                className={`px-3 py-1 rounded-lg transition-all ${
+                  filtroHistorial === "victoria"
+                    ? "bg-white text-emerald-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
                 V
               </button>
-              <button onClick={() => {setFiltroHistorial("empate"); setCantidadVisible(5);}} className={`px-3 py-1 rounded-lg transition-all ${filtroHistorial === "empate" ? "bg-white text-yellow-600 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>
+              <button
+                onClick={() => {
+                  setFiltroHistorial("empate");
+                  setCantidadVisible(5);
+                }}
+                className={`px-3 py-1 rounded-lg transition-all ${
+                  filtroHistorial === "empate"
+                    ? "bg-white text-yellow-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
                 E
               </button>
-              <button onClick={() => {setFiltroHistorial("derrota"); setCantidadVisible(5);}} className={`px-3 py-1 rounded-lg transition-all ${filtroHistorial === "derrota" ? "bg-white text-red-600 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>
+              <button
+                onClick={() => {
+                  setFiltroHistorial("derrota");
+                  setCantidadVisible(5);
+                }}
+                className={`px-3 py-1 rounded-lg transition-all ${
+                  filtroHistorial === "derrota"
+                    ? "bg-white text-red-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-900"
+                }`}
+              >
                 D
               </button>
             </div>
           </div>
 
           {cargandoPartidos ? (
-             <div className="flex justify-center py-8"><div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin"></div></div>
+            <Spinner />
           ) : historialFiltrado.length === 0 ? (
             <div className="bg-white rounded-3xl p-8 text-center border border-gray-100 shadow-sm">
               <p className="text-gray-400 font-bold text-sm">
-                {partidosJugados.length === 0 
-                  ? "Aún no has disputado partidos oficiales." 
+                {partidosJugados.length === 0
+                  ? "Aún no has disputado partidos oficiales."
                   : "No hay partidos que coincidan con este filtro."}
               </p>
             </div>
           ) : (
             <div className="flex flex-col gap-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {historialVisible.map((partido) => {
-                  return (
-                    <Link
-                      key={partido.id}
-                      href={`/futbol/partidos/${partido.id}`}
-                      className="bg-[#0B0C15] text-white rounded-3xl p-5 shadow-sm relative overflow-hidden flex items-center justify-between group hover:border border-gray-700 transition-all"
-                    >
-                      <div className={`absolute top-0 left-0 w-1.5 h-full ${partido.esEmpate ? "bg-yellow-400" : partido.esVictoria ? "bg-[#00FF9D]" : "bg-red-500"}`}></div>
-
-                      <div className="pl-3 pr-2 space-y-1 flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${partido.esEmpate ? "bg-yellow-400/20 text-yellow-400" : partido.esVictoria ? "bg-[#00FF9D]/20 text-[#00FF9D]" : "bg-red-500/20 text-red-400"}`}>
-                            {partido.esEmpate ? "Empate" : partido.esVictoria ? "Victoria" : "Derrota"}
-                          </span>
-                          <span className="text-[10px] text-gray-400 font-bold">{formatFechaCorta(partido.scheduled_at)}</span>
-                        </div>
-
-                        <h3 className="font-black text-white text-base leading-tight uppercase truncate">{partido.cancha}</h3>
-                        
-                        <p className="text-xs text-gray-400 font-bold">
-                          ⚽ <span className="text-white">{partido.mis_goles} {partido.mis_goles === 1 ? "Gol anotado" : "Goles anotados"}</span>
-                        </p>
-                      </div>
-
-                      <div className="bg-[#121422] rounded-2xl px-4 py-2.5 border border-[#1f233a] text-center shrink-0 ml-auto">
-                        <p className="text-xl font-black text-white tracking-wider">
-                          {partido.g1}<span className="text-emerald-400 mx-1.5">-</span>{partido.g2}
-                        </p>
-                        <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mt-0.5">Resultado</p>
-                      </div>
-                    </Link>
-                  );
-                })}
+                {historialVisible.map((partido) => (
+                  <HistorialCard key={partido.id} partido={partido} />
+                ))}
               </div>
 
               {cantidadVisible < historialFiltrado.length && (
                 <button
-                  onClick={() => setCantidadVisible(prev => prev + 5)}
+                  onClick={() => setCantidadVisible((prev) => prev + 5)}
                   className="w-full mt-2 py-3.5 rounded-2xl border-2 border-gray-200 text-gray-500 font-black text-xs uppercase tracking-widest hover:bg-gray-100 transition-colors"
                 >
                   Cargar anteriores
@@ -1003,9 +1245,92 @@ export default function Perfil() {
               )}
             </div>
           )}
-        </div>
-
+        </section>
       </main>
     </div>
+  );
+}
+
+function StatCard({ label, value, color = "text-gray-900" }) {
+  return (
+    <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3.5">
+      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+        {label}
+      </p>
+      <p className={`font-black text-xl mt-0.5 ${color}`}>{value}</p>
+    </div>
+  );
+}
+
+function Spinner() {
+  return (
+    <div className="flex justify-center py-8">
+      <div className="w-8 h-8 border-4 border-[#00FF9D] border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
+
+function HistorialCard({ partido }) {
+  const colorBarra = partido.esEmpate
+    ? "bg-yellow-400"
+    : partido.esVictoria
+      ? "bg-[#00FF9D]"
+      : "bg-red-500";
+
+  const etiqueta = partido.esEmpate
+    ? "Empate"
+    : partido.esVictoria
+      ? "Victoria"
+      : "Derrota";
+
+  const colorEtiqueta = partido.esEmpate
+    ? "bg-yellow-400/20 text-yellow-400"
+    : partido.esVictoria
+      ? "bg-[#00FF9D]/20 text-[#00FF9D]"
+      : "bg-red-500/20 text-red-400";
+
+  return (
+    <Link
+      href={`/futbol/partidos/${partido.id}`}
+      className="bg-[#0B0C15] text-white rounded-3xl p-5 shadow-sm relative overflow-hidden flex items-center justify-between group hover:border border-gray-700 transition-all"
+    >
+      <div className={`absolute top-0 left-0 w-1.5 h-full ${colorBarra}`} />
+
+      <div className="pl-3 pr-2 space-y-1 flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span
+            className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${colorEtiqueta}`}
+          >
+            {etiqueta}
+          </span>
+          <span className="text-[10px] text-gray-400 font-bold">
+            {formatFechaCorta(partido.scheduled_at)}
+          </span>
+        </div>
+
+        <h3 className="font-black text-white text-base leading-tight uppercase truncate">
+          {partido.cancha}
+        </h3>
+
+        <p className="text-xs text-gray-400 font-bold">
+          ⚽{" "}
+          <span className="text-white">
+            {partido.mis_goles}{" "}
+            {partido.mis_goles === 1 ? "Gol anotado" : "Goles anotados"}
+          </span>
+        </p>
+      </div>
+
+      <div className="bg-[#121422] rounded-2xl px-4 py-2.5 border border-[#1f233a] text-center shrink-0 ml-auto">
+        <p className="text-xl font-black text-white tracking-wider">
+          {partido.g1}
+          <span className="text-emerald-400 mx-1.5">-</span>
+          {partido.g2}
+        </p>
+        <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mt-0.5">
+          Resultado
+        </p>
+      </div>
+    </Link>
   );
 }

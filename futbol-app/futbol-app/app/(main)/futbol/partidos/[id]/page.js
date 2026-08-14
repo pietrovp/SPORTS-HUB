@@ -5,6 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import { cumpleRequisito } from "@/lib/futbol/logros";
+
 import {
   DndContext,
   PointerSensor,
@@ -13,6 +15,7 @@ import {
   useDraggable,
   useDroppable,
 } from "@dnd-kit/core";
+
 import { CSS } from "@dnd-kit/utilities";
 
 // ==========================================
@@ -336,8 +339,10 @@ export default function FutbolPartidoDetallePage() {
   }, [usuarioActual, partido, esCreador, esPrivado, miJugadorInfo]);
 
   const estaInscrito = !!miJugadorInfo || inscrito;
-  const cuposOcupados = jugadoresConfirmados.length;
-  const lleno = cuposOcupados >= cuposTotales;
+  // Todos los registros de match_players ocupan un cupo,
+// incluso si el pago del jugador sigue pendiente.
+const cuposOcupados = jugadores.length;
+const lleno = cuposOcupados >= cuposTotales;
 
   const equipo1 = useMemo(() => jugadoresConfirmados.filter((j) => j.equipo === 1), [jugadoresConfirmados]);
   const equipo2 = useMemo(() => jugadoresConfirmados.filter((j) => j.equipo === 2), [jugadoresConfirmados]);
@@ -633,19 +638,46 @@ export default function FutbolPartidoDetallePage() {
   }
 
   async function finalizarPartido() {
-    setProcesando(true);
+  if (!partido || procesando) return;
 
-    await Promise.all(
-      jugadoresConfirmados.map((j) =>
-        supabase.from("match_players").update({ goals: Number(goles[j.id]) || 0 }).match({ match_id: matchId, user_id: j.user_id })
-      )
-    );
+  if (partido.status === "jugado") {
+    setMensaje("Este partido ya fue finalizado.");
+    return;
+  }
+
+  setProcesando(true);
+
+  try {
+    const { error: golesError } = await Promise.all(
+      jugadoresConfirmados.map(async (jugador) => {
+        const { error } = await supabase
+          .from("match_players")
+          .update({
+            goals: Number(goles[jugador.id]) || 0,
+          })
+          .match({
+            match_id: matchId,
+            user_id: jugador.user_id,
+          });
+
+        return { error };
+      })
+    ).then((resultados) => ({
+      error: resultados.find((resultado) => resultado.error)?.error,
+    }));
+
+    if (golesError) throw golesError;
 
     let scorePayload = "";
     let ganadorFinal = "EMPATE";
 
     if (equiposList.length > 2) {
       const topTeam = tablaPosiciones[0];
+
+      if (!topTeam) {
+        throw new Error("No se pudo determinar el equipo ganador.");
+      }
+
       ganadorFinal = `EQUIPO ${topTeam.eqNum}`;
       scorePayload = JSON.stringify({
         mode: "triangular",
@@ -653,100 +685,222 @@ export default function FutbolPartidoDetallePage() {
         topTeam: topTeam.eqNum,
       });
     } else {
-      const g1 = equipo1.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
-      const g2 = equipo2.reduce((acc, j) => acc + (Number(goles[j.id]) || 0), 0);
+      const g1 = equipo1.reduce(
+        (total, jugador) => total + (Number(goles[jugador.id]) || 0),
+        0
+      );
+
+      const g2 = equipo2.reduce(
+        (total, jugador) => total + (Number(goles[jugador.id]) || 0),
+        0
+      );
+
       ganadorFinal = g1 > g2 ? "A" : g2 > g1 ? "B" : "EMPATE";
       scorePayload = `${g1} - ${g2}`;
     }
 
-    await supabase.from("matches").update({ status: "jugado", winner_team: ganadorFinal, score_text: scorePayload }).eq("id", matchId);
+    /*
+      Actualizamos primero resultados y estado.
+      No se toca futbol_profiles.rating aquí.
+    */
+    const { error: partidoError } = await supabase
+      .from("matches")
+      .update({
+        status: "jugado",
+        winner_team: ganadorFinal,
+        score_text: scorePayload,
+      })
+      .eq("id", matchId);
 
-    try {
-      const userIds = jugadoresConfirmados.map(j => j.user_id).filter(Boolean);
-      if (userIds.length > 0) {
-        const { data: dbProfiles } = await supabase.from("futbol_profiles").select("*").in("id", userIds);
-        const profilesMap = {};
-        (dbProfiles || []).forEach(p => { profilesMap[p.id] = p; });
+    if (partidoError) throw partidoError;
 
-        const { data: catLogros } = await supabase.from("logros").select("*");
-        const userLogrosToInsert = [];
+    const userIds = jugadoresConfirmados
+      .map((jugador) => jugador.user_id)
+      .filter(Boolean);
 
-        for (const j of jugadoresConfirmados) {
-          if (!j.user_id) continue;
-          const currentP = profilesMap[j.user_id] || { id: j.user_id, partidos_jugados: 0, goles: 0, victorias: 0, derrotas: 0, rating: 64 };
+    if (userIds.length > 0) {
+      const [
+        { data: dbProfiles, error: perfilesError },
+        { data: catalogoLogros, error: logrosError },
+      ] = await Promise.all([
+        supabase
+          .from("futbol_profiles")
+          .select(
+            "id, partidos_jugados, goles, victorias, derrotas"
+          )
+          .in("id", userIds),
 
-          const pjGoles = Number(goles[j.id]) || Number(j.goles) || 0;
-          const newPj = (currentP.partidos_jugados || 0) + 1;
-          const newGoles = (currentP.goles || 0) + pjGoles;
+        supabase
+          .from("logros")
+          .select("*")
+          .eq("activo", true),
+      ]);
 
-          let esGano = false;
-          let esPerdio = false;
+      if (perfilesError) throw perfilesError;
+      if (logrosError) throw logrosError;
 
-          if (ganadorFinal !== "EMPATE") {
-            if (equiposList.length > 2) {
-              const topTeamNum = tablaPosiciones[0]?.eqNum;
-              if (j.equipo === topTeamNum) esGano = true;
-              else esPerdio = true;
-            } else {
-              if ((ganadorFinal === "A" && j.equipo === 1) || (ganadorFinal === "B" && j.equipo === 2)) {
-                esGano = true;
-              } else {
-                esPerdio = true;
-              }
-            }
+      const profilesMap = Object.fromEntries(
+        (dbProfiles || []).map((perfilJugador) => [
+          perfilJugador.id,
+          perfilJugador,
+        ])
+      );
+
+      const logrosParaInsertar = [];
+
+      for (const jugador of jugadoresConfirmados) {
+        const perfilActual = profilesMap[jugador.user_id];
+
+        /*
+          No intentamos crear perfiles desde finalizarPartido.
+          Cada jugador debe tener su futbol_profile al inscribirse.
+        */
+        if (!perfilActual) {
+          console.warn(
+            `Jugador sin futbol_profile: ${jugador.user_id}`
+          );
+          continue;
+        }
+
+        const golesPartido =
+          Number(goles[jugador.id]) || Number(jugador.goles) || 0;
+
+        const partidosJugados =
+          Number(perfilActual.partidos_jugados || 0) + 1;
+
+        const golesTotales =
+          Number(perfilActual.goles || 0) + golesPartido;
+
+        let gano = false;
+        let perdio = false;
+
+        if (ganadorFinal !== "EMPATE") {
+          if (equiposList.length > 2) {
+            const equipoGanador = tablaPosiciones[0]?.eqNum;
+
+            if (jugador.equipo === equipoGanador) gano = true;
+            else perdio = true;
+          } else {
+            gano =
+              (ganadorFinal === "A" && jugador.equipo === 1) ||
+              (ganadorFinal === "B" && jugador.equipo === 2);
+
+            perdio = !gano;
           }
+        }
 
-          const newWins = (currentP.victorias || 0) + (esGano ? 1 : 0);
-          const newLosses = (currentP.derrotas || 0) + (esPerdio ? 1 : 0);
+        const victorias =
+          Number(perfilActual.victorias || 0) + (gano ? 1 : 0);
 
-          let ratingBoost = 0;
-          if (esGano) ratingBoost += 1;
-          if (resultadoInfo?.mvp && resultadoInfo.mvp.user_id === j.user_id) ratingBoost += 1.5;
-          ratingBoost += Math.min(pjGoles * 0.5, 3);
-          const newRating = Math.min(99, Math.max(50, (Number(currentP.rating) || 64) + ratingBoost));
+        const derrotas =
+          Number(perfilActual.derrotas || 0) + (perdio ? 1 : 0);
 
-          await supabase.from("futbol_profiles").upsert({
-            id: j.user_id,
-            partidos_jugados: newPj,
-            goles: newGoles,
-            victorias: newWins,
-            derrotas: newLosses,
-            rating: newRating
+        /*
+          Solo UPDATE. Jamás upsert aquí:
+          evita activar generar_stats_base_futbol()
+          y evita reiniciar rating a 64.
+        */
+        const { data: actualizado, error: actualizacionError } =
+          await supabase
+            .from("futbol_profiles")
+            .update({
+              partidos_jugados: partidosJugados,
+              goles: golesTotales,
+              victorias,
+              derrotas,
+            })
+            .eq("id", jugador.user_id)
+            .select("id");
+
+        if (actualizacionError) throw actualizacionError;
+
+        if (!actualizado || actualizado.length === 0) {
+          throw new Error(
+            `No se pudo actualizar el perfil de fútbol de ${jugador.user_id}.`
+          );
+        }
+
+        /*
+          Estadísticas necesarias para evaluar requisitos de logros.
+          max_goles_partido usa el partido actual.
+          racha_victorias_max debe venir de una función de historial
+          si utilizas logros de racha; por ahora no acreditamos
+          erróneamente esos logros.
+        */
+        const statsParaLogros = {
+          partidos_jugados: partidosJugados,
+          goles_total: golesTotales,
+          victorias,
+          max_goles_partido: golesPartido,
+          racha_victorias_max: 0,
+        };
+
+        (catalogoLogros || []).forEach((logro) => {
+          if (cumpleRequisito(logro, statsParaLogros)) {
+            logrosParaInsertar.push({
+              user_id: jugador.user_id,
+              logro_id: logro.id,
+            });
+          }
+        });
+      }
+
+      /*
+        La restricción UNIQUE(user_id, logro_id) impide duplicados.
+        El trigger AFTER INSERT sobre user_logros aplica la recompensa
+        únicamente cuando el logro se inserta por primera vez.
+      */
+      if (logrosParaInsertar.length > 0) {
+        const { error: insertLogrosError } = await supabase
+          .from("user_logros")
+          .upsert(logrosParaInsertar, {
+            onConflict: "user_id,logro_id",
+            ignoreDuplicates: true,
           });
 
-          if (catLogros && catLogros.length > 0) {
-            for (const l of catLogros) {
-              const tituloLower = (l.titulo || "").toLowerCase();
-              const descLower = (l.descripcion || "").toLowerCase();
-
-              let cumple = false;
-              if (tituloLower.includes("debut") || descLower.includes("primer partido") || descLower.includes("1 partido")) if (newPj >= 1) cumple = true;
-              if (tituloLower.includes("gol") || descLower.includes("primer gol") || descLower.includes("1 gol")) if (newGoles >= 1) cumple = true;
-              if (descLower.includes("5 gol") || descLower.includes("cinco gol")) if (newGoles >= 5) cumple = true;
-              if (descLower.includes("10 gol") || descLower.includes("diez gol")) if (newGoles >= 10) cumple = true;
-              if (descLower.includes("victoria") || descLower.includes("ganar")) if (newWins >= 1) cumple = true;
-              if (tituloLower.includes("mvp") || descLower.includes("mvp")) if (resultadoInfo?.mvp && resultadoInfo.mvp.user_id === j.user_id) cumple = true;
-
-              if (cumple) {
-                userLogrosToInsert.push({ user_id: j.user_id, logro_id: l.id });
-              }
-            }
-          }
-        }
-
-        if (userLogrosToInsert.length > 0) {
-          await supabase.from("user_logros").upsert(userLogrosToInsert, { onConflict: "user_id,logro_id" });
-        }
+        if (insertLogrosError) throw insertLogrosError;
       }
-    } catch (eErr) {
-      console.error("Error actualizando estadísticas:", eErr);
     }
 
-    setPartido((prev) => ({ ...prev, status: "jugado", score_text: scorePayload }));
+    setPartido((prev) => ({
+      ...prev,
+      status: "jugado",
+      score_text: scorePayload,
+      winner_team: ganadorFinal,
+    }));
+
     setMensaje("¡Reserva y partido finalizados con éxito!");
-    setProcesando(false);
     await cargarDatos();
+  } catch (error) {
+    console.error("Error finalizando el partido:", error);
+    setMensaje(
+      error?.message || "No se pudo finalizar el partido."
+    );
+  } finally {
+    setProcesando(false);
   }
+}
+
+  function mensajeErrorInscripcion(error) {
+  const texto = String(error?.message || "").toLowerCase();
+
+  if (
+    texto.includes("partido está lleno") ||
+    texto.includes("partido esta lleno") ||
+    texto.includes("capacidad")
+  ) {
+    return "🔒 Este partido ya está lleno. No quedan cupos disponibles.";
+  }
+
+  if (
+    texto.includes("duplicate key") ||
+    texto.includes("match_players_match_id_user_id_key")
+  ) {
+    return "Ya estás inscrito en este partido.";
+  }
+
+  return error?.message || "No se pudo completar la inscripción.";
+}
 
   const handleClicUnirme = () => {
     if (!usuarioActual) return router.push("/login");
@@ -765,99 +919,137 @@ export default function FutbolPartidoDetallePage() {
     }
   };
 
-  async function confirmarUnirseSinPago() {
-    setProcesando(true);
-    try {
-      const teamLetra = (equipo1.length <= equipo2.length) ? "A" : "B";
-      await supabase.from("match_players").insert({ match_id: partido.id, user_id: usuarioActual.id, team: teamLetra, goals: 0 });
-      setInscrito(true);
-      setMensaje("¡Te has unido al partido con éxito!");
-      await cargarDatos();
-    } catch (err) {
-      setMensaje("Error al unirte al partido.");
-    } finally {
-      setProcesando(false);
-    }
-  }
-
   async function confirmarUnirseConPago(e) {
-    e.preventDefault();
-    if (!usuarioActual || !partido) return;
+  e.preventDefault();
 
-    const valIngresado = parseFloat(formUnirmePago.monto);
-    if (isNaN(valIngresado) || valIngresado <= 0) {
-      return setMensaje("Ingresa un monto de pago válido.");
-    }
+  if (!usuarioActual || !partido) return;
 
-    if (formUnirmePago.metodoPago !== "efectivo" && !formUnirmePago.previewComprobante && !formUnirmePago.numReferencia.trim()) {
-      return setMensaje("Por favor adjunta el comprobante o número de referencia.");
-    }
-
-    try {
-      setEnviandoUnirmePago(true);
-      
-      const { data: userProf } = await supabase
-        .from("profiles")
-        .select("nombre, apellido, telefono")
-        .eq("id", usuarioActual.id)
-        .maybeSingle();
-
-      const nombreCompleto = userProf
-        ? `${userProf.nombre || ''} ${userProf.apellido || ''}`.trim()
-        : usuarioActual.email;
-
-      const montoUSD = monedaUnirme === "VES" ? valIngresado / tasaBCV : valIngresado;
-
-      const nuevoAbonoCupo = {
-        id: `pay-cupo-${Date.now()}`,
-        user_id: usuarioActual.id,
-        user_name: nombreCompleto,
-        user_phone: userProf?.telefono || "Sin teléfono",
-        amount: montoUSD,
-        method: formUnirmePago.metodoPago,
-        reference: formUnirmePago.numReferencia.trim() || (monedaUnirme === "VES" ? `Bs. ${valIngresado.toFixed(2)}` : "Cupo Partido Abierto"),
-        receipt_url: formUnirmePago.previewComprobante || null,
-        status: formUnirmePago.metodoPago === "efectivo" ? "pago_en_sitio" : "pendiente",
-        created_at: new Date().toISOString(),
-      };
-
-      const historialNuevo = [...(partido.payments_history || []), nuevoAbonoCupo];
-
-      const { error: errMatch } = await supabase
-        .from("matches")
-        .update({ 
-          payments_history: historialNuevo,
-          payment_status: "pendiente_aprobacion"
-        })
-        .eq("id", partido.id);
-
-      if (errMatch) throw errMatch;
-
-      const teamLetra = (equipo1.length <= equipo2.length) ? "A" : "B";
-
-      const { error: errPlayer } = await supabase
-        .from("match_players")
-        .insert({
-          match_id: partido.id,
-          user_id: usuarioActual.id,
-          team: teamLetra,
-          goals: 0
-        });
-
-      if (errPlayer) throw errPlayer;
-
-      setInscrito(true);
-      setModalUnirmePagoOpen(false);
-      setMensaje("¡Comprobante enviado con éxito! Tu cupo está en revisión de pago.");
-      await cargarDatos();
-
-    } catch (err) {
-      console.error("Error al unirse al partido:", err);
-      setMensaje(err.message || "Error al procesar la inscripción.");
-    } finally {
-      setEnviandoUnirmePago(false);
-    }
+  if (lleno) {
+    setMensaje("🔒 Este partido ya está lleno. No quedan cupos disponibles.");
+    setModalUnirmePagoOpen(false);
+    return;
   }
+
+  const valIngresado = parseFloat(formUnirmePago.monto);
+
+  if (Number.isNaN(valIngresado) || valIngresado <= 0) {
+    setMensaje("Ingresa un monto de pago válido.");
+    return;
+  }
+
+  if (
+    formUnirmePago.metodoPago !== "efectivo" &&
+    !formUnirmePago.previewComprobante &&
+    !formUnirmePago.numReferencia.trim()
+  ) {
+    setMensaje(
+      "Por favor adjunta el comprobante o ingresa un número de referencia."
+    );
+    return;
+  }
+
+  try {
+    setEnviandoUnirmePago(true);
+
+    const { data: userProf, error: profileError } = await supabase
+      .from("profiles")
+      .select("nombre, apellido, telefono")
+      .eq("id", usuarioActual.id)
+      .maybeSingle();
+
+    if (profileError) throw profileError;
+
+    const nombreCompleto = userProf
+      ? `${userProf.nombre || ""} ${userProf.apellido || ""}`.trim()
+      : usuarioActual.email;
+
+    const montoUSD =
+      monedaUnirme === "VES"
+        ? valIngresado / tasaBCV
+        : valIngresado;
+
+    const nuevoAbonoCupo = {
+      id: `pay-cupo-${Date.now()}`,
+      user_id: usuarioActual.id,
+      user_name: nombreCompleto,
+      user_phone: userProf?.telefono || "Sin teléfono",
+      amount: montoUSD,
+      method: formUnirmePago.metodoPago,
+      reference:
+        formUnirmePago.numReferencia.trim() ||
+        "Pago en sitio",
+      currency:
+        monedaUnirme === "VES"
+          ? `Bs. ${valIngresado.toFixed(2)}`
+          : "USD",
+      concept: "Cupo Partido Abierto",
+      receipt_url: formUnirmePago.previewComprobante || null,
+      status:
+        formUnirmePago.metodoPago === "efectivo"
+          ? "pago_en_sitio"
+          : "pendiente",
+      created_at: new Date().toISOString(),
+    };
+
+    const historialActual = Array.isArray(partido.payments_history)
+      ? partido.payments_history
+      : [];
+
+    const historialNuevo = [
+      ...historialActual,
+      nuevoAbonoCupo,
+    ];
+
+    /*
+      Primero intenta tomar el cupo.
+      El trigger de Supabase es la protección definitiva.
+      Si el cupo se llenó entre la apertura del modal y este clic,
+      no registramos un pago pendiente sin inscripción.
+    */
+    const teamLetra =
+      equipo1.length <= equipo2.length ? "A" : "B";
+
+    const { error: errPlayer } = await supabase
+      .from("match_players")
+      .insert({
+        match_id: partido.id,
+        user_id: usuarioActual.id,
+        team: teamLetra,
+        goals: 0,
+      });
+
+    if (errPlayer) throw errPlayer;
+
+    const { error: errMatch } = await supabase
+      .from("matches")
+      .update({
+        payments_history: historialNuevo,
+        payment_status: "pendiente_aprobacion",
+      })
+      .eq("id", partido.id);
+
+    /*
+      El jugador ya ocupó el cupo. Si aquí falla, se informa el error;
+      conviene revisar el pago desde administración, pero no se elimina
+      automáticamente la inscripción para no crear inconsistencias.
+    */
+    if (errMatch) throw errMatch;
+
+    setInscrito(true);
+    setModalUnirmePagoOpen(false);
+    setMensaje(
+      "Comprobante enviado con éxito. Tu cupo está en revisión de pago."
+    );
+
+    await cargarDatos();
+  } catch (error) {
+    console.error("Error al unirse al partido:", error);
+    setMensaje(mensajeErrorInscripcion(error));
+    await cargarDatos();
+  } finally {
+    setEnviandoUnirmePago(false);
+  }
+}
 
   async function cancelarInscripcion() {
     if (!confirm("¿Seguro que deseas cancelar tu inscripción?")) return;
@@ -1387,9 +1579,17 @@ export default function FutbolPartidoDetallePage() {
                 <span className="text-[10px] font-bold text-slate-400 block uppercase">{esPrivado ? "Reserva Privada" : "Reserva tu cupo"}</span>
                 <span className="text-xs font-black text-white">{costoCupoIndividual === 0 ? "Gratis" : `$${costoCupoIndividual.toFixed(2)} USD`}</span>
               </div>
-              <button onClick={handleClicUnirme} disabled={lleno || procesando} className="px-5 py-2.5 bg-[#00FF9D] text-slate-950 font-black text-xs uppercase rounded-xl hover:bg-emerald-400 transition-colors cursor-pointer">
-                {procesando ? "Procesando..." : lleno ? "Partido Lleno" : "Unirme al Partido"}
-              </button>
+              <button
+  onClick={handleClicUnirme}
+  disabled={lleno || procesando}
+  className="px-5 py-2.5 bg-[#00FF9D] text-slate-950 font-black text-xs uppercase rounded-xl hover:bg-emerald-400 transition-colors cursor-pointer disabled:bg-gray-600 disabled:text-gray-300 disabled:cursor-not-allowed"
+>
+  {procesando
+    ? "Procesando..."
+    : lleno
+      ? "🔒 Partido lleno"
+      : "Unirme al partido"}
+</button>
             </>
           )}
         </div>
