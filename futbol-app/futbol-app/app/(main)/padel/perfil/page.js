@@ -200,7 +200,8 @@ function categoriaDesdeRating(r) {
 
 function getInfoRating(ratingVal) {
   const r = Number(ratingVal) || 1.0;
-  if (r < 3.0) return { catActual: "7ma", nextCat: "6ta", floor: 2.0, ceiling: 3.0 };
+  // Cambiar floor: 2.0 por floor: 1.0
+  if (r < 3.0) return { catActual: "7ma", nextCat: "6ta", floor: 1.0, ceiling: 3.0 };
   if (r < 4.0) return { catActual: "6ta", nextCat: "5ta", floor: 3.0, ceiling: 4.0 };
   if (r < 4.8) return { catActual: "5ta", nextCat: "4ta", floor: 4.0, ceiling: 4.8 };
   if (r < 5.5) return { catActual: "4ta", nextCat: "3era", floor: 4.8, ceiling: 5.5 };

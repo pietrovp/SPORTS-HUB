@@ -4,9 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
-// Foto libre de Unsplash (Unsplash License: uso comercial permitido, sin
-// atribución obligatoria). Si luego quieres optimizarla con next/image,
-// agrega "images.unsplash.com" a images.remotePatterns en next.config.js.
+// Foto libre de Unsplash (Unsplash License: uso comercial permitido, sin atribución obligatoria)
 const PADEL_HERO_IMG = "https://images.unsplash.com/photo-1646649852046-b758d2d573f3?auto=format&fit=crop&w=1740&q=80";
 
 export default function PadelClubsPage() {
@@ -24,16 +22,43 @@ export default function PadelClubsPage() {
       setLoading(true);
       setErrorMsg("");
 
-      // Intenta cargar de clubs o sedes
-      const { data: clubsData, error } = await supabase
+      // 1. Cargar clubes con sus canchas
+      const { data: clubsData, error: errClubs } = await supabase
         .from("clubs")
         .select(`
           id, name, slug, city, address, image_url, is_active,
+          class_price_1_pax, class_price_2_pax, class_price_3_pax, class_price_4_pax, has_coaching_service,
           courts:courts ( id )
-        `);
+        `)
+        .eq("is_active", true);
 
-      if (error) throw error;
-      setClubs(clubsData || []);
+      if (errClubs) throw errClubs;
+
+      // 2. Cargar profesores activos
+      const { data: coachesData, error: errCoaches } = await supabase
+        .from("club_coaches")
+        .select("id, club_id, name, is_active")
+        .eq("is_active", true);
+
+      if (errCoaches) {
+        console.warn("No se pudieron cargar profesores:", errCoaches.message);
+      }
+
+      // 3. Mapear profesores a cada club correspondiente (JavaScript Puro)
+      const listaClubs = clubsData || [];
+      const listaCoaches = coachesData || [];
+
+      const clubesConProfesores = listaClubs.map((club) => {
+        const profesoresDelClub = listaCoaches.filter(
+          (c) => c.club_id === club.id
+        );
+        return {
+          ...club,
+          coaches: profesoresDelClub,
+        };
+      });
+
+      setClubs(clubesConProfesores);
     } catch (err) {
       console.error("Error cargando directorio de clubes:", err);
       setErrorMsg("No se pudieron cargar los clubes.");
@@ -44,10 +69,10 @@ export default function PadelClubsPage() {
 
   const clubesFiltrados = useMemo(() => {
     return clubs.filter((c) => {
-      return (
-        c.name?.toLowerCase().includes(search.toLowerCase()) ||
-        c.city?.toLowerCase().includes(search.toLowerCase())
-      );
+      const nombre = c.name ? c.name.toLowerCase() : "";
+      const ciudad = c.city ? c.city.toLowerCase() : "";
+      const termino = search.toLowerCase();
+      return nombre.includes(termino) || ciudad.includes(termino);
     });
   }, [clubs, search]);
 
@@ -62,7 +87,7 @@ export default function PadelClubsPage() {
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
 
-      {/* Tipografía de marca, en línea con el resto de la WebApp */}
+      {/* Tipografía de marca */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap');
         .font-display { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.01em; }
@@ -71,11 +96,11 @@ export default function PadelClubsPage() {
 
       <div className="mx-auto max-w-7xl space-y-6">
 
-        {/* HERO — foto real de pádel, buscador integrado */}
+        {/* HERO */}
         <div className="relative rounded-3xl sm:rounded-[2rem] overflow-hidden shadow-2xl min-h-[300px] sm:min-h-[380px] flex items-end">
           <img
             src={PADEL_HERO_IMG}
-            alt="Jugadora sosteniendo la raqueta en una pista de pádel"
+            alt="Pistas de pádel"
             className="absolute inset-0 w-full h-full object-cover object-[center_20%]"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0B0C2A] via-[#0B0C2A]/75 to-[#0B0C2A]/10" />
@@ -83,13 +108,13 @@ export default function PadelClubsPage() {
 
           <div className="relative z-10 w-full p-6 sm:p-10 text-white space-y-4">
             <span className="font-brand-mono text-[10px] sm:text-xs uppercase tracking-[0.3em] text-[#00FF9D]">
-              Sports Hub · Pádel
+              Sports Hub · Directorio de Pádel
             </span>
             <h1 className="font-display uppercase text-5xl sm:text-6xl leading-[0.85]">
               Clubes de <span className="text-[#00FF9D]">Pádel</span>
             </h1>
             <p className="text-xs sm:text-sm text-slate-200 font-medium max-w-md">
-              Selecciona tu club preferido para ver las pistas disponibles y reservar tu horario.
+              Encuentra complejos deportivos, reserva pistas en vivo y agenda clases con profesores certificados.
             </p>
 
             <div className="pt-2 max-w-md">
@@ -117,7 +142,7 @@ export default function PadelClubsPage() {
           </div>
         )}
 
-        {/* LISTA / GRILLA DE CLUBES */}
+        {/* LISTA DE CLUBES */}
         {clubesFiltrados.length === 0 ? (
           <div className="bg-white rounded-3xl p-12 text-center border border-dashed border-slate-200 space-y-3">
             <div className="w-16 h-16 mx-auto rounded-full bg-blue-50 flex items-center justify-center text-3xl">🏟️</div>
@@ -131,7 +156,10 @@ export default function PadelClubsPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {clubesFiltrados.map((club) => {
-              const totalCanchas = club.courts?.length || 0;
+              const totalCanchas = club.courts ? club.courts.length : 0;
+              const profesoresActivos = club.coaches || [];
+              const tieneProfesores = profesoresActivos.length > 0;
+              const precioDesdeClase = club.class_price_4_pax || club.class_price_1_pax || null;
 
               return (
                 <div
@@ -150,11 +178,19 @@ export default function PadelClubsPage() {
                     )}
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent" />
 
-                    {totalCanchas > 0 && (
-                      <span className="absolute top-3 right-3 bg-[#00FF9D] text-slate-950 text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-sm">
-                        {totalCanchas} {totalCanchas === 1 ? "Pista" : "Pistas"}
-                      </span>
-                    )}
+                    {/* BADGES SUPERIORES: PISTAS Y PROFESORES */}
+                    <div className="absolute top-3 right-3 flex flex-col gap-1.5 items-end">
+                      {totalCanchas > 0 && (
+                        <span className="bg-[#00FF9D] text-slate-950 text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-sm">
+                          {totalCanchas} {totalCanchas === 1 ? "Pista" : "Pistas"}
+                        </span>
+                      )}
+                      {tieneProfesores && (
+                        <span className="bg-indigo-600 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full shadow-sm flex items-center gap-1">
+                          <span>🎓</span> {profesoresActivos.length} {profesoresActivos.length === 1 ? "Profesor" : "Profesores"}
+                        </span>
+                      )}
+                    </div>
 
                     <div className="absolute bottom-3 left-4 right-3 text-white">
                       <h3 className="font-display uppercase text-2xl leading-none">{club.name}</h3>
@@ -167,12 +203,25 @@ export default function PadelClubsPage() {
                       {club.address || "Complejo deportivo con canchas reglamentarias de pádel."}
                     </p>
 
-                    {/* 🔥 REDIRECCIÓN REAL A /padel/clubes/[id] */}
+                    {/* MINI TARJETA DE PRECIO DE CLASES */}
+                    {tieneProfesores && precioDesdeClase && (
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2.5 flex justify-between items-center text-xs">
+                        <div>
+                          <span className="text-[9px] font-black uppercase text-slate-400 block">Clases de Pádel</span>
+                          <span className="text-[11px] font-bold text-slate-800">Particulares & Grupales</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[9px] font-black uppercase text-emerald-600 block">Desde</span>
+                          <span className="text-xs font-black text-slate-900">${Number(precioDesdeClase).toFixed(0)} <span className="text-[9px] font-normal text-slate-500">c/u</span></span>
+                        </div>
+                      </div>
+                    )}
+
                     <Link
                       href={`/padel/clubes/${club.id}`}
                       className="w-full py-3 bg-slate-900 hover:bg-blue-600 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-md transition-colors text-center block"
                     >
-                      Ver Disponibilidad y Canchas →
+                      Ver Disponibilidad, Pistas & Clases →
                     </Link>
                   </div>
                 </div>
