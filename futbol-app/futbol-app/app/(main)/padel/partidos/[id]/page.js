@@ -304,7 +304,7 @@ export default function PartidoDetallePage() {
     }
   }
 
-  async function cargarDetallePartido() {
+    async function cargarDetallePartido() {
     try {
       setLoading(true);
 
@@ -318,8 +318,10 @@ export default function PartidoDetallePage() {
           gender_restriction, is_competitive, price_per_player, total_price, app_fee, created_by, winner_team,
           payment_status, payment_method, payment_proof_urls, payments_history, extra_items,
           score_proposed, score_submitted_by, score_status, score_confirmations, score_text,
+          is_class, coach_id, students_count, coach_fee, notes,
           club:clubs ( name, city, address ),
-          court:courts ( name )
+          court:courts ( name ),
+          coach:coach_id ( id, name, photo_url )
         `)
         .eq("id", matchId)
         .maybeSingle();
@@ -456,39 +458,42 @@ export default function PartidoDetallePage() {
     }
   }
 
-  async function agregarJugadorAMatch(usuarioId) {
+    async function agregarJugadorAMatch(usuarioId) {
     if (!match) return;
     const jugadoresActuales = match.players || [];
-    const limiteTotal = 6;
-    
+    const esClase = match.is_class || match.match_type === "clase";
+    const limiteTotal = esClase ? (match.students_count || 1) : 6;
+
     if (jugadoresActuales.some((p) => p.user_id === usuarioId)) {
       return mostrarNotificacion("advertencia", "Ya Registrado", "Este usuario ya forma parte de esta reserva.");
     }
-
     if (jugadoresActuales.length >= limiteTotal) {
-      return mostrarNotificacion("advertencia", "Límite Alcanzado", `Esta reserva cuenta con el máximo de ${limiteTotal} jugadores.`);
+      return mostrarNotificacion("advertencia", "Límite Alcanzado", `Esta reserva cuenta con el máximo de ${limiteTotal} alumnos/jugadores.`);
+    }
+
+    // Si es clase, el cupo ya fue pagado en la tarifa de la clase, se inscribe directo
+    if (esClase) {
+      await ejecutarInscripcionDirecta(usuarioId, "A");
+      return;
     }
 
     if (!match.is_private) {
       const totalEsperado = match.match_type === "amistoso" ? 6 : 4;
-      
-      const precioCalculado = Number(match.price_per_player) > 0 
-        ? Number(match.price_per_player) 
-        : (Number(match.total_price) / totalEsperado) || 0;
+      const precioCalculado = Number(match.price_per_player) > 0
+        ? Number(match.price_per_player)
+        : Number(match.total_price) / totalEsperado || 0;
 
       if (precioCalculado > 0) {
         setJugadorPendiente({ usuarioId, equipo: equipoObjetivoAdd });
-        
         setFormPagoExtra({
           monto: precioCalculado.toFixed(2),
-          metodoPago: "pago_movil",
+          metodoPago: "pagomovil",
           numReferencia: "",
           previewComprobante: "",
         });
-
         setModalAgregarJugadorOpen(false);
         setModalPagoInscripcionOpen(true);
-        return; 
+        return;
       }
     }
 
@@ -1077,6 +1082,7 @@ export default function PartidoDetallePage() {
   const propuestoPorMi = match?.score_submitted_by === user?.id;
 
   const esRankedRealValido = match?.is_competitive && (match?.score_proposed?.esRankedValido ?? elegibilidadRanked.elegible);
+  const esClase = match?.is_class || match?.match_type === "clase";
 
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 md:px-8 space-y-6">
@@ -1477,169 +1483,270 @@ export default function PartidoDetallePage() {
           )}
         </div>
 
-        {/* 👥 SECCIÓN 2: DUPLAS Y JUGADORES */}
-        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-            <div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">Estructura del Partido</span>
-              <h3 className="text-base font-black text-slate-900">Duplas & Alineación en Pista</h3>
-            </div>
-
-            {!mostrarTerceraDupla && match?.status !== "jugado" && (
-              <button
-                type="button"
-                onClick={() => setMostrarTerceraDupla(true)}
-                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black text-xs uppercase rounded-xl shadow-xs cursor-pointer self-start sm:self-auto"
-              >
-                + Agregar Tercera Dupla (Rotación 6p)
-              </button>
-            )}
-          </div>
-
-          <div className="space-y-5">
-            <div className="bg-slate-50/80 rounded-3xl border-2 border-slate-200 p-5 space-y-6 shadow-2xs">
-              {/* DUPLA 1 */}
-              <div className={`space-y-3 p-3 rounded-2xl transition-colors ${
-                match?.status === "jugado" && match?.winner_team === "A" ? "bg-amber-100/60 border border-amber-300" : ""
-              }`}>
-                <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
-                  <span className="text-xs font-black uppercase text-slate-900 tracking-wider">
-                    🎾 Dupla 1 (Pareja A) {match?.status === "jugado" && match?.winner_team === "A" && "👑 GANADORES"}
-                  </span>
-                </div>
-
-                <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
-                  <PlayerCircleSlot
-                    player={dupla1[0]}
-                    teamLetter="A"
-                    onAdd={abrirModalAddJugadorSlot}
-                    onRemove={removerJugadorDeMatch}
-                    isCreator={soyCreadorVista}
-                    currentUserId={user?.id}
-                    isGamePlayed={match?.status === "jugado"}
-                  />
-
-                  <span className="text-slate-300 font-black text-xl mt-4">+</span>
-
-                  <PlayerCircleSlot
-                    player={dupla1[1]}
-                    teamLetter="A"
-                    onAdd={abrirModalAddJugadorSlot}
-                    onRemove={removerJugadorDeMatch}
-                    isCreator={soyCreadorVista}
-                    currentUserId={user?.id}
-                    isGamePlayed={match?.status === "jugado"}
-                  />
-                </div>
-              </div>
-
-              {/* SEPARADOR VS */}
-              <div className="flex items-center justify-center gap-3">
-                <div className="h-px bg-slate-200 flex-1"></div>
-                <span className="bg-slate-900 text-white font-black text-xs px-3 py-1 rounded-full uppercase tracking-widest">
-                  VS
+                {/* 👥 SECCIÓN 2: DUPLAS Y JUGADORES (O FICHA DE CLASE SI ES CLASE) */}
+        {match?.is_class || match?.match_type === "clase" ? (
+          /* 🎓 VISTA EXCLUSIVA PARA CLASES DE PÁDEL */
+          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-200 block w-max mb-1">
+                  🎓 Servicio de Entrenamiento
                 </span>
-                <div className="h-px bg-slate-200 flex-1"></div>
+                <h3 className="text-base sm:text-lg font-black text-slate-900">
+                  Clase de Pádel Dirigida
+                </h3>
               </div>
-
-              {/* DUPLA 2 */}
-              <div className={`space-y-3 p-3 rounded-2xl transition-colors ${
-                match?.status === "jugado" && match?.winner_team === "B" ? "bg-amber-100/60 border border-amber-300" : ""
-              }`}>
-                <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
-                  <span className="text-xs font-black uppercase text-slate-900 tracking-wider">
-                    🎾 Dupla 2 (Pareja B) {match?.status === "jugado" && match?.winner_team === "B" && "👑 GANADORES"}
-                  </span>
-                </div>
-
-                <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
-                  <PlayerCircleSlot
-                    player={dupla2[0]}
-                    teamLetter="B"
-                    onAdd={abrirModalAddJugadorSlot}
-                    onRemove={removerJugadorDeMatch}
-                    isCreator={soyCreadorVista}
-                    currentUserId={user?.id}
-                    isGamePlayed={match?.status === "jugado"}
-                  />
-
-                  <span className="text-slate-300 font-black text-xl mt-4">+</span>
-
-                  <PlayerCircleSlot
-                    player={dupla2[1]}
-                    teamLetter="B"
-                    onAdd={abrirModalAddJugadorSlot}
-                    onRemove={removerJugadorDeMatch}
-                    isCreator={soyCreadorVista}
-                    currentUserId={user?.id}
-                    isGamePlayed={match?.status === "jugado"}
-                  />
-                </div>
-              </div>
+              <span className="text-xs font-black bg-slate-900 text-[#00FF9D] px-3 py-1.5 rounded-xl self-start sm:self-auto shadow-sm">
+                👥 Cupo: {match.students_count || 1} {match.students_count === 1 ? "Alumno" : "Alumnos"}
+              </span>
             </div>
 
-            {/* DUPLA 3 */}
-            {mostrarTerceraDupla && (
-              <div className="bg-blue-50/50 rounded-3xl border-2 border-blue-200 p-5 space-y-3 shadow-2xs">
-                <div className="flex items-center justify-between border-b border-blue-200 pb-1.5">
-                  <span className="text-xs font-black uppercase text-blue-950 tracking-wider">🔄 Dupla 3 (Rotación Pareja C)</span>
-                  {match?.status !== "jugado" && (
-                    <button
-                      type="button"
-                      onClick={() => setMostrarTerceraDupla(false)}
-                      className="text-[10px] font-bold text-slate-400 hover:text-slate-700 uppercase"
-                    >
-                      Ocultar
-                    </button>
+            {/* Tarjeta del Profesor / Instructor */}
+            <div className="bg-indigo-50/70 border border-indigo-200 p-4 sm:p-5 rounded-2xl flex items-center justify-between shadow-2xs">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-full overflow-hidden bg-indigo-600 text-white font-black flex items-center justify-center text-xl shadow-sm shrink-0 border border-indigo-300">
+                  {match.coach?.photo_url ? (
+                    <img src={match.coach.photo_url} alt={match.coach.name} className="w-full h-full object-cover" />
+                  ) : (
+                    "👨‍🏫"
                   )}
                 </div>
-
-                <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
-                  <PlayerCircleSlot
-                    player={dupla3[0]}
-                    teamLetter="C"
-                    onAdd={abrirModalAddJugadorSlot}
-                    onRemove={removerJugadorDeMatch}
-                    isCreator={soyCreadorVista}
-                    currentUserId={user?.id}
-                    isGamePlayed={match?.status === "jugado"}
-                  />
-
-                  <span className="text-blue-300 font-black text-xl mt-4">+</span>
-
-                  <PlayerCircleSlot
-                    player={dupla3[1]}
-                    teamLetter="C"
-                    onAdd={abrirModalAddJugadorSlot}
-                    onRemove={removerJugadorDeMatch}
-                    isCreator={soyCreadorVista}
-                    currentUserId={user?.id}
-                    isGamePlayed={match?.status === "jugado"}
-                  />
+                <div>
+                  <span className="text-[9px] font-black uppercase text-indigo-500 tracking-wider block">
+                    Instructor Asignado
+                  </span>
+                  <p className="text-base font-black text-indigo-950">
+                    {match.coach?.name || (match.notes ? match.notes.replace(/^Clase con Profesor\s*/i, "").split("(")[0].trim() : "Profesor del Complejo")}
+                  </p>
+                  <p className="text-[10px] font-bold text-indigo-700/80 mt-0.5">
+                    🎾 Sesión estructurada en pista • Duración: 60 min
+                  </p>
                 </div>
               </div>
-            )}
+            </div>
 
+                        {/* Lista de Alumnos Inscritos */}
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  Alumnos en Cancha ({match.players?.length || 1} de {match.students_count || 1})
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                {/* 1. Alumnos ya inscritos */}
+                {(match.players || []).map((p, idx) => (
+                  <div key={p.id || idx} className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl flex items-center justify-between shadow-2xs">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-full bg-slate-900 text-[#00FF9D] font-black text-xs flex items-center justify-center shrink-0 shadow-xs">
+                        {p.profile?.nombre ? p.profile.nombre.charAt(0).toUpperCase() : "A"}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-black text-slate-900 truncate">
+                          {p.profile?.nombre ? `${p.profile.nombre} ${p.profile.apellido || ""}` : "Alumno"}
+                        </p>
+                        <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 inline-block mt-0.5">
+                          Inscrito
+                        </span>
+                      </div>
+                    </div>
+
+                    {soyCreadorVista && p.user_id !== user?.id && match?.status !== "jugado" && (
+                      <button
+                        type="button"
+                        onClick={() => removerJugadorDeMatch(p.id)}
+                        disabled={procesandoJugador}
+                        className="text-slate-400 hover:text-rose-500 font-bold p-1 text-xs transition-colors ml-2 cursor-pointer"
+                        title="Remover alumno"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {/* 2. Cupos vacíos para añadir compañeros */}
+                {Array.from({ length: Math.max(0, (match.students_count || 1) - (match.players?.length || 0)) }).map((_, slotIdx) => (
+                  <button
+                    key={`slot-vacio-${slotIdx}`}
+                    type="button"
+                    onClick={() => abrirModalAddJugadorSlot("A")}
+                    className="p-3.5 rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 hover:bg-indigo-50 hover:border-indigo-400 flex items-center justify-center gap-2 transition-all cursor-pointer group shadow-2xs min-h-[64px]"
+                  >
+                    <span className="w-8 h-8 rounded-full bg-white border border-indigo-200 text-indigo-600 font-black text-sm flex items-center justify-center group-hover:scale-110 transition-transform">
+                      +
+                    </span>
+                    <span className="text-xs font-black text-indigo-900">
+                      Añadir Alumno {(match.players?.length || 0) + slotIdx + 1}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          /* 🎾 VISTA HABITUAL DE DUPLAS (PARTIDO 2 VS 2) */
+          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">Estructura del Partido</span>
+                <h3 className="text-base font-black text-slate-900">Duplas & Alineación en Pista</h3>
+              </div>
 
-        {/* 🚀 BOTÓN DE ACCIÓN: INICIAR / CARGAR MARCADOR */}
+              {!mostrarTerceraDupla && match?.status !== "jugado" && (
+                <button
+                  type="button"
+                  onClick={() => setMostrarTerceraDupla(true)}
+                  className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-[#00FF9D] font-black text-xs uppercase rounded-xl shadow-xs cursor-pointer self-start sm:self-auto"
+                >
+                  + Agregar Tercera Dupla (Rotación 6p)
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-5">
+              <div className="bg-slate-50/80 rounded-3xl border-2 border-slate-200 p-5 space-y-6 shadow-2xs">
+                {/* DUPLA 1 */}
+                <div className={`space-y-3 p-3 rounded-2xl transition-colors ${
+                  match?.status === "jugado" && match?.winner_team === "A" ? "bg-amber-100/60 border border-amber-300" : ""
+                }`}>
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                    <span className="text-xs font-black uppercase text-slate-900 tracking-wider">
+                      🎾 Dupla 1 (Pareja A) {match?.status === "jugado" && match?.winner_team === "A" && "👑 GANADORES"}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
+                    <PlayerCircleSlot
+                      player={dupla1?.[0]}
+                      teamLetter="A"
+                      onAdd={abrirModalAddJugadorSlot}
+                      onRemove={removerJugadorDeMatch}
+                      isCreator={soyCreadorVista}
+                      currentUserId={user?.id}
+                      isGamePlayed={match?.status === "jugado"}
+                    />
+                    <span className="text-slate-300 font-black text-xl mt-4">+</span>
+                    <PlayerCircleSlot
+                      player={dupla1?.[1]}
+                      teamLetter="A"
+                      onAdd={abrirModalAddJugadorSlot}
+                      onRemove={removerJugadorDeMatch}
+                      isCreator={soyCreadorVista}
+                      currentUserId={user?.id}
+                      isGamePlayed={match?.status === "jugado"}
+                    />
+                  </div>
+                </div>
+
+                {/* SEPARADOR VS */}
+                <div className="flex items-center justify-center gap-3">
+                  <div className="h-px bg-slate-200 flex-1"></div>
+                  <span className="bg-slate-900 text-white font-black text-xs px-3 py-1 rounded-full uppercase tracking-widest">
+                    VS
+                  </span>
+                  <div className="h-px bg-slate-200 flex-1"></div>
+                </div>
+
+                {/* DUPLA 2 */}
+                <div className={`space-y-3 p-3 rounded-2xl transition-colors ${
+                  match?.status === "jugado" && match?.winner_team === "B" ? "bg-amber-100/60 border border-amber-300" : ""
+                }`}>
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                    <span className="text-xs font-black uppercase text-slate-900 tracking-wider">
+                      🎾 Dupla 2 (Pareja B) {match?.status === "jugado" && match?.winner_team === "B" && "👑 GANADORES"}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
+                    <PlayerCircleSlot
+                      player={dupla2?.[0]}
+                      teamLetter="B"
+                      onAdd={abrirModalAddJugadorSlot}
+                      onRemove={removerJugadorDeMatch}
+                      isCreator={soyCreadorVista}
+                      currentUserId={user?.id}
+                      isGamePlayed={match?.status === "jugado"}
+                    />
+                    <span className="text-slate-300 font-black text-xl mt-4">+</span>
+                    <PlayerCircleSlot
+                      player={dupla2?.[1]}
+                      teamLetter="B"
+                      onAdd={abrirModalAddJugadorSlot}
+                      onRemove={removerJugadorDeMatch}
+                      isCreator={soyCreadorVista}
+                      currentUserId={user?.id}
+                      isGamePlayed={match?.status === "jugado"}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* DUPLA 3 */}
+              {mostrarTerceraDupla && (
+                <div className="bg-blue-50/50 rounded-3xl border-2 border-blue-200 p-5 space-y-3 shadow-2xs">
+                  <div className="flex items-center justify-between border-b border-blue-200 pb-1.5">
+                    <span className="text-xs font-black uppercase text-blue-950 tracking-wider">
+                      🎾 Dupla 3 (Rotación Pareja C)
+                    </span>
+                    {match?.status !== "jugado" && (
+                      <button
+                        type="button"
+                        onClick={() => setMostrarTerceraDupla(false)}
+                        className="text-[10px] font-bold text-slate-400 hover:text-slate-700 uppercase"
+                      >
+                        ✕ Ocultar
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-row items-start justify-center gap-8 sm:gap-16 pt-3 w-full mx-auto">
+                    <PlayerCircleSlot
+                      player={dupla3?.[0]}
+                      teamLetter="C"
+                      onAdd={abrirModalAddJugadorSlot}
+                      onRemove={removerJugadorDeMatch}
+                      isCreator={soyCreadorVista}
+                      currentUserId={user?.id}
+                      isGamePlayed={match?.status === "jugado"}
+                    />
+                    <span className="text-blue-300 font-black text-xl mt-4">+</span>
+                    <PlayerCircleSlot
+                      player={dupla3?.[1]}
+                      teamLetter="C"
+                      onAdd={abrirModalAddJugadorSlot}
+                      onRemove={removerJugadorDeMatch}
+                      isCreator={soyCreadorVista}
+                      currentUserId={user?.id}
+                      isGamePlayed={match?.status === "jugado"}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+                {/* 🚀 BOTÓN DE ACCIÓN: INICIAR / CARGAR MARCADOR O ESTADO DE CLASE */}
         {match?.status !== "jugado" && !["propuesto", "confirmado"].includes(match?.score_status) && (
           <div className="bg-white border border-slate-200 rounded-3xl p-6 text-center space-y-3 shadow-xs">
-            <span className="text-3xl block">🎾</span>
-            
+            <span className="text-3xl block">{esClase ? "🎓" : "🎾"}</span>
+
             {partidoIniciado || match?.status === "en_progreso" ? (
               <div className="space-y-3">
                 <div className="space-y-1">
                   <h4 className="text-sm font-black text-[#00FF9D] uppercase bg-slate-900 py-1 px-3 rounded-full inline-block">
-                    ⚡ PARTIDO EN PROGRESO
+                    {esClase ? "🎓 CLASE EN PROGRESO" : "⚡ PARTIDO EN PROGRESO"}
                   </h4>
                   <p className="text-xs text-slate-500 font-semibold max-w-md mx-auto">
-                    Pueden cargar el marcador final en cualquier momento para no olvidarlo.
+                    {esClase
+                      ? "Sesión de entrenamiento activa en pista con el profesor."
+                      : "Pueden cargar el marcador final en cualquier momento para no olvidarlo."}
                   </p>
                 </div>
 
-                {(soyCreadorVista || miJugador) && (
+                {/* 🔴 SOLO MUESTRA EL BOTÓN DE MARCADOR SI NO ES CLASE */}
+                {!esClase && (soyCreadorVista || miJugador) && (
                   <button
                     type="button"
                     onClick={handleFinalizarPartidoClick}
@@ -1652,7 +1759,9 @@ export default function PartidoDetallePage() {
             ) : (
               <div className="space-y-3">
                 <div className="space-y-1">
-                  <h4 className="text-sm font-black text-slate-900 uppercase">El partido aún no ha sido iniciado</h4>
+                  <h4 className="text-sm font-black text-slate-900 uppercase">
+                    {esClase ? "La clase aún no ha comenzado" : "El partido aún no ha sido iniciado"}
+                  </h4>
                   <p className="text-xs text-slate-500 font-semibold max-w-md mx-auto">
                     Hora programada: <strong>{formatFechaLarga(match?.scheduled_at)}</strong> (Venezuela).
                   </p>
@@ -1660,7 +1769,7 @@ export default function PartidoDetallePage() {
 
                 {!puedeIniciarPartido ? (
                   <div className="bg-amber-50 border border-amber-200 p-3 rounded-2xl max-w-md mx-auto text-amber-900 text-xs font-bold">
-                    ⚠️ Para iniciar el partido, el valor base de la pista debe estar abonado y approved por la recepción del club.
+                    ⚠️ Para iniciar, el valor base de la pista debe estar abonado y aprobado por la recepción del club.
                   </div>
                 ) : (
                   (miJugador || soyCreadorVista) && (
@@ -1670,7 +1779,7 @@ export default function PartidoDetallePage() {
                       disabled={procesandoScore}
                       className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-widest rounded-2xl shadow-md transition-all active:scale-95 cursor-pointer mt-2"
                     >
-                      ▶️ Iniciar Partido
+                      {esClase ? "▶️ Iniciar Sesión de Clase" : "▶️ Iniciar Partido"}
                     </button>
                   )
                 )}

@@ -589,7 +589,7 @@ export default function RecepcionElite() {
     }
   }
 
-  async function cargarPartidosPeriodo() {
+    async function cargarPartidosPeriodo() {
     if (!clubId || diasVisibles.length === 0) return;
 
     const dIni = diasVisibles[0];
@@ -598,9 +598,14 @@ export default function RecepcionElite() {
     const dFin = diasVisibles[diasVisibles.length - 1];
     const finFijo = `${formatearFechaISOVET(dFin)}T23:59:59-04:00`;
 
+    // 1. Consulta enriquecida con datos de pista y profesor
     const { data: matches, error: matchErr } = await supabase
       .from("matches")
-      .select("*, court:courts(name)")
+      .select(`
+        *,
+        court:courts(name),
+        coach:coach_id ( id, name, photo_url )
+      `)
       .eq("club_id", clubId)
       .gte("scheduled_at", inicioFijo)
       .lte("scheduled_at", finFijo)
@@ -627,7 +632,10 @@ export default function RecepcionElite() {
       let userProfilesMap = {};
 
       if (allUserIds.length > 0) {
-        const { data: profs } = await supabase.from("profiles").select("id, nombre, apellido, telefono, email").in("id", allUserIds);
+        const { data: profs } = await supabase
+          .from("profiles")
+          .select("id, nombre, apellido, telefono, email")
+          .in("id", allUserIds);
         (profs || []).forEach((p) => { userProfilesMap[p.id] = p; });
       }
 
@@ -640,13 +648,17 @@ export default function RecepcionElite() {
       const finalMatches = (matches || []).map((m) => {
         let history = Array.isArray(m.payments_history) ? [...m.payments_history] : [];
         const creatorProf = userProfilesMap[m.created_by] || null;
+        const esClase = m.is_class || m.match_type === "clase";
 
         if (m.created_by && creatorProf) {
           const tieneAbonoCreador = history.some(p => p.user_id === m.created_by);
           if (!tieneAbonoCreador) {
-            const cuotaCalculada = Number(m.price_per_player) > 0 
-              ? Number(m.price_per_player)
-              : ((Number(m.total_price) || 0) + (Number(m.app_fee) || 0)) / 4;
+            // Si es clase, la cuota base no se divide entre 4 sino que toma el total / precio acordado
+            const cuotaCalculada = esClase
+              ? (Number(m.total_price) || 0) + (Number(m.app_fee) || 0)
+              : Number(m.price_per_player) > 0 
+                ? Number(m.price_per_player)
+                : ((Number(m.total_price) || 0) + (Number(m.app_fee) || 0)) / 4;
 
             if (cuotaCalculada > 0 && m.payment_status && m.payment_status !== "pendiente") {
               const statusAbono = (m.payment_status === "aprobado" || m.payment_status === "liquidado") 
@@ -660,7 +672,7 @@ export default function RecepcionElite() {
                 user_phone: creatorProf.telefono || "En sitio",
                 amount: cuotaCalculada,
                 method: m.payment_method || "pago_movil",
-                reference: "Reserva Creador Partido",
+                reference: esClase ? "Reserva Clase de Pádel" : "Reserva Creador Partido",
                 receipt_url: Array.isArray(m.payment_proof_urls) && m.payment_proof_urls.length > 0 ? m.payment_proof_urls[0] : null,
                 status: statusAbono,
                 created_at: m.created_at || new Date().toISOString(),
@@ -2217,33 +2229,92 @@ export default function RecepcionElite() {
                           ) : (
                             itemsMobile.map((item, idx) => {
                               if (item.tipo === "partido") {
-                                const match = item.partido;
-                                const isApproved = match.payment_status === "aprobado" || match.payment_status === "pagado" || match.payment_status === "completado";
-                                const isLiquidado = match.payment_status === "liquidado";
-                                const isPending = !isApproved && !isLiquidado && match.status !== "cancelado_pendiente_reembolso";
+  const match = item.partido;
+  const esClase = match.is_class || match.match_type === "clase";
+  const esReembolsoPendiente =
+    match.status === "cancelado_pendiente_reembolso" ||
+    match.payment_status === "reembolso_pendiente";
+  const isLiquidado = match.payment_status === "liquidado";
+  const isApproved =
+    match.payment_status === "aprobado" ||
+    match.payment_status === "pagado" ||
+    match.payment_status === "completado";
+  const isPending =
+    !isApproved && !isLiquidado && !esReembolsoPendiente;
 
-                                const bgClass = isPending ? "bg-amber-100 border-amber-300 text-amber-950" : "bg-emerald-100 border-emerald-300 text-emerald-950";
-                                const badgeClass = isPending ? "bg-amber-200 text-amber-950" : "bg-emerald-200 text-emerald-950";
-                                const statusText = isPending ? "⏳ Pago Pendiente" : "✅ Confirmada";
-                                const clienteNom = obtenerNombreCliente(match);
+  let bgClass = "";
+  let badgeClass = "";
+  let statusText = "";
+  let badgeLabel = "";
 
-                                return (
-                                  <div key={`match-${match.id}-${idx}`}>
-                                    <button onClick={() => abrirModalDetalle(match)} className={`w-full p-3.5 rounded-2xl border flex flex-col justify-between gap-2 transition-all shadow-sm cursor-pointer hover:scale-[1.01] ${bgClass}`}>
-                                      <div className="flex items-center justify-between w-full">
-                                        <span className={`text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full ${badgeClass}`}>
-                                          RESERVADO ({item.duracion}M)
-                                        </span>
-                                        <span className="text-[10px] font-bold">{statusText}</span>
-                                      </div>
-                                      <div className="text-left w-full">
-                                        <p className="text-sm font-black">{item.rangoTexto}</p>
-                                        <p className="text-[11px] font-bold opacity-80 flex items-center gap-1 mt-0.5">👤 {clienteNom}</p>
-                                      </div>
-                                    </button>
-                                  </div>
-                                );
-                              }
+  if (esReembolsoPendiente) {
+    bgClass = "bg-sky-100 border-sky-300 text-sky-950";
+    badgeClass = "bg-sky-200 text-sky-950";
+    statusText = "🔵 Reembolso Pendiente";
+    badgeLabel = `REEMBOLSO (${item.duracion}M)`;
+  } else if (isLiquidado) {
+    bgClass = "bg-slate-200 border-slate-300 text-slate-800";
+    badgeClass = "bg-slate-300 text-slate-900";
+    statusText = "🔒 Liquidada";
+    badgeLabel = `LIQUIDADA (${item.duracion}M)`;
+  } else if (esClase) {
+    // 🎓 ESTILO PARA CLASES DE PÁDEL
+    bgClass = "bg-indigo-100 border-indigo-300 text-indigo-950";
+    badgeClass = "bg-indigo-600 text-white font-black";
+    statusText = isPending ? "⏳ Pago Pendiente" : "🎓 Clase Agendada";
+    badgeLabel = `CLASE PÁDEL (${item.duracion}M)`;
+  } else if (isPending) {
+    bgClass = "bg-amber-100 border-amber-300 text-amber-950";
+    badgeClass = "bg-amber-200 text-amber-950";
+    statusText = "⏳ Pago Pendiente";
+    badgeLabel = `RESERVADO (${item.duracion}M)`;
+  } else {
+    bgClass = "bg-emerald-100 border-emerald-300 text-emerald-950";
+    badgeClass = "bg-emerald-200 text-emerald-950";
+    statusText = "✅ Confirmada";
+    badgeLabel = `RESERVADO (${item.duracion}M)`;
+  }
+
+  const clienteNom = obtenerNombreCliente(match);
+  const nombreProfesor = match.coach?.name || "Profesor";
+
+  return (
+    <div key={`match-${match.id}-${idx}`}>
+      <button
+        type="button"
+        onClick={() => abrirModalDetalle(match)}
+        className={`w-full p-3.5 rounded-2xl border flex flex-col justify-between gap-2 transition-all shadow-sm cursor-pointer hover:scale-[1.01] ${bgClass}`}
+      >
+        <div className="flex items-center justify-between w-full">
+          <span
+            className={`text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full ${badgeClass}`}
+          >
+            {badgeLabel}
+          </span>
+          <span className="text-[10px] font-bold">{statusText}</span>
+        </div>
+
+        <div className="text-left w-full">
+          <p className="text-sm font-black">{item.rangoTexto}</p>
+          {esClase ? (
+            <div className="mt-0.5 space-y-0.5">
+              <p className="text-[11px] font-black text-indigo-950 flex items-center gap-1">
+                👨‍🏫 Prof: {nombreProfesor}
+              </p>
+              <p className="text-[10px] font-bold text-indigo-800/80 flex items-center gap-1">
+                👥 {match.students_count || 1} {match.students_count === 1 ? "Alumno" : "Alumnos"} • Reservado por {clienteNom}
+              </p>
+            </div>
+          ) : (
+            <p className="text-[11px] font-bold opacity-80 flex items-center gap-1 mt-0.5">
+              👤 {clienteNom}
+            </p>
+          )}
+        </div>
+      </button>
+    </div>
+  );
+}
 
                               if (item.tipo === "bloqueo") {
                                 const lock = item.lock;
@@ -2393,68 +2464,98 @@ export default function RecepcionElite() {
                                        });
                                     })}
 
-                                    {/* Overlays de Partidos */}
-                                    {partidosPeriodo.filter(m => m.court_id === cancha.id).map(match => {
-                                        const startEpoch = obtenerEpoch(match.scheduled_at);
-                                        if (startEpoch < gridStart || startEpoch >= gridEnd) return null;
+                                    {/* Overlays de Partidos / Clases */}
+{partidosPeriodo
+  .filter((m) => m.court_id === cancha.id)
+  .map((match) => {
+    const startEpoch = obtenerEpoch(match.scheduled_at);
+    if (startEpoch < gridStart || startEpoch >= gridEnd) return null;
 
-                                        const offsetMin = (startEpoch - gridStart) / 60000;
-                                        const leftPx = (offsetMin / 30) * 56;
+    const offsetMin = (startEpoch - gridStart) / 60000;
+    const leftPx = (offsetMin / 30) * 56;
 
-                                        const dur = match.duration_minutes || 60;
-                                        const maxDur = (gridEnd - startEpoch) / 60000;
-                                        const effectiveDur = Math.min(dur, maxDur);
-                                        const widthPx = (effectiveDur / 30) * 56 - 2;
-                                        
-                                        const esReembolsoPendiente = match.status === "cancelado_pendiente_reembolso" || match.payment_status === "reembolso_pendiente";
-                                        const esLiquidado = match.payment_status === "liquidado";
-                                        const isApproved = match.payment_status === "aprobado" || match.payment_status === "pagado" || match.payment_status === "completado";
-                                        const isPending = !isApproved && !esLiquidado && !esReembolsoPendiente;
+    const dur = match.duration_minutes || 60;
+    const maxDur = (gridEnd - startEpoch) / 60000;
+    const effectiveDur = Math.min(dur, maxDur);
+    const widthPx = (effectiveDur / 30) * 56 - 2;
 
-                                        let bgClass = "";
-                                        let badgeClass = "";
-                                        let icon = "";
-                                        let textStatus = "";
+    const esClase = match.is_class || match.match_type === "clase";
+    const esReembolsoPendiente =
+      match.status === "cancelado_pendiente_reembolso" ||
+      match.payment_status === "reembolso_pendiente";
+    const esLiquidado = match.payment_status === "liquidado";
+    const isApproved =
+      match.payment_status === "aprobado" ||
+      match.payment_status === "pagado" ||
+      match.payment_status === "completado";
+    const isPending =
+      !isApproved && !esLiquidado && !esReembolsoPendiente;
 
-                                        if (esReembolsoPendiente) {
-                                           bgClass = "bg-sky-100 border-sky-300 text-sky-950";
-                                           badgeClass = "bg-sky-200 text-sky-950";
-                                           icon = "🔵";
-                                           textStatus = "Reembolso";
-                                        } else if (esLiquidado) {
-                                           bgClass = "bg-slate-200 border-slate-300 text-slate-800";
-                                           badgeClass = "bg-slate-300 text-slate-900";
-                                           icon = "🔒";
-                                           textStatus = "Liquidada";
-                                        } else if (isPending) {
-                                           bgClass = "bg-amber-100 border-amber-300 text-amber-950";
-                                           badgeClass = "bg-amber-200 text-amber-950";
-                                           icon = "⏳";
-                                           textStatus = "Pendiente";
-                                        } else {
-                                           bgClass = "bg-emerald-100 border-emerald-300 text-emerald-950";
-                                           badgeClass = "bg-emerald-200 text-emerald-950";
-                                           icon = "✅";
-                                           textStatus = "Confirmada";
-                                        }
+    let bgClass = "";
+    let badgeClass = "";
+    let icon = "";
+    let textStatus = "";
 
-                                        const clienteNom = obtenerNombreCliente(match);
+    if (esReembolsoPendiente) {
+      bgClass = "bg-sky-100 border-sky-300 text-sky-950";
+      badgeClass = "bg-sky-200 text-sky-950";
+      icon = "🔵";
+      textStatus = "Reembolso";
+    } else if (esLiquidado) {
+      bgClass = "bg-slate-200 border-slate-300 text-slate-800";
+      badgeClass = "bg-slate-300 text-slate-900";
+      icon = "🔒";
+      textStatus = "Liquidada";
+    } else if (esClase) {
+      // 🎓 ESTILO EXCLUSIVO PARA CLASES DE PÁDEL
+      bgClass = "bg-indigo-100 border-indigo-300 text-indigo-950 hover:bg-indigo-200/70";
+      badgeClass = "bg-indigo-600 text-white font-black";
+      icon = "🎓";
+      textStatus = "Clase";
+    } else if (isPending) {
+      bgClass = "bg-amber-100 border-amber-300 text-amber-950";
+      badgeClass = "bg-amber-200 text-amber-950";
+      icon = "⏳";
+      textStatus = "Pendiente";
+    } else {
+      bgClass = "bg-emerald-100 border-emerald-300 text-emerald-950";
+      badgeClass = "bg-emerald-200 text-emerald-950";
+      icon = "✅";
+      textStatus = "Confirmada";
+    }
 
-                                        return (
-                                          <div key={match.id} style={{ left: `${leftPx}px`, width: `${widthPx}px` }} className="absolute top-0 h-full p-0.5 z-20">
-                                              <button 
-                                                onClick={() => abrirModalDetalle(match)} 
-                                                className={`h-full w-full rounded-xl border flex flex-col justify-center px-2 py-1 shadow-sm transition-all hover:scale-[1.01] ${bgClass} overflow-hidden whitespace-nowrap text-left cursor-pointer`}
-                                              >
-                                                 <div className="flex items-center gap-1 mb-0.5">
-                                                   <span className="text-[9px] font-black">{formatRangoHorarioExacto(match.scheduled_at, match.duration_minutes)}</span>
-                                                   <span className={`text-[7px] uppercase font-black px-1 rounded ${badgeClass}`}>{textStatus}</span>
-                                                 </div>
-                                                 <span className="text-[10px] font-bold truncate flex items-center gap-1">{icon} {clienteNom}</span>
-                                              </button>
-                                          </div>
-                                        );
-                                    })}
+    const clienteNom = obtenerNombreCliente(match);
+    const nombreProfesor = match.coach?.name || "Profesor";
+    const etiquetaPrincipal = esClase
+      ? `${nombreProfesor} (${match.students_count || 1} al.)`
+      : clienteNom;
+
+    return (
+      <div
+        key={match.id}
+        style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
+        className="absolute top-0 h-full p-0.5 z-20"
+      >
+        <button
+          type="button"
+          onClick={() => abrirModalDetalle(match)}
+          className={`h-full w-full rounded-xl border flex flex-col justify-center px-2 py-1 shadow-sm transition-all hover:scale-[1.01] ${bgClass} overflow-hidden whitespace-nowrap text-left cursor-pointer`}
+        >
+          <div className="flex items-center gap-1 mb-0.5">
+            <span className="text-[9px] font-black">
+              {formatRangoHorarioExacto(match.scheduled_at, match.duration_minutes)}
+            </span>
+            <span className={`text-[7px] uppercase font-black px-1 rounded ${badgeClass}`}>
+              {textStatus}
+            </span>
+          </div>
+          <span className="text-[10px] font-bold truncate flex items-center gap-1">
+            {icon} {etiquetaPrincipal}
+          </span>
+        </button>
+      </div>
+    );
+  })}
 
                                     {/* Overlays de Bloqueos */}
                                     {bloqueosActivos.filter(l => l.court_id === cancha.id).map(lock => {
@@ -3101,24 +3202,53 @@ export default function RecepcionElite() {
                           </div>
                         </div>
                         
-                        <button
-                          type="button"
-                          onClick={() => cancelarReserva(matchSeleccionado)}
-                          disabled={procesando}
-                          className={`px-3 py-1.5 border font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2 cursor-pointer ${
-                            procesando
-                              ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
-                              : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
-                          }`}
-                        >
-                          Anular Reserva
-                        </button>
-                      </div>
+                                              <button
+                        type="button"
+                        onClick={() => cancelarReserva(matchSeleccionado)}
+                        disabled={procesando}
+                        className={`px-3 py-1.5 border font-black text-[10px] uppercase rounded-xl transition-colors shrink-0 ml-2 cursor-pointer ${
+                          procesando
+                            ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                            : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                        }`}
+                      >
+                        Anular Reserva
+                      </button>
+                    </div>
 
-                      <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3 font-bold">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-[#00FF9D] border-b border-slate-800 pb-1">
-                          Desglose de Factura
-                        </p>
+                    {/* 🎓 TARJETA INFORMATIVA DE CLASE (SI EL TURNO ES UNA CLASE) */}
+                    {(matchSeleccionado.is_class || matchSeleccionado.match_type === "clase") && (
+                      <div className="bg-indigo-50/80 border border-indigo-200 p-3.5 sm:p-4 rounded-2xl flex flex-col gap-2 shadow-2xs">
+                        <div className="flex justify-between items-center border-b border-indigo-100 pb-2">
+                          <span className="text-[9px] font-black uppercase text-indigo-700 bg-indigo-100 px-2.5 py-0.5 rounded-full">
+                            🎓 Servicio de Clase de Pádel
+                          </span>
+                          <span className="text-[10px] font-extrabold text-indigo-900 bg-white px-2.5 py-0.5 rounded-lg border border-indigo-200">
+                            👥 {matchSeleccionado.students_count || 1} {matchSeleccionado.students_count === 1 ? "Alumno" : "Alumnos"}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between items-center text-xs">
+                          <div>
+                            <span className="text-[9px] uppercase font-black text-indigo-400 block">Profesor / Instructor</span>
+                            <p className="text-indigo-950 font-black text-sm">
+                              👨‍🏫 {matchSeleccionado.coach?.name || "Profesor asignado"}
+                            </p>
+                          </div>
+                          {Number(matchSeleccionado.coach_fee || 0) > 0 && (
+                            <div className="text-right">
+                              <span className="text-[9px] uppercase font-black text-indigo-400 block">Tarifa Instructor</span>
+                              <p className="text-indigo-950 font-black text-sm">
+                                ${Number(matchSeleccionado.coach_fee).toFixed(2)} USD
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* DESGLOSE DE FACTURA */}
+                    <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3 font-bold">
                         
                         <div className="space-y-2 text-xs border-b border-slate-800 pb-3">
                           <div className="flex justify-between items-start text-slate-300">

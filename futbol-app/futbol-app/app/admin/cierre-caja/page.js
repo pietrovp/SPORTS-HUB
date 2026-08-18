@@ -57,16 +57,17 @@ function CustomDarkDatePicker({ value, onChange }) {
         onClick={() => setOpen(!open)}
         className="px-3.5 py-2 bg-slate-900 text-[#00FF9D] border border-slate-800 hover:border-[#00FF9D] rounded-xl text-xs sm:text-sm font-black outline-none flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
       >
-        <span>📅 {value ? `${value.split("-")[2]}/${value.split("-")[1]}/${value.split("-")[0]}` : "Seleccionar fecha"}</span>
+        <span>📅</span>
+        <span>{value ? `${value.split("-")[2]}/${value.split("-")[1]}/${value.split("-")[0]}` : "Seleccionar fecha"}</span>
         <span className="text-[10px] text-slate-400">{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
         <div className="absolute top-full right-0 z-50 mt-2 w-64 bg-[#0B0C15] border border-slate-800 rounded-2xl p-3 shadow-2xl text-white animate-in fade-in zoom-in-95 duration-150">
           <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-800">
-            <button type="button" onClick={mesAnterior} className="text-slate-400 hover:text-[#00FF9D] font-black text-sm px-2">❮</button>
+            <button type="button" onClick={mesAnterior} className="text-slate-400 hover:text-[#00FF9D] font-black text-sm px-2">◀</button>
             <span className="text-xs font-black uppercase text-[#00FF9D]">{meses[month]} {year}</span>
-            <button type="button" onClick={mesSiguiente} className="text-slate-400 hover:text-[#00FF9D] font-black text-sm px-2">❯</button>
+            <button type="button" onClick={mesSiguiente} className="text-slate-400 hover:text-[#00FF9D] font-black text-sm px-2">▶</button>
           </div>
 
           <div className="grid grid-cols-7 gap-1 text-center mb-1">
@@ -110,8 +111,8 @@ function CustomDarkDatePicker({ value, onChange }) {
 
 function GráficoDona({ datos }) {
   const total = datos.reduce((acc, d) => acc + d.monto, 0);
-  
-  if (total <= 0) {
+
+  if (total === 0) {
     return (
       <div className="flex h-40 items-center justify-center text-xs font-bold text-slate-400 italic">
         Sin ingresos registrados para graficar.
@@ -126,7 +127,7 @@ function GráficoDona({ datos }) {
       <div className="relative w-40 h-40 shrink-0">
         <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
           {datos.map((d, i) => {
-            if (d.monto <= 0) return null;
+            if (d.monto === 0) return null;
             const porcentaje = (d.monto / total) * 100;
             const strokeDasharray = `${porcentaje} ${100 - porcentaje}`;
             const strokeDashoffset = 100 - acumulado;
@@ -160,8 +161,8 @@ function GráficoDona({ datos }) {
           return (
             <div key={i} className="flex items-center justify-between gap-4 text-xs font-bold">
               <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: d.color }}></span>
-                <span className="text-slate-700">{d.label}:</span>
+                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
+                <span className="text-slate-700">{d.label}</span>
               </div>
               <div className="text-right">
                 <span className="text-slate-900 font-black">${d.monto.toFixed(2)}</span>
@@ -181,25 +182,20 @@ export default function CierreCajaPage() {
   const [tasaBcv, setTasaBcv] = useState(null);
   const [clubInfo, setClubInfo] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
-  
-  // Extraemos manualmente la fecha en formato YYYY-MM-DD sin toLocaleDateString()
-  // para evitar problemas si el usuario está en GMT muy distantes
+
   const [fecha, setFecha] = useState(() => {
     const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   });
-  
+
   const [ventas, setVentas] = useState([]);
   const [matches, setMatches] = useState([]);
-  
   const [efectivoDeclarado, setEfectivoDeclarado] = useState("");
   const [procesandoCierre, setProcesandoCierre] = useState(false);
-  
   const [esCajaCerrada, setEsCajaCerrada] = useState(false);
   const [cierreGuardado, setCierreGuardado] = useState(null);
   const [modalResumenOpen, setModalResumenOpen] = useState(false);
   const [modalConfirmReabrir, setModalConfirmReabrir] = useState(false);
-  
   const [ticketExpandido, setTicketExpandido] = useState(null);
   const [errorNotif, setErrorNotif] = useState("");
 
@@ -214,8 +210,10 @@ export default function CierreCajaPage() {
       const res = await fetch("/api/bcv-rate");
       if (res.ok) {
         const data = await res.json();
-        if (data.usdRate) setTasaBcv(parseFloat(data.usdRate));
-        return;
+        if (data.usdRate) {
+          setTasaBcv(parseFloat(data.usdRate));
+          return;
+        }
       }
       const resFallback = await fetch("https://ve.dolarapi.com/v1/dolares/oficial");
       if (resFallback.ok) {
@@ -239,9 +237,9 @@ export default function CierreCajaPage() {
   const extraerTextoLimpio = (str) => {
     if (!str) return "";
     return str
-      .replace(/^Reserva Completa:\s*/i, "")
-      .replace(/^Cliente:\s*/i, "")
-      .replace(/^Extra:\s*/i, "")
+      .replace(/Reserva Completa/i, "")
+      .replace(/Cliente:/i, "")
+      .replace(/Extra:/i, "")
       .trim();
   };
 
@@ -249,7 +247,7 @@ export default function CierreCajaPage() {
     if (!metodoStr) return "efectivo";
     const str = metodoStr.toString().toLowerCase().trim();
     if (str.includes("zelle")) return "zelle";
-    if (str.includes("movil") || str.includes("móvil") || str.includes("pago_movil") || str.includes("pago movil") || str.includes("transferencia")) return "pago_movil";
+    if (str.includes("movil") || str.includes("móvil") || str.includes("pagomovil") || str.includes("pago movil") || str.includes("transferencia")) return "pago_movil";
     if (str.includes("punto") || str.includes("pos") || str.includes("card") || str.includes("tarjeta") || str.includes("debito") || str.includes("débito") || str.includes("credito") || str.includes("crédito")) return "punto";
     if (str.includes("efectivo") || str.includes("cash")) return "efectivo";
     return "otro";
@@ -257,12 +255,8 @@ export default function CierreCajaPage() {
 
   const obtenerNombreClienteMatch = (match) => {
     if (!match) return "";
-    if (match.notes && match.notes.trim()) {
-      return match.notes.replace(/^Cliente:\s*/i, "").split("(")[0].trim();
-    }
-    if (match.creator_profile) {
-      return `${match.creator_profile.nombre || ""} ${match.creator_profile.apellido || ""}`.trim();
-    }
+    if (match.notes && match.notes.trim()) return match.notes.replace(/^Cliente:\s*/i, "").split("(")[0].trim();
+    if (match.creator_profile) return `${match.creator_profile.nombre || ""} ${match.creator_profile.apellido || ""}`.trim();
     return "";
   };
 
@@ -277,13 +271,13 @@ export default function CierreCajaPage() {
 
     if (itemCancha.item_detail && itemCancha.item_detail.includes("MatchID:")) {
       const matchIdExtraido = itemCancha.item_detail.split("MatchID:")[1].split(" ")[0].trim();
-      const matchDirecto = matchesList.find(m => String(m.id) === String(matchIdExtraido));
+      const matchDirecto = matchesList.find((m) => String(m.id) === String(matchIdExtraido));
       if (matchDirecto) return matchDirecto;
     }
 
     const cleanCliente = normalizarTexto(extraerTextoLimpio(itemCancha.item_detail));
     const cleanPista = normalizarTexto(extraerTextoLimpio(itemCancha.item_name));
-    const fechaVenta = venta.created_at.substring(0, 10); // "YYYY-MM-DD"
+    const fechaVenta = venta.created_at.substring(0, 10);
 
     let bestMatch = null;
     let maxScore = 0;
@@ -293,7 +287,7 @@ export default function CierreCajaPage() {
       const mCliente = normalizarTexto(obtenerNombreClienteMatch(m));
       const mNotes = normalizarTexto(m.notes || "");
       const mCourt = normalizarTexto(m.court?.name || "");
-      const mDate = m.scheduled_at.substring(0, 10); // "YYYY-MM-DD"
+      const mDate = m.scheduled_at.substring(0, 10);
 
       if (cleanPista && mCourt && (cleanPista.includes(mCourt) || mCourt.includes(cleanPista))) score += 3;
       if (cleanCliente && (mCliente.includes(cleanCliente) || cleanCliente.includes(mCliente) || mNotes.includes(cleanCliente))) score += 5;
@@ -335,10 +329,8 @@ export default function CierreCajaPage() {
         .select("*")
         .eq("id", clubId)
         .maybeSingle();
-
       setClubInfo(clubData);
 
-      // ZONA HORARIA LOCAL EXACTA DENTRO DEL RANGO COMPLETO DEL DÍA FORZADO COMO STRING
       const startOfDay = `${fechaSeleccionada}T00:00:00`;
       const endOfDay = `${fechaSeleccionada}T23:59:59`;
 
@@ -382,7 +374,6 @@ export default function CierreCajaPage() {
           inventory_recount: calcularRecuentoInventario(sales || []),
         });
       }
-
     } catch (error) {
       console.error("Error cargando datos de cierre:", error);
     } finally {
@@ -418,6 +409,7 @@ export default function CierreCajaPage() {
 
   const resumenFinanciero = useMemo(() => {
     let sumCanchas = 0;
+    let sumClases = 0;
     let sumTienda = 0;
     let sumComision = 0;
 
@@ -426,18 +418,25 @@ export default function CierreCajaPage() {
       zelle: 0,
       pago_movil: 0,
       punto: 0,
-      otro: 0
+      otro: 0,
     };
 
     ventas.forEach((venta) => {
+      const match = encontrarMatchParaVenta(venta, matches);
+      const esClase = match?.is_class || match?.match_type === "clase";
+
       const items = venta.sales_items || [];
       items.forEach((item) => {
-        const qty = parseFloat(item.quantity) || 1;
-        const price = parseFloat(item.price_unit) || 0;
+        const qty = parseFloat(item.quantity || 1);
+        const price = parseFloat(item.price_unit || 0);
         const subtotal = qty * price;
 
         if (item.item_type === "cancha") {
-          sumCanchas += subtotal;
+          if (esClase) {
+            sumClases += subtotal;
+          } else {
+            sumCanchas += subtotal;
+          }
         } else if (item.item_type === "producto") {
           sumTienda += subtotal;
         } else if (item.item_type === "comision_app") {
@@ -445,36 +444,35 @@ export default function CierreCajaPage() {
         }
       });
 
-      const match = encontrarMatchParaVenta(venta, matches);
       let pagosDelTicket = [];
-
       if (match && Array.isArray(match.payments_history) && match.payments_history.length > 0) {
-        pagosDelTicket = match.payments_history.filter(p => p.status === 'aprobado' || !p.status);
+        pagosDelTicket = match.payments_history.filter((p) => p.status === "aprobado" || !p.status);
       }
 
       if (pagosDelTicket.length > 0) {
-        pagosDelTicket.forEach(pago => {
+        pagosDelTicket.forEach((pago) => {
           const m = normalizarMetodoPago(pago.method || pago.metodo || pago.payment_method);
-          const monto = parseFloat(pago.amount || pago.monto) || 0;
+          const monto = parseFloat(pago.amount || pago.monto || 0);
           desgloseMetodos[m] = (desgloseMetodos[m] || 0) + monto;
         });
       } else {
         const m = normalizarMetodoPago(venta.payment_method);
-        const monto = parseFloat(venta.total_amount) || 0;
+        const monto = parseFloat(venta.total_amount || 0);
         desgloseMetodos[m] = (desgloseMetodos[m] || 0) + monto;
       }
     });
 
-    const totalSistema = sumCanchas + sumTienda + sumComision;
-    const comisionSportsHub = sumComision > 0 ? sumComision : sumCanchas * 0.10;
+    const totalSistema = sumCanchas + sumClases + sumTienda + sumComision;
+    const comisionSportsHub = sumComision > 0 ? sumComision : (sumCanchas + sumClases) * 0.10;
 
     return {
       sumCanchas,
+      sumClases,
       sumTienda,
       sumComision,
       totalSistema,
       comisionSportsHub,
-      desgloseMetodos
+      desgloseMetodos,
     };
   }, [ventas, matches]);
 
@@ -508,18 +506,15 @@ export default function CierreCajaPage() {
   const agruparItemsTicket = (items) => {
     if (!items || items.length === 0) return [];
     const map = {};
-
     items.forEach((item) => {
       const key = `${item.item_name}_${item.price_unit}_${item.item_type}`;
       const qty = parseFloat(item.quantity || 1);
-
       if (!map[key]) {
         map[key] = { ...item, quantity: qty };
       } else {
         map[key].quantity += qty;
       }
     });
-
     return Object.values(map);
   };
 
@@ -535,15 +530,12 @@ export default function CierreCajaPage() {
   const renderBadgesMetodosVenta = (venta) => {
     const match = encontrarMatchParaVenta(venta, matches);
     let pagos = [];
-
     if (match && Array.isArray(match.payments_history)) {
-      pagos = match.payments_history.filter(p => p.status === 'aprobado' || !p.status);
+      pagos = match.payments_history.filter((p) => p.status === "aprobado" || !p.status);
     }
 
     if (pagos.length > 0) {
-      const metodosUnicos = Array.from(
-        new Set(pagos.map(p => normalizarMetodoPago(p.method || p.metodo || p.payment_method)))
-      );
+      const metodosUnicos = Array.from(new Set(pagos.map((p) => normalizarMetodoPago(p.method || p.metodo || p.payment_method))));
       return (
         <div className="flex flex-wrap gap-1">
           {metodosUnicos.map((m, idx) => (
@@ -578,9 +570,8 @@ export default function CierreCajaPage() {
         ? `${userProfile.nombre || ""} ${userProfile.apellido || ""}`.trim() || userProfile.email || "Cajero Mostrador"
         : "Cajero Mostrador";
 
-      // Formatear hora de cierre sin Timezone local del browser
       const now = new Date();
-      const horaStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const horaStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
       const datosCierre = {
         club_id: userProfile?.club_id,
@@ -592,6 +583,7 @@ export default function CierreCajaPage() {
         total_declared: declarado,
         difference: diferencia,
         courts_total: resumenFinanciero.sumCanchas,
+        classes_total: resumenFinanciero.sumClases,
         store_total: resumenFinanciero.sumTienda,
         commission_total: resumenFinanciero.sumComision,
         cash_total: resumenFinanciero.desgloseMetodos.efectivo,
@@ -603,7 +595,7 @@ export default function CierreCajaPage() {
         sales_count: ventas.length,
         tickets: ventas,
         inventory_recount: recuentoInventario,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
       };
 
       await supabase.from("cash_closures").delete().eq("club_id", datosCierre.club_id).eq("closure_date", fecha);
@@ -615,7 +607,7 @@ export default function CierreCajaPage() {
         total_system: datosCierre.total_system,
         total_declared: datosCierre.total_declared,
         difference: datosCierre.difference,
-        courts_total: datosCierre.courts_total,
+        courts_total: datosCierre.courts_total + (datosCierre.classes_total || 0),
         store_total: datosCierre.store_total,
         commission_total: datosCierre.commission_total,
         cash_total: datosCierre.cash_total,
@@ -624,7 +616,7 @@ export default function CierreCajaPage() {
         pos_total: datosCierre.pos_total,
         bcv_rate: datosCierre.bcv_rate,
         sales_count: datosCierre.sales_count,
-        created_at: datosCierre.created_at
+        created_at: datosCierre.created_at,
       });
 
       setEsCajaCerrada(true);
@@ -661,7 +653,6 @@ export default function CierreCajaPage() {
 
   return (
     <div className="p-3 sm:p-6 bg-slate-50 min-h-screen">
-
       <style jsx global>{`
         @media print {
           body * {
@@ -688,7 +679,6 @@ export default function CierreCajaPage() {
       `}</style>
 
       <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
-        
         {/* HEADER Y FILTROS */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm gap-4">
           <div>
@@ -731,9 +721,7 @@ export default function CierreCajaPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            
             <div className="lg:col-span-5 space-y-4">
-              
               {esCajaCerrada ? (
                 <div className="bg-white p-5 sm:p-6 rounded-3xl shadow-sm border-2 border-emerald-400 space-y-5">
                   <div className="text-center space-y-1">
@@ -798,10 +786,20 @@ export default function CierreCajaPage() {
                         <span className="flex items-center gap-1.5">🎾 Canchas Netas</span>
                         <span className="font-black text-slate-900">${resumenFinanciero.sumCanchas.toFixed(2)}</span>
                       </div>
+
+                      {/* 🎓 LÍNEA EXCLUSIVA DE CLASES DE PÁDEL */}
+                      {(resumenFinanciero.sumClases || 0) > 0 && (
+                        <div className="flex justify-between items-center text-indigo-950 bg-indigo-50/60 p-2 rounded-xl border border-indigo-100">
+                          <span className="flex items-center gap-1.5 font-black">🎓 Clases de Pádel</span>
+                          <span className="font-black text-indigo-700">${resumenFinanciero.sumClases.toFixed(2)}</span>
+                        </div>
+                      )}
+
                       <div className="flex justify-between items-center">
                         <span className="flex items-center gap-1.5">🛍️ Tienda (POS)</span>
                         <span className="font-black text-slate-900">${resumenFinanciero.sumTienda.toFixed(2)}</span>
                       </div>
+
                       <div className="flex justify-between items-center">
                         <span className="flex items-center gap-1.5 text-emerald-700">⚡ Comisión Cobrada</span>
                         <span className="font-black text-emerald-600">+${resumenFinanciero.sumComision.toFixed(2)}</span>
@@ -913,7 +911,6 @@ export default function CierreCajaPage() {
                   </div>
                 </>
               )}
-
             </div>
 
             <div className="lg:col-span-7 space-y-4">
@@ -921,7 +918,7 @@ export default function CierreCajaPage() {
                 <div className="p-4 bg-slate-950 text-white flex justify-between items-center">
                   <div>
                     <h3 className="text-sm font-black uppercase tracking-wider">
-                      🧾 Tickets Generados del Día
+                      Tickets Generados del Día
                     </h3>
                     <p className="text-[10px] text-slate-400 font-bold">
                       Detalle de ventas registradas en POS
@@ -934,7 +931,7 @@ export default function CierreCajaPage() {
 
                 {ventas.length === 0 ? (
                   <div className="p-12 text-center text-slate-400 font-bold text-sm">
-                    📭 No hay tickets registrados en esta fecha.
+                    No hay tickets registrados en esta fecha.
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100">
@@ -942,9 +939,7 @@ export default function CierreCajaPage() {
                       const tasaAplicar = venta.exchange_rate ? venta.exchange_rate : tasaBcv;
                       const esExpandido = ticketExpandido === venta.id;
                       const itemsAgrupados = agruparItemsTicket(venta.sales_items);
-                      
-                      // Ajuste de visualización de hora desde la base de datos (string cortado)
-                      const horaVenta = venta.created_at.substring(11, 16); // HH:mm
+                      const horaVenta = venta.created_at.substring(11, 16);
 
                       return (
                         <div key={venta.id} className="p-4 hover:bg-slate-50/80 transition-colors">
@@ -958,12 +953,10 @@ export default function CierreCajaPage() {
                                   #{venta.id.split("-")[0].toUpperCase()}
                                 </span>
                                 <span className="text-xs font-bold text-slate-600">
-                                  ⏰ {horaVenta}
+                                  {horaVenta}
                                 </span>
                               </div>
-                              <div>
-                                {renderBadgesMetodosVenta(venta)}
-                              </div>
+                              <div>{renderBadgesMetodosVenta(venta)}</div>
                             </div>
 
                             <div className="text-right flex items-center gap-2">
@@ -977,30 +970,37 @@ export default function CierreCajaPage() {
                                   </span>
                                 )}
                               </div>
-                              <span className="text-xs text-slate-400 font-bold">{esExpandido ? '▼' : '▶'}</span>
+                              <span className="text-xs text-slate-400 font-bold">
+                                {esExpandido ? "▲" : "▼"}
+                              </span>
                             </div>
                           </div>
 
                           {esExpandido && (
                             <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
                               <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
-                                Consumos en este Ticket:
+                                Consumos en este Ticket
                               </p>
                               <div className="space-y-1.5">
                                 {itemsAgrupados.map((item, idx) => (
-                                  <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/60 flex justify-between items-center text-xs">
+                                  <div
+                                    key={idx}
+                                    className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/60 flex justify-between items-center text-xs"
+                                  >
                                     <div className="flex items-center gap-2">
                                       <span className="bg-slate-200 text-slate-800 text-[10px] font-black px-1.5 py-0.5 rounded">
                                         {item.quantity} und
                                       </span>
-                                      <span className="font-bold text-slate-900">{item.item_name}</span>
+                                      <span className="font-bold text-slate-900">
+                                        {item.item_name}
+                                      </span>
                                     </div>
                                     <div className="text-right">
                                       <span className="font-black text-emerald-600">
                                         ${(item.quantity * item.price_unit).toFixed(2)}
                                       </span>
                                       <span className="text-[9px] text-slate-400 font-bold block">
-                                        (${parseFloat(item.price_unit).toFixed(2)} c/u)
+                                        ${parseFloat(item.price_unit).toFixed(2)} c/u
                                       </span>
                                     </div>
                                   </div>
@@ -1015,13 +1015,12 @@ export default function CierreCajaPage() {
                 )}
               </div>
             </div>
-
           </div>
         )}
       </div>
 
       {mounted && modalConfirmReabrir && createPortal(
-        <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px] z-[99999] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-2px z-[99999] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4 text-center">
             <span className="text-3xl block">⚠️</span>
             <h3 className="text-base font-black text-slate-900">¿Modificar cierre del día?</h3>
@@ -1035,7 +1034,7 @@ export default function CierreCajaPage() {
                 disabled={procesandoCierre}
                 className="w-full py-3 bg-slate-900 text-[#00FF9D] font-black text-xs uppercase rounded-xl shadow-md cursor-pointer"
               >
-                {procesandoCierre ? "Procesando..." : "🔓 Confirmar Reapertura"}
+                {procesandoCierre ? "Procesando..." : "Confirmar Reapertura"}
               </button>
               <button
                 type="button"
@@ -1053,11 +1052,10 @@ export default function CierreCajaPage() {
       {mounted && modalResumenOpen && cierreGuardado && createPortal(
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[99999] flex items-center justify-center p-3 sm:p-4 overflow-y-auto" onClick={() => setModalResumenOpen(false)}>
           <div className="bg-white rounded-3xl p-6 max-w-2xl w-full shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            
             <div className="flex justify-between items-start border-b pb-3 no-imprimir">
               <div>
                 <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase px-3 py-1 rounded-full">
-                  ✓ CIERRE REGISTRADO CON ÉXITO
+                  CIERRE REGISTRADO CON ÉXITO
                 </span>
                 <h2 className="text-xl font-black text-slate-900 mt-1">Reporte de Auditoría de Caja</h2>
                 <p className="text-xs font-bold text-slate-400">Previsualización detallada para gerencia.</p>
@@ -1066,7 +1064,6 @@ export default function CierreCajaPage() {
             </div>
 
             <div id="area-impresion-cierre" className="space-y-4 text-slate-900">
-              
               <div className="text-center border-b border-slate-300 pb-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">SPORTS HUB COMPLEX — REPORTE OFICIAL DE CIERRE</p>
                 <h1 className="text-2xl font-black uppercase text-slate-900 mt-0.5">{clubInfo?.name || "Club Deportivo Sports Hub"}</h1>
@@ -1084,23 +1081,41 @@ export default function CierreCajaPage() {
 
               <div>
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-700 border-b border-slate-200 pb-1 mb-2">
-                  1. Resumen de Ingresos por Categoria
+                  1. Resumen de Ingresos por Categoría
                 </h3>
-                <div className="grid grid-cols-3 gap-2 text-center text-xs font-bold">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs font-bold">
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                     <span className="text-[9px] uppercase text-slate-500 block">Ingresos Canchas</span>
-                    <span className="text-sm font-black text-slate-900">${cierreGuardado.courts_total.toFixed(2)}</span>
-                    <span className="text-[9px] text-slate-400 block">Bs. {(cierreGuardado.courts_total * (cierreGuardado.bcv_rate || 1)).toFixed(2)}</span>
+                    <span className="text-sm font-black text-slate-900">${(cierreGuardado.courts_total || 0).toFixed(2)}</span>
+                    <span className="text-[9px] text-slate-400 block">
+                      Bs. {((cierreGuardado.courts_total || 0) * (cierreGuardado.bcv_rate || 1)).toFixed(2)}
+                    </span>
                   </div>
+
+                  <div className="bg-indigo-50/70 p-2.5 rounded-xl border border-indigo-200">
+                    <span className="text-[9px] uppercase text-indigo-700 font-black block">Clases Pádel</span>
+                    <span className="text-sm font-black text-indigo-950">
+                      ${Number(cierreGuardado.classes_total ?? resumenFinanciero.sumClases ?? 0).toFixed(2)}
+                    </span>
+                    <span className="text-[9px] text-indigo-400 font-bold block">
+                      Bs. {(Number(cierreGuardado.classes_total ?? resumenFinanciero.sumClases ?? 0) * (cierreGuardado.bcv_rate || 1)).toFixed(2)}
+                    </span>
+                  </div>
+
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                     <span className="text-[9px] uppercase text-slate-500 block">Ventas Tienda POS</span>
-                    <span className="text-sm font-black text-slate-900">${cierreGuardado.store_total.toFixed(2)}</span>
-                    <span className="text-[9px] text-slate-400 block">Bs. {(cierreGuardado.store_total * (cierreGuardado.bcv_rate || 1)).toFixed(2)}</span>
+                    <span className="text-sm font-black text-slate-900">${(cierreGuardado.store_total || 0).toFixed(2)}</span>
+                    <span className="text-[9px] text-slate-400 block">
+                      Bs. {((cierreGuardado.store_total || 0) * (cierreGuardado.bcv_rate || 1)).toFixed(2)}
+                    </span>
                   </div>
+
                   <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                     <span className="text-[9px] uppercase text-slate-500 block">Comisión App</span>
-                    <span className="text-sm font-black text-slate-900">${cierreGuardado.commission_total.toFixed(2)}</span>
-                    <span className="text-[9px] text-slate-400 block">Bs. {(cierreGuardado.commission_total * (cierreGuardado.bcv_rate || 1)).toFixed(2)}</span>
+                    <span className="text-sm font-black text-slate-900">${(cierreGuardado.commission_total || 0).toFixed(2)}</span>
+                    <span className="text-[9px] text-slate-400 block">
+                      Bs. {((cierreGuardado.commission_total || 0) * (cierreGuardado.bcv_rate || 1)).toFixed(2)}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1113,18 +1128,18 @@ export default function CierreCajaPage() {
                   <thead className="bg-slate-100 text-slate-700 text-[10px] uppercase">
                     <tr>
                       <th className="p-2 border-b">Método de Pago</th>
-                      <th className="p-2 border-b text-right">Monto ($ USD)</th>
-                      <th className="p-2 border-b text-right">Equivalente (Bs. VES)</th>
+                      <th className="p-2 border-b text-right">Monto USD</th>
+                      <th className="p-2 border-b text-right">Equivalente Bs. (VES)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     <tr>
-                      <td className="p-2">💵 Efectivo Divisas / Bolívares</td>
+                      <td className="p-2">💵 Efectivo (Divisas / Bolívares)</td>
                       <td className="p-2 text-right font-black">${cierreGuardado.cash_total.toFixed(2)}</td>
                       <td className="p-2 text-right text-slate-500">Bs. {(cierreGuardado.cash_total * (cierreGuardado.bcv_rate || 1)).toFixed(2)}</td>
                     </tr>
                     <tr>
-                      <td className="p-2">🇺🇸 Zelle (USD)</td>
+                      <td className="p-2">🇺🇸 Zelle USD</td>
                       <td className="p-2 text-right font-black">${cierreGuardado.zelle_total.toFixed(2)}</td>
                       <td className="p-2 text-right text-slate-500">Bs. {(cierreGuardado.zelle_total * (cierreGuardado.bcv_rate || 1)).toFixed(2)}</td>
                     </tr>
@@ -1134,7 +1149,7 @@ export default function CierreCajaPage() {
                       <td className="p-2 text-right text-slate-500">Bs. {(cierreGuardado.mobile_pay_total * (cierreGuardado.bcv_rate || 1)).toFixed(2)}</td>
                     </tr>
                     <tr>
-                      <td className="p-2">💳 Punto de Venta / Tarjeta</td>
+                      <td className="p-2">💳 Punto de Venta (Tarjeta)</td>
                       <td className="p-2 text-right font-black">${cierreGuardado.pos_total.toFixed(2)}</td>
                       <td className="p-2 text-right text-slate-500">Bs. {(cierreGuardado.pos_total * (cierreGuardado.bcv_rate || 1)).toFixed(2)}</td>
                     </tr>
@@ -1158,11 +1173,11 @@ export default function CierreCajaPage() {
                   <span className="font-black text-sm">${cierreGuardado.total_system.toFixed(2)} USD</span>
                 </div>
                 <div className="flex justify-between items-center font-bold">
-                  <span>Monto Declarado Entregado por Cajero:</span>
+                  <span>Monto Declarado / Entregado por Cajero:</span>
                   <span className="font-black text-sm">${cierreGuardado.total_declared.toFixed(2)} USD</span>
                 </div>
                 <div className="border-t border-slate-300 pt-1.5 flex justify-between items-center font-black text-sm">
-                  <span className="uppercase text-xs">Diferencia Final (Cuadre):</span>
+                  <span className="uppercase text-xs">Diferencia Final Cuadre:</span>
                   <span className={cierreGuardado.difference < -0.05 ? "text-rose-600" : "text-emerald-700"}>
                     {cierreGuardado.difference >= 0 ? "+" : ""}${cierreGuardado.difference.toFixed(2)} USD
                   </span>
@@ -1211,15 +1226,15 @@ export default function CierreCajaPage() {
                       <tr>
                         <th className="p-1.5 border-b">Producto / Artículo</th>
                         <th className="p-1.5 border-b text-center">Cant. Consumida</th>
-                        <th className="p-1.5 border-b text-right">Precio Unit. ($)</th>
-                        <th className="p-1.5 border-b text-right">Total ($ USD)</th>
-                        <th className="p-1.5 border-b text-right">Total (Bs. VES)</th>
+                        <th className="p-1.5 border-b text-right">Precio Unit.</th>
+                        <th className="p-1.5 border-b text-right">Total USD</th>
+                        <th className="p-1.5 border-b text-right">Total Bs. (VES)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-bold text-slate-800">
                       {cierreGuardado.inventory_recount.map((item, idx) => (
                         <tr key={idx}>
-                          <td className="p-1.5 font-bold">📦 {item.name}</td>
+                          <td className="p-1.5 font-bold">{item.name}</td>
                           <td className="p-1.5 text-center font-black">{item.quantity} und</td>
                           <td className="p-1.5 text-right">${item.price_unit.toFixed(2)}</td>
                           <td className="p-1.5 text-right font-black text-emerald-700">${item.total.toFixed(2)}</td>
@@ -1236,7 +1251,6 @@ export default function CierreCajaPage() {
                   </p>
                 )}
               </div>
-
             </div>
 
             <div className="flex gap-3 pt-3 border-t no-imprimir">
@@ -1255,12 +1269,10 @@ export default function CierreCajaPage() {
                 Cerrar Vista
               </button>
             </div>
-
           </div>
         </div>,
         document.body
       )}
-
     </div>
   );
 }
